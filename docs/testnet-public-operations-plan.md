@@ -12,12 +12,13 @@ control is implemented, exercised, and approved in
 
 ### Current blocker
 
-The public daemon is REGTEST-only: it requires `--regtest`, and `PeerService`
-uses `RegtestNetworkParams()` directly. Before any public deployment, implement
-an explicit, tested `--testnet` selection path that obtains all magic, ports,
-PoW, difficulty, monetary, and genesis values from immutable
-`TestnetNetworkParams()`. It must reject simultaneous network flags and must
-not make TESTNET enabled merely because the command line requests it.
+The daemon has an explicit `--testnet` selection path and `PeerService` derives
+its framing, P2P version, limits, PoW, difficulty, monetary, and genesis values
+from the selected immutable `NetworkParams`. The candidate TESTNET table remains
+guard-disabled, so `--testnet` deliberately refuses startup before state
+creation. Before any public deployment, that path must be exercised against
+the separately approved final table; a command-line request must never itself
+make TESTNET enabled. Simultaneous network flags are rejected.
 
 ### Bootstrap acceptance criteria
 
