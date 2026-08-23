@@ -1,0 +1,12 @@
+/build/
+/.cache/
+/.toolchain/
+/vcpkg_installed/
+/compile_commands.json
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+*.suo
+*.user
+*.vcxproj.user

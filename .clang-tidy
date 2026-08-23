@@ -1,0 +1,16 @@
+Checks: >
+  -*,
+  bugprone-branch-clone,
+  bugprone-narrowing-conversions,
+  bugprone-offsetof-expression,
+  bugprone-sizeof-expression,
+  cert-err34-c,
+  cert-err52-cpp,
+  cppcoreguidelines-avoid-goto,
+  cppcoreguidelines-no-malloc,
+  modernize-use-nullptr,
+  performance-*,
+  portability-*,
+  readability-avoid-const-params-in-decls
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(src|tests|fuzz)/'

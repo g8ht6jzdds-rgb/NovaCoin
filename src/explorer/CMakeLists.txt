@@ -1,0 +1,12 @@
+add_library(nova_explorer STATIC explorer.cpp http.cpp http_server.cpp rpc_snapshot_source.cpp)
+nova_apply_project_options(nova_explorer)
+target_include_directories(nova_explorer PUBLIC "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(nova_explorer PUBLIC nova_chain nova_consensus nova_primitives)
+if(WIN32)
+    target_link_libraries(nova_explorer PRIVATE ws2_32)
+endif()
+
+add_executable(nova-explorer main.cpp)
+nova_apply_project_options(nova-explorer)
+find_package(Threads REQUIRED)
+target_link_libraries(nova-explorer PRIVATE nova_explorer Threads::Threads)

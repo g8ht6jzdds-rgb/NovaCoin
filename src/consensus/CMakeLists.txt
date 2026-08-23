@@ -1,0 +1,3 @@
+add_library(nova_consensus STATIC monetary.cpp pow.cpp network_params.cpp)
+nova_apply_project_options(nova_consensus)
+target_link_libraries(nova_consensus PUBLIC nova_crypto nova_primitives)

@@ -1,0 +1,6 @@
+add_library(nova_net STATIC library_anchor.cpp p2p.cpp transport.cpp)
+nova_apply_project_options(nova_net)
+target_link_libraries(nova_net PUBLIC nova_crypto nova_primitives)
+if(WIN32)
+    target_link_libraries(nova_net PRIVATE ws2_32)
+endif()

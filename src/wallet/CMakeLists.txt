@@ -1,0 +1,3 @@
+add_library(nova_wallet STATIC wallet.cpp)
+nova_apply_project_options(nova_wallet)
+target_link_libraries(nova_wallet PUBLIC nova_chain nova_crypto nova_primitives)

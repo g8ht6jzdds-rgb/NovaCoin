@@ -1,0 +1,3 @@
+add_library(nova_storage STATIC block_journal.cpp)
+nova_apply_project_options(nova_storage)
+target_link_libraries(nova_storage PUBLIC nova_chain)

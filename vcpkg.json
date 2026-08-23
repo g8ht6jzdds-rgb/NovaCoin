@@ -1,0 +1,10 @@
+{
+  "name": "novacoin",
+  "version-string": "0.1.0",
+  "description": "Educational C++20 NovaCoin node dependencies.",
+  "dependencies": [
+    "gtest",
+    "openssl",
+    "secp256k1"
+  ]
+}

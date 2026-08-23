@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install --yes bash curl ninja-build clang-18 clang-format-18 clang-tidy-18 libgtest-dev libsecp256k1-dev libssl-dev
+      - name: Select pinned Clang major version and record toolchain evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/novacoin-toolchain/bin"
+          ln -s /usr/bin/clang-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang"
+          ln -s /usr/bin/clang++-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang++"
+          ln -s /usr/bin/clang-format-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang-format"
+          ln -s /usr/bin/clang-tidy-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang-tidy"
+          echo "$RUNNER_TEMP/novacoin-toolchain/bin" >> "$GITHUB_PATH"
+          clang++-18 --version | tee build-toolchain.txt
+          cmake --version | tee -a build-toolchain.txt
+          ninja --version | tee -a build-toolchain.txt
+      - name: Check Unix harness syntax
+        shell: bash
+        run: bash -n scripts/regtest_rpc_harness.sh scripts/verify_regtest_ci_evidence.sh
+      - name: Configure Debug
+        run: CC=clang CXX=clang++ cmake --preset debug -DNOVA_ENABLE_CLANG_TIDY=ON
+      - name: Build Debug
+        run: cmake --build --preset debug --parallel
+      - name: Run unit and Unix multi-process regtest integration suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset debug --output-on-failure 2>&1 | tee build/debug/ci-ctest.log
+      - name: Verify retained multi-process regtest evidence
+        shell: bash
+        run: bash scripts/verify_regtest_ci_evidence.sh build/debug
+      - name: Check formatting
+        run: cmake -P scripts/check-format.cmake
+      - name: Upload strict-build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: strict-build-and-regtest-logs
+          path: |
+            build/debug/ci-ctest.log
+            build-toolchain.txt
+            build/debug/regtest-artifacts
+            build/debug/Testing/Temporary
+            build/debug/CMakeFiles/CMakeOutput.log
+            build/debug/CMakeFiles/CMakeError.log
+          if-no-files-found: ignore
+          retention-days: 30
+
+  sanitizer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [asan, ubsan]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install --yes bash curl ninja-build clang-18 clang-format-18 clang-tidy-18 libgtest-dev libsecp256k1-dev libssl-dev
+      - name: Select pinned Clang major version and record toolchain evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/novacoin-toolchain/bin"
+          ln -s /usr/bin/clang-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang"
+          ln -s /usr/bin/clang++-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang++"
+          ln -s /usr/bin/clang-format-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang-format"
+          ln -s /usr/bin/clang-tidy-18 "$RUNNER_TEMP/novacoin-toolchain/bin/clang-tidy"
+          echo "$RUNNER_TEMP/novacoin-toolchain/bin" >> "$GITHUB_PATH"
+          clang++-18 --version | tee build-toolchain.txt
+          cmake --version | tee -a build-toolchain.txt
+          ninja --version | tee -a build-toolchain.txt
+      - name: Check Unix harness syntax
+        shell: bash
+        run: bash -n scripts/regtest_rpc_harness.sh scripts/verify_regtest_ci_evidence.sh
+      - name: Configure sanitizer build
+        run: CC=clang CXX=clang++ cmake --preset ${{ matrix.preset }} -DNOVA_BUILD_FUZZERS=ON
+      - name: Build sanitizer target
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+      - name: Run sanitizer unit and Unix multi-process regtest suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset ${{ matrix.preset }} --output-on-failure 2>&1 | tee build/${{ matrix.preset }}/ci-ctest.log
+      - name: Verify retained multi-process regtest evidence
+        shell: bash
+        run: bash scripts/verify_regtest_ci_evidence.sh build/${{ matrix.preset }}
+      - name: Run bounded fuzz smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/${{ matrix.preset }}/fuzz-logs
+          for target in fuzz_deserializer fuzz_transaction_deserializer fuzz_block_deserializer fuzz_network_message fuzz_script_signature fuzz_address_parser fuzz_compact_target; do
+            ./build/${{ matrix.preset }}/fuzz/$target -runs=100 -max_len=4096 2>&1 | tee build/${{ matrix.preset }}/fuzz-logs/$target.log
+          done
+      - name: Upload sanitizer and fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.preset }}-sanitizer-fuzz-logs
+          path: |
+            build/${{ matrix.preset }}/ci-ctest.log
+            build-toolchain.txt
+            build/${{ matrix.preset }}/regtest-artifacts
+            build/${{ matrix.preset }}/Testing/Temporary
+            build/${{ matrix.preset }}/fuzz-logs
+            build/${{ matrix.preset }}/CMakeFiles/CMakeOutput.log
+            build/${{ matrix.preset }}/CMakeFiles/CMakeError.log
+          if-no-files-found: ignore
+          retention-days: 30
