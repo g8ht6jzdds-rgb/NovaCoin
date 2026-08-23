@@ -6,6 +6,7 @@
 #include "node/regtest_node.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -25,6 +26,14 @@
 
 namespace
 {
+
+#ifdef _WIN32
+using TestSocketLength = int;
+using TestSocketIoSize = int;
+#else
+using TestSocketLength = socklen_t;
+using TestSocketIoSize = std::size_t;
+#endif
 
 using nova::crypto::Hash160;
 using nova::explorer::ExplorerBlock;
@@ -116,9 +125,13 @@ std::string SocketRequest(nova::explorer::ExplorerLoopbackHttpServer& server,
     endpoint.sin_family = AF_INET;
     endpoint.sin_port = htons(server.port());
     endpoint.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (connect(socket, reinterpret_cast<const sockaddr*>(&endpoint), sizeof(endpoint)) != 0 ||
-        send(socket, request.data(), static_cast<int>(request.size()), 0) !=
-            static_cast<int>(request.size())) {
+    const auto connected = connect(socket, reinterpret_cast<const sockaddr*>(&endpoint),
+                                   static_cast<TestSocketLength>(sizeof(endpoint)));
+    const auto sent = connected == 0
+                          ? send(socket, request.data(),
+                                 static_cast<TestSocketIoSize>(request.size()), 0)
+                          : -1;
+    if (connected != 0 || sent < 0 || static_cast<std::size_t>(sent) != request.size()) {
 #ifdef _WIN32
         static_cast<void>(closesocket(socket));
 #else
@@ -130,7 +143,8 @@ std::string SocketRequest(nova::explorer::ExplorerLoopbackHttpServer& server,
     static_cast<void>(server.Pump(1U));
     static_cast<void>(server.Pump(1U));
     std::array<char, 4'096U> response{};
-    const auto received = recv(socket, response.data(), static_cast<int>(response.size()), 0);
+    const auto received =
+        recv(socket, response.data(), static_cast<TestSocketIoSize>(response.size()), 0);
 #ifdef _WIN32
     static_cast<void>(closesocket(socket));
 #else
