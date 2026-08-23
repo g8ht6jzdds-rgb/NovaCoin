@@ -36,7 +36,7 @@ template <typename Unsigned>
             return std::nullopt;
         }
         const auto shift = static_cast<unsigned>(index * 8U);
-        result |= static_cast<Unsigned>(*byte) << shift;
+        result = static_cast<Unsigned>(result | (static_cast<Unsigned>(*byte) << shift));
     }
     return result;
 }

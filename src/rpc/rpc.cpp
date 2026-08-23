@@ -1,5 +1,7 @@
 #include "rpc/rpc.hpp"
 
+#include "wallet/address.hpp"
+
 #include "consensus/network_params.hpp"
 #include "consensus/pow.hpp"
 #include "primitives/serialization.hpp"
@@ -648,7 +650,12 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
                 (dependencies_.persist_wallet && !dependencies_.persist_wallet())) {
                 return {200U, ErrorResponse(id, kWalletFailure, "address generation failed")};
             }
-            return {200U, ResultResponse(id, "\"" + Hex(address->public_key_hash) + "\"")};
+            const auto encoded = wallet::EncodeP2pkhAddress(
+                address->public_key_hash, consensus::GetNetworkParams(config_.network));
+            if (!encoded.has_value()) {
+                return {200U, ErrorResponse(id, kWalletFailure, "address encoding failed")};
+            }
+            return {200U, ResultResponse(id, "\"" + *encoded + "\"")};
         }
         if (*method == "getbalances") {
             return {200U, ResultResponse(
@@ -677,17 +684,16 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             const auto amount_raw = parameter("amount");
             const auto address = address_raw.has_value() ? JsonString(*address_raw) : std::nullopt;
             const auto amount = amount_raw.has_value() ? JsonInteger(*amount_raw) : std::nullopt;
-            const auto address_bytes =
-                address.has_value() ? DecodeHex(*address, crypto::Hash160{}.size()) : std::nullopt;
-            if (!amount.has_value() || !address_bytes.has_value() ||
-                address_bytes->size() != crypto::Hash160{}.size()) {
+            const auto key_hash = address.has_value()
+                                      ? wallet::DecodeP2pkhAddress(
+                                            *address, consensus::GetNetworkParams(config_.network))
+                                      : std::nullopt;
+            if (!amount.has_value() || !key_hash.has_value()) {
                 return {200U,
                         ErrorResponse(id, kInvalidParams, "address and integer amount required")};
             }
-            crypto::Hash160 key_hash{};
-            std::copy(address_bytes->begin(), address_bytes->end(), key_hash.begin());
             const std::array<wallet::Recipient, 1U> recipients{
-                {wallet::Recipient{key_hash, *amount}}};
+                {wallet::Recipient{*key_hash, *amount}}};
             const auto built = dependencies_.wallet.CreateTransaction(recipients);
             if (!built.built.has_value()) {
                 return {200U, ErrorResponse(id, kWalletFailure, "transaction construction failed")};
@@ -705,17 +711,16 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             const auto amount_raw = parameter("amount");
             const auto address = address_raw.has_value() ? JsonString(*address_raw) : std::nullopt;
             const auto amount = amount_raw.has_value() ? JsonInteger(*amount_raw) : std::nullopt;
-            const auto address_bytes =
-                address.has_value() ? DecodeHex(*address, crypto::Hash160{}.size()) : std::nullopt;
-            if (!IsRegtest(config_.network) || !amount.has_value() || !address_bytes.has_value() ||
-                address_bytes->size() != crypto::Hash160{}.size() ||
+            const auto key_hash = address.has_value()
+                                      ? wallet::DecodeP2pkhAddress(
+                                            *address, consensus::GetNetworkParams(config_.network))
+                                      : std::nullopt;
+            if (!IsRegtest(config_.network) || !amount.has_value() || !key_hash.has_value() ||
                 !dependencies_.send_to_address) {
                 return {200U,
                         ErrorResponse(id, kInvalidParams, "address and integer amount required")};
             }
-            crypto::Hash160 key_hash{};
-            std::copy(address_bytes->begin(), address_bytes->end(), key_hash.begin());
-            const auto transaction_id = dependencies_.send_to_address({key_hash, *amount});
+            const auto transaction_id = dependencies_.send_to_address({*key_hash, *amount});
             if (!transaction_id.has_value()) {
                 return {200U, ErrorResponse(id, kNodeFailure, "transaction broadcast failed")};
             }

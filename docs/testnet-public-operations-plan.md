@@ -37,6 +37,53 @@ Bootstrap peers are discovery hints only. They never bypass version handshake,
 message parsing, PoW, block validation, or chainwork selection. A compromised
 bootstrap peer must be removable without a consensus or binary update.
 
+### Service and credential separation
+
+Public TESTNET operations use separate hosts, service accounts, credentials,
+and network policies for each role. A compromise of one role must not grant
+access to another role's node RPC credentials, wallet material, signing keys,
+or deployment control.
+
+| Role | Host and network boundary | Credential boundary | Prohibited access |
+| --- | --- | --- | --- |
+| Seed node | Dedicated public P2P host; inbound P2P only | Per-host service account; no wallet or release credentials | No RPC listener, wallet, mining, consensus override, or DNS-management credentials |
+| Monitoring | Private monitoring host/network | Read-only metrics credential per target; separate dashboard-admin identity | No node shell, node RPC mutation methods, wallet, faucet, or signing credentials |
+| Explorer | Dedicated application host; authenticated read-only node RPC over a private/loopback relay | Per-explorer read-only RPC credential | No mutable consensus reference, wallet, mining, P2P administration, or faucet keys |
+| Faucet | Dedicated host and wallet data volume, isolated from seed/explorer/monitoring hosts | Faucet-specific node RPC account and isolated funding-key custodian | No release-signing, seed DNS, monitoring-admin, or other service credentials |
+| Node administration | Separate bastion/admin identity with MFA and audited access | Per-operator account; no shared passwords | No reuse as a service account or faucet funding-key custodian |
+
+Public RPC is **off by default**. `novacoind` binds RPC only to loopback; any
+remote administration uses an authenticated private tunnel terminating on the
+node host. It must never be exposed by container port publication, cloud
+security-group rules, reverse proxies, or explorer/faucet frontend routing.
+The P2P listener may be public only on the configured TESTNET P2P port.
+
+Credentials must be supplied by a host secret store or protected file with
+least-privilege ownership, never command-line arguments, images, source
+control, logs, CI artifacts, or dashboard variables. Every service receives a
+distinct credential; rotation, revocation, expiry, and access audit evidence
+are mandatory launch records.
+
+### Faucet custody and abuse policy
+
+The faucet is an application adapter, never consensus infrastructure. It may
+send only TESTNET-addressed transactions through its narrowly scoped local RPC
+account. Network-aware address decoding must reject MAINNET, REGTEST, malformed,
+and checksum-invalid presentation addresses before a request reaches wallet
+construction.
+
+Faucet funding keys require isolated custody: encrypted wallet storage on the
+faucet host, a distinct recovery custodian, no plaintext export by default, no
+keys in frontend processes, and no shared credentials with seeds, explorer,
+monitoring, CI, or release signing. Use a small hot-wallet balance with a
+documented replenishment procedure; a larger reserve, if any, remains offline.
+
+Before public use, approve and test: per-address, per-source, and global payout
+limits; minimum request interval; bounded queue and request-body sizes;
+CAPTCHA/anti-automation policy where applicable; transaction-ID-only audit
+logging; alerting on denial spikes or balance depletion; and an immediate
+disable switch that stops payouts without changing node consensus behavior.
+
 ## 2. Monitoring and health
 
 No public endpoint launches without a named on-call owner, dashboard URL,

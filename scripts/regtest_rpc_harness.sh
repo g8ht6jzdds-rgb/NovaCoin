@@ -171,17 +171,17 @@ wait_explorer_height() {
 address() {
     local response
     response=$(rpc "$1" getnewaddress)
-    sed -n 's/.*"result":"\([0-9a-f][0-9a-f]*\)".*/\1/p' <<<"${response}"
+    sed -n 's/.*"result":"\([1-9A-HJ-NP-Za-km-z][1-9A-HJ-NP-Za-km-z]*\)".*/\1/p' <<<"${response}"
 }
 
 # Two initially separate TCP-connected pairs form deterministic partitions.
 start_node alpha 29644 29643
-start_node bravo 29645 29642 29644
-start_node charlie 29646 29641
-start_node delta 29647 29640 29646
 wait_height 29643 0
+start_node bravo 29645 29642 29644
 wait_height 29642 0
+start_node charlie 29646 29641
 wait_height 29641 0
+start_node delta 29647 29640 29646
 wait_height 29640 0
 
 # Mining and transfer propagation use the daemon callbacks into RegtestNode,
@@ -191,7 +191,7 @@ wait_height 29642 1
 rpc 29643 generateregtestblock >/dev/null
 wait_height 29642 2
 bravo_address=$(address 29642)
-[[ "${bravo_address}" =~ ^[0-9a-f]{40}$ ]]
+[[ "${bravo_address}" =~ ^[1-9A-HJ-NP-Za-km-z]{26,64}$ ]]
 rpc 29643 sendtoaddress "{\"address\":\"${bravo_address}\",\"amount\":100000000}" >/dev/null
 wait_mempool 29643 1
 wait_mempool 29642 1
