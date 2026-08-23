@@ -266,9 +266,8 @@ class Socket final
         "\r\nConnection: close\r\n\r\n" + std::string{kBody}};
     std::size_t sent{};
     while (sent < request.size()) {
-        const auto result =
-            send(socket.get(), request.data() + sent,
-                 static_cast<NativeSocketIoSize>(request.size() - sent), 0);
+        const auto result = send(socket.get(), request.data() + sent,
+                                 static_cast<NativeSocketIoSize>(request.size() - sent), 0);
         if (result <= 0) {
             return std::nullopt;
         }

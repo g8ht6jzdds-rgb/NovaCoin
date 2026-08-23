@@ -2,6 +2,7 @@
 
 #include "explorer/explorer.hpp"
 #include "rpc/rpc.hpp"
+#include "wallet/address.hpp"
 
 #include "consensus/monetary.hpp"
 #include "consensus/pow.hpp"
@@ -161,12 +162,10 @@ std::string SocketRequest(nova::rpc::LoopbackHttpServer& server, const std::stri
     endpoint.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     const auto connected = connect(socket, reinterpret_cast<const sockaddr*>(&endpoint),
                                    static_cast<TestSocketLength>(sizeof(endpoint)));
-    const auto sent = connected == 0
-                          ? send(socket, request.data(),
-                                 static_cast<TestSocketIoSize>(request.size()), 0)
-                          : -1;
-    if (connected != 0 ||
-        sent < 0 || static_cast<std::size_t>(sent) != request.size()) {
+    const auto sent = connected == 0 ? send(socket, request.data(),
+                                            static_cast<TestSocketIoSize>(request.size()), 0)
+                                     : -1;
+    if (connected != 0 || sent < 0 || static_cast<std::size_t>(sent) != request.size()) {
 #ifdef _WIN32
         static_cast<void>(closesocket(socket));
 #else
@@ -290,9 +289,14 @@ TEST(RpcIntegration, RestrictsAndDelegatesRegtestHarnessOperations)
         {"POST", kAuth, R"({"jsonrpc":"2.0","id":2,"method":"generateregtestblock"})"});
     EXPECT_EQ(mined.status, 200U);
     EXPECT_NE(mined.body.find("a1"), std::string::npos);
+    nova::crypto::Hash160 recipient_hash{};
+    const auto recipient =
+        nova::wallet::EncodeP2pkhAddress(recipient_hash, nova::consensus::RegtestNetworkParams());
+    ASSERT_TRUE(recipient.has_value());
     const auto sent = service->HandleHttpPost(
         {"POST", kAuth,
-         R"({"jsonrpc":"2.0","id":3,"method":"sendtoaddress","params":{"address":"0000000000000000000000000000000000000000","amount":1}})"});
+         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"sendtoaddress\",\"params\":{\"address\":\"" +
+             *recipient + "\",\"amount\":1}}"});
     EXPECT_EQ(sent.status, 200U);
     EXPECT_NE(sent.body.find("b2"), std::string::npos);
     const auto connected = service->HandleHttpPost(

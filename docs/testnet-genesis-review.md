@@ -164,6 +164,19 @@ are forbidden.
 | Release owner | Pending | Pending | Pending | Pending |
 | Explicit enablement commit | Pending | Pending | Pending | Pending |
 
+## Assigned review roles
+
+These are role assignments only; they are not approvals, signatures, or
+evidence of independent review. Dates, immutable revision references, and
+approval signatures remain required in the table above.
+
+| Review role | Assigned owner | Status |
+| --- | --- | --- |
+| Consensus/parameter reviewer | ALI NOUR EL HAJJ | Assigned; independent review pending |
+| PoW and serialization reviewer | ALI NOUR EL HAJJ | Assigned; independent review pending |
+| Security reviewer | ALI NOUR EL HAJJ | Assigned; independent review pending |
+| Release owner | ALI NOUR EL HAJJ | Assigned; release decision pending |
+
 ## Activation rule
 
 After approval, activation still requires a separate, reviewed source change

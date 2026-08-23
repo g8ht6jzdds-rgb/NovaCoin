@@ -58,7 +58,7 @@ constexpr NativeSocket kInvalidSocket = -1;
 }
 [[nodiscard]] bool WouldBlock(const int error) noexcept
 {
-    return error == EAGAIN || error == EWOULDBLOCK;
+    return error == EAGAIN || error == EWOULDBLOCK || error == EINPROGRESS;
 }
 void CloseNativeSocket(const NativeSocket socket) noexcept
 {

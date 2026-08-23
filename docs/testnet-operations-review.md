@@ -35,6 +35,22 @@ The detailed, non-consensus procedures and acceptance criteria are in
 `docs/testnet-public-operations-plan.md`. Its controls are mandatory evidence
 for this record; changing documentation alone does not complete them.
 
+## Assigned ownership and availability
+
+| Role | Assigned owner | Contact method | UTC availability | Status |
+| --- | --- | --- | --- | --- |
+| Release owner | ALI NOUR EL HAJJ | Pending secure operations contact | Pending | Assigned; approval pending |
+| Operations owner | ALI NOUR EL HAJJ | Pending secure operations contact | Pending | Assigned; approval pending |
+| Security reviewer | ALI NOUR EL HAJJ | Pending secure security contact | Pending | Assigned; independent review pending |
+| Primary on-call | ALI NOUR EL HAJJ | Pending incident-channel contact | Pending | Assigned; rota pending |
+| Secondary on-call | ALI NOUR EL HAJJ | Pending incident-channel contact | Pending | Assigned; backup operator pending |
+
+**Segregation-of-duties risk:** all listed roles are currently assigned to one
+person. This is recorded ownership, not a completed approval. Public TESTNET
+launch remains blocked until an independent security reviewer and a genuinely
+separate secondary on-call/operator are assigned, with real contact methods
+and UTC coverage documented.
+
 ## Approval record
 
 | Role | Name | Date (UTC) | Source revision | Signature/reference |

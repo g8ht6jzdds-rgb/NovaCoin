@@ -13,6 +13,7 @@ add_executable(nova_unit_tests
     mempool_tests.cpp
     p2p_tests.cpp
     wallet_tests.cpp
+    address_tests.cpp
     rpc_tests.cpp
     network_selection_tests.cpp
     network_params_tests.cpp

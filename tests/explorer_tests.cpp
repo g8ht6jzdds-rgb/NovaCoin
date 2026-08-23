@@ -127,10 +127,9 @@ std::string SocketRequest(nova::explorer::ExplorerLoopbackHttpServer& server,
     endpoint.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     const auto connected = connect(socket, reinterpret_cast<const sockaddr*>(&endpoint),
                                    static_cast<TestSocketLength>(sizeof(endpoint)));
-    const auto sent = connected == 0
-                          ? send(socket, request.data(),
-                                 static_cast<TestSocketIoSize>(request.size()), 0)
-                          : -1;
+    const auto sent = connected == 0 ? send(socket, request.data(),
+                                            static_cast<TestSocketIoSize>(request.size()), 0)
+                                     : -1;
     if (connected != 0 || sent < 0 || static_cast<std::size_t>(sent) != request.size()) {
 #ifdef _WIN32
         static_cast<void>(closesocket(socket));

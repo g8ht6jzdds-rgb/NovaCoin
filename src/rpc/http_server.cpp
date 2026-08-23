@@ -354,7 +354,7 @@ std::unique_ptr<LoopbackHttpServer> LoopbackHttpServer::Create(HttpServerParams 
             address.sin6_port = htons(implementation->parameters.port);
             if (inet_pton(AF_INET6, "::1", &address.sin6_addr) != 1 ||
                 bind(listener.get(), reinterpret_cast<const sockaddr*>(&address),
-                      static_cast<NativeSocketLength>(sizeof(address))) != 0) {
+                     static_cast<NativeSocketLength>(sizeof(address))) != 0) {
                 return nullptr;
             }
         } else {
@@ -363,7 +363,7 @@ std::unique_ptr<LoopbackHttpServer> LoopbackHttpServer::Create(HttpServerParams 
             address.sin_port = htons(implementation->parameters.port);
             address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             if (bind(listener.get(), reinterpret_cast<const sockaddr*>(&address),
-                      static_cast<NativeSocketLength>(sizeof(address))) != 0) {
+                     static_cast<NativeSocketLength>(sizeof(address))) != 0) {
                 return nullptr;
             }
         }
@@ -440,7 +440,7 @@ HttpServerResult LoopbackHttpServer::Pump(const std::uint64_t now) noexcept
                 std::array<char, 4096U> buffer{};
                 while (true) {
                     const auto received = recv(client.socket.get(), buffer.data(),
-                                                static_cast<NativeSocketIoSize>(buffer.size()), 0);
+                                               static_cast<NativeSocketIoSize>(buffer.size()), 0);
                     if (received > 0) {
                         const auto count = static_cast<std::size_t>(received);
                         if (count > implementation_->parameters.max_header_bytes +
