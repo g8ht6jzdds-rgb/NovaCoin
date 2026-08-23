@@ -30,6 +30,8 @@ namespace
 
 #ifdef _WIN32
 using NativeSocket = SOCKET;
+using NativeSocketLength = int;
+using NativeSocketIoSize = int;
 constexpr NativeSocket kInvalidSocket = INVALID_SOCKET;
 [[nodiscard]] int LastSocketError() noexcept
 {
@@ -47,6 +49,8 @@ void CloseNativeSocket(const NativeSocket socket) noexcept
 }
 #else
 using NativeSocket = int;
+using NativeSocketLength = socklen_t;
+using NativeSocketIoSize = std::size_t;
 constexpr NativeSocket kInvalidSocket = -1;
 [[nodiscard]] int LastSocketError() noexcept
 {
@@ -131,12 +135,15 @@ class Socket final
         }
         std::optional<Socket> connected;
         for (auto* current = results; current != nullptr; current = current->ai_next) {
+            if (!std::in_range<NativeSocketLength>(current->ai_addrlen)) {
+                continue;
+            }
             Socket socket{::socket(current->ai_family, current->ai_socktype, current->ai_protocol)};
             if (!socket.valid() || !SetNonBlocking(socket.get())) {
                 continue;
             }
-            const auto result =
-                connect(socket.get(), current->ai_addr, static_cast<int>(current->ai_addrlen));
+            const auto result = connect(socket.get(), current->ai_addr,
+                                        static_cast<NativeSocketLength>(current->ai_addrlen));
             if (result == 0 || WouldBlock(LastSocketError())) {
                 connected = std::move(socket);
                 break;
@@ -167,6 +174,9 @@ class Socket final
         }
         std::optional<Socket> listener;
         for (auto* current = results; current != nullptr; current = current->ai_next) {
+            if (!std::in_range<NativeSocketLength>(current->ai_addrlen)) {
+                continue;
+            }
             Socket socket{::socket(current->ai_family, current->ai_socktype, current->ai_protocol)};
             if (!socket.valid()) {
                 continue;
@@ -174,7 +184,8 @@ class Socket final
             int reuse = 1;
             static_cast<void>(setsockopt(socket.get(), SOL_SOCKET, SO_REUSEADDR,
                                          reinterpret_cast<const char*>(&reuse), sizeof(reuse)));
-            if (bind(socket.get(), current->ai_addr, static_cast<int>(current->ai_addrlen)) != 0 ||
+            if (bind(socket.get(), current->ai_addr,
+                     static_cast<NativeSocketLength>(current->ai_addrlen)) != 0 ||
                 listen(socket.get(), SOMAXCONN) != 0 || !SetNonBlocking(socket.get())) {
                 continue;
             }
@@ -342,7 +353,7 @@ TransportResult TcpTransport::Pump(const std::uint64_t now, const MessageHandler
             bool remove = false;
             const auto received =
                 recv(socket.socket.get(), reinterpret_cast<char*>(read_buffer.data()),
-                     static_cast<int>(read_buffer.size()), 0);
+                     static_cast<NativeSocketIoSize>(read_buffer.size()), 0);
             if (received == 0) {
                 remove = true;
             } else if (received < 0) {
@@ -377,7 +388,7 @@ TransportResult TcpTransport::Pump(const std::uint64_t now, const MessageHandler
                 const auto written = send(
                     socket.socket.get(),
                     reinterpret_cast<const char*>(socket.pending_send.data() + socket.sent_offset),
-                    static_cast<int>(remaining), 0);
+                    static_cast<NativeSocketIoSize>(remaining), 0);
                 if (written > 0) {
                     socket.sent_offset += static_cast<std::size_t>(written);
                     if (socket.sent_offset == socket.pending_send.size()) {
