@@ -65,6 +65,14 @@ GenesisAnchor(const consensus::NetworkParams& network) noexcept
             static_cast<std::uint8_t>((height >> 8U) & 0xFFU)};
 }
 
+[[nodiscard]] std::uint64_t LocalWallClockSeconds() noexcept
+{
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
+    return seconds <= 0 ? 0U : static_cast<std::uint64_t>(seconds);
+}
+
 } // namespace
 
 RegtestNode::RegtestNode(RegtestNodeConfig config, storage::BlockJournal journal,
@@ -77,7 +85,7 @@ RegtestNode::RegtestNode(RegtestNodeConfig config, storage::BlockJournal journal
     : config_(std::move(config)), journal_(std::move(journal)), utxos_(std::move(utxos)),
       chain_(std::move(chain)), mempool_(std::move(mempool)), wallet_(std::move(wallet)),
       validation_time_source_(std::move(validation_time_source)), network_(&network),
-      next_time_(config_.start_time)
+      next_time_(config_.start_time), started_at_(std::chrono::steady_clock::now())
 {
 }
 
@@ -289,6 +297,7 @@ RegtestNodeError RegtestNode::ReceiveBlock(const primitives::Block& block) noexc
     const auto result = AcceptBlock(block, true);
     if (result == RegtestNodeError::kNone) {
         observability::SaturatingAdd(metrics_.blocks_accepted, 1U);
+        metrics_.last_block_arrival_time_seconds = LocalWallClockSeconds();
     } else if (result != RegtestNodeError::kDuplicateBlock) {
         observability::SaturatingAdd(metrics_.blocks_rejected, 1U);
     }
@@ -461,7 +470,11 @@ const consensus::NetworkParams& RegtestNode::network_params() const noexcept
 }
 observability::MetricsSnapshot RegtestNode::metrics() const noexcept
 {
-    return metrics_;
+    auto result = metrics_;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - started_at_);
+    result.uptime_seconds = elapsed.count() <= 0 ? 0U : static_cast<std::uint64_t>(elapsed.count());
+    return result;
 }
 void RegtestNode::RecordTransportResult(const net::TransportResult& result) noexcept
 {

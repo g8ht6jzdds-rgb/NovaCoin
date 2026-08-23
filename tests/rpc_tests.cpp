@@ -242,11 +242,18 @@ TEST(RpcIntegration, ServesAuthenticatedReadOnlyHealthAndMetrics)
     EXPECT_NE(health.body.find("\"ready\":true"), std::string::npos);
     EXPECT_NE(health.body.find("\"network\":\"regtest\""), std::string::npos);
     EXPECT_NE(health.body.find("\"blocks_accepted\":0"), std::string::npos);
+    EXPECT_NE(health.body.find("\"bestblockhash\":"), std::string::npos);
+    EXPECT_NE(health.body.find("\"chainwork\":"), std::string::npos);
+    EXPECT_NE(health.body.find("\"mempool_bytes\":0"), std::string::npos);
+    EXPECT_NE(health.body.find("\"uptime_seconds\":0"), std::string::npos);
+    EXPECT_NE(health.body.find("\"last_block_arrival_time_seconds\":0"), std::string::npos);
+    EXPECT_NE(health.body.find("\"validation_failures\":0"), std::string::npos);
 
     const auto metrics = service->HandleHttpPost(
         {"POST", kAuth, R"({"jsonrpc":"2.0","id":8,"method":"getnodemetrics"})"});
     EXPECT_EQ(metrics.status, 200U);
     EXPECT_NE(metrics.body.find("\"p2p_transport_errors\":0"), std::string::npos);
+    EXPECT_NE(metrics.body.find("\"validation_failures\":0"), std::string::npos);
 
     const auto info = service->HandleHttpPost(
         {"POST", kAuth, R"({"jsonrpc":"2.0","id":9,"method":"getblockchaininfo"})"});

@@ -252,7 +252,26 @@ TEST(RegtestHarness, SaturatesOperationalMetricsWithoutAffectingChainState)
     EXPECT_EQ(metrics.p2p_messages_dispatched, std::numeric_limits<std::uint64_t>::max());
     EXPECT_EQ(metrics.p2p_disconnects, std::numeric_limits<std::uint64_t>::max());
     EXPECT_EQ(metrics.p2p_transport_errors, 2U);
+    EXPECT_EQ(metrics.last_block_arrival_time_seconds, 0U);
     EXPECT_EQ(node->tip(), original_tip);
+
+    node.reset();
+    std::filesystem::remove_all(root, error);
+    EXPECT_FALSE(error);
+}
+
+TEST(RegtestHarness, RecordsOnlyLocalBlockArrivalForOperationalTelemetry)
+{
+    const auto root = std::filesystem::temp_directory_path() / "novacoin-block-arrival-metrics";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    ASSERT_FALSE(error);
+    auto node = RegtestNode::Create(Config(root, "arrival", 18844U, 18843U));
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(node->metrics().last_block_arrival_time_seconds, 0U);
+
+    ASSERT_EQ(node->MineBlock().error, RegtestNodeError::kNone);
+    EXPECT_GT(node->metrics().last_block_arrival_time_seconds, 0U);
 
     node.reset();
     std::filesystem::remove_all(root, error);

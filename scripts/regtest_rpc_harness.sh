@@ -30,6 +30,7 @@ wallet_passphrase="regtest-harness-wallet-passphrase"
 rpc_password="regtest-harness-rpc-password"
 explorer_password="regtest-harness-explorer-password"
 declare -a pids=()
+last_started_pid=""
 harness_result="failed"
 
 cleanup() {
@@ -133,6 +134,7 @@ start_node() {
         --logfile "${node_root}/logs/novacoind.log" "${connect_args[@]}" \
         >"${node_root}/logs/stdout.log" 2>&1 &
     pids+=("$!")
+    last_started_pid=$!
 }
 
 start_explorer() {
@@ -251,6 +253,15 @@ before=$(mempool_size 29643)
 invalid=$(rpc_raw 29643 sendwallettransaction '{"hex":"00"}')
 [[ "${invalid}" == *'"error"'* ]]
 [[ "$(mempool_size 29643)" == "${before}" ]]
+
+# SIGTERM must take the daemon through its ordinary shutdown path: listeners
+# close and the encrypted wallet is atomically persisted before a zero exit.
+# Restarting from the same data directory must recover the active chain.
+alpha_pid=${last_started_pid}
+kill -TERM "${alpha_pid}"
+wait "${alpha_pid}"
+start_node alpha 29644 29643
+wait_height 29643 5
 
 harness_result="passed"
 echo "RPC-driven multi-process regtest harness passed"

@@ -7,6 +7,7 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -20,6 +21,15 @@
 
 namespace
 {
+
+volatile std::sig_atomic_t shutdown_requested = 0;
+
+void RequestShutdown(int) noexcept
+{
+    // A signal handler may only perform async-signal-safe work.  The ordinary
+    // event loop performs all listener shutdown and wallet persistence.
+    shutdown_requested = 1;
+}
 
 [[nodiscard]] std::optional<std::uint16_t> Port(const std::string_view text)
 {
@@ -79,6 +89,8 @@ void ReleaseSecretEnvironmentString(char* value, const std::size_t size) noexcep
 
 int main(const int argc, char* argv[])
 {
+    static_cast<void>(std::signal(SIGINT, RequestShutdown));
+    static_cast<void>(std::signal(SIGTERM, RequestShutdown));
     std::optional<std::string> name;
     std::optional<std::filesystem::path> data_directory;
     std::optional<std::filesystem::path> log_path;
@@ -288,9 +300,17 @@ int main(const int argc, char* argv[])
     }
     std::cout << "novacoind " << nova::node::NetworkName(*network) << " P2P/RPC ready "
               << node->config().name << '\n';
-    while (true) {
+    while (shutdown_requested == 0) {
         static_cast<void>(peer_service->Pump(NowSeconds()));
         static_cast<void>(rpc_server->Pump(NowSeconds()));
         std::this_thread::sleep_for(std::chrono::milliseconds{10});
     }
+    rpc_server->Close();
+    peer_service->Close();
+    if (!node->PersistWalletForRpc()) {
+        std::cerr << "wallet persistence failed during shutdown\n";
+        return 1;
+    }
+    std::cout << "novacoind shutdown complete " << node->config().name << '\n';
+    return 0;
 }

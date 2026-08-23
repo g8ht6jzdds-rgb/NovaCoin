@@ -8,6 +8,7 @@
 #include "storage/block_journal.hpp"
 #include "wallet/wallet.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -116,6 +117,7 @@ class RegtestNode final
     std::vector<std::reference_wrapper<RegtestNode>> peers_;
     std::vector<primitives::Transaction> known_transactions_;
     std::uint32_t next_time_{};
+    std::chrono::steady_clock::time_point started_at_{};
     observability::MetricsSnapshot metrics_;
 };
 

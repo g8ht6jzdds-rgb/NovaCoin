@@ -511,24 +511,41 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             const auto metrics = dependencies_.read_metrics ? dependencies_.read_metrics()
                                                             : observability::MetricsSnapshot{};
             const auto counters =
-                "\"blocks_accepted\":" + std::to_string(metrics.blocks_accepted) +
+                "\"uptime_seconds\":" + std::to_string(metrics.uptime_seconds) +
+                ",\"last_block_arrival_time_seconds\":" +
+                std::to_string(metrics.last_block_arrival_time_seconds) +
+                ",\"blocks_accepted\":" + std::to_string(metrics.blocks_accepted) +
                 ",\"blocks_rejected\":" + std::to_string(metrics.blocks_rejected) +
                 ",\"transactions_accepted\":" + std::to_string(metrics.transactions_accepted) +
                 ",\"transactions_rejected\":" + std::to_string(metrics.transactions_rejected) +
                 ",\"p2p_messages_dispatched\":" + std::to_string(metrics.p2p_messages_dispatched) +
                 ",\"p2p_disconnects\":" + std::to_string(metrics.p2p_disconnects) +
-                ",\"p2p_transport_errors\":" + std::to_string(metrics.p2p_transport_errors);
+                ",\"p2p_transport_errors\":" + std::to_string(metrics.p2p_transport_errors) +
+                ",\"validation_failures\":" +
+                std::to_string(observability::SaturatingSum(metrics.blocks_rejected,
+                                                            metrics.transactions_rejected));
             if (*method == "getnodemetrics") {
                 return {200U, ResultResponse(id, "{" + counters + "}")};
             }
-            return {200U,
-                    ResultResponse(
-                        id, "{\"ready\":true,\"network\":\"" +
-                                std::string{NetworkName(config_.network)} + "\",\"height\":" +
-                                std::to_string(dependencies_.chain_state.active_height()) +
-                                ",\"peers\":" + std::to_string(dependencies_.peers.peer_count()) +
-                                ",\"mempool\":" + std::to_string(dependencies_.mempool.size()) +
-                                "," + counters + "}")};
+            return {
+                200U,
+                ResultResponse(
+                    id,
+                    "{\"ready\":true,\"network\":\"" + std::string{NetworkName(config_.network)} +
+                        "\",\"height\":" +
+                        std::to_string(dependencies_.chain_state.active_height()) +
+                        ",\"bestblockhash\":\"" +
+                        Hex(dependencies_.chain_state.active_tip().bytes()) +
+                        "\",\"chainwork\":\"" + [&]()
+                        -> std::string {
+                        const auto index = dependencies_.chain_state.GetBlockIndex(
+                            dependencies_.chain_state.active_tip());
+                        return index.has_value() ? Hex(index->chain_work.bytes()) : std::string{};
+                    }() + "\",\"mempool_bytes\":" +
+                               std::to_string(dependencies_.mempool.total_serialized_size()) +
+                               ",\"peers\":" + std::to_string(dependencies_.peers.peer_count()) +
+                               ",\"mempool\":" + std::to_string(dependencies_.mempool.size()) +
+                               "," + counters + "}")};
         }
         if (*method == "getexplorersnapshot") {
             if (config_.network == consensus::NetworkId::kMainnet) {
