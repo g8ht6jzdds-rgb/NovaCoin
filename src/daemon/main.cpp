@@ -43,6 +43,16 @@ namespace
     return nova::net::TcpEndpoint{std::string{text.substr(0U, separator)}, *port};
 }
 
+[[nodiscard]] bool IsPermittedP2pBindAddress(const std::string_view address) noexcept
+{
+    return address == "127.0.0.1" || address == "::1" || address == "0.0.0.0" || address == "::";
+}
+
+[[nodiscard]] bool IsWildcardP2pBindAddress(const std::string_view address) noexcept
+{
+    return address == "0.0.0.0" || address == "::";
+}
+
 [[nodiscard]] std::uint64_t NowSeconds() noexcept
 {
     const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
@@ -74,6 +84,7 @@ int main(const int argc, char* argv[])
     std::optional<std::filesystem::path> log_path;
     std::optional<std::uint16_t> p2p_port;
     std::optional<std::uint16_t> rpc_port;
+    std::optional<std::string> p2p_bind_address;
     std::vector<nova::net::TcpEndpoint> peers;
     std::optional<nova::consensus::NetworkId> network;
     for (int index = 1; index < argc; ++index) {
@@ -113,6 +124,9 @@ int main(const int argc, char* argv[])
             data_directory = std::filesystem::path{value};
         } else if (option == "--p2pport" && !p2p_port.has_value()) {
             p2p_port = Port(value);
+        } else if (option == "--p2pbind" && !p2p_bind_address.has_value() &&
+                   IsPermittedP2pBindAddress(value)) {
+            p2p_bind_address = std::string{value};
         } else if (option == "--rpcport" && !rpc_port.has_value()) {
             rpc_port = Port(value);
         } else if (option == "--logfile" && !log_path.has_value()) {
@@ -134,7 +148,8 @@ int main(const int argc, char* argv[])
         *p2p_port == *rpc_port) {
         std::cerr
             << "usage: novacoind --regtest|--testnet|--mainnet --name <name> --datadir <path> "
-               "--p2pport <port> --rpcport <port> --logfile <path> [--connect host:port]\n";
+               "--p2pport <port> --rpcport <port> --logfile <path> [--p2pbind loopback|wildcard] "
+               "[--connect host:port]\n";
         return 2;
     }
     const auto selection = nova::node::SelectNetwork(*network);
@@ -143,6 +158,11 @@ int main(const int argc, char* argv[])
         std::cerr << nova::node::NetworkName(*network)
                   << " is disabled pending immutable parameter approval\n";
         return 1;
+    }
+    const auto p2p_bind = p2p_bind_address.value_or("127.0.0.1");
+    if (IsWildcardP2pBindAddress(p2p_bind) && *network != nova::consensus::NetworkId::kTestnet) {
+        std::cerr << "public P2P binding is permitted only for TESTNET\n";
+        return 2;
     }
     if (selection.parameters->genesis_block.header.time >
         std::numeric_limits<std::uint32_t>::max() - 600U) {
@@ -183,7 +203,7 @@ int main(const int argc, char* argv[])
                                                  *rpc_port, start_time, passphrase, *network});
     auto peer_service = node == nullptr ? nullptr : nova::node::PeerService::Create(*node);
     if (node == nullptr || peer_service == nullptr ||
-        peer_service->Listen({"127.0.0.1", *p2p_port}) != nova::net::TransportError::kNone) {
+        peer_service->Listen({p2p_bind, *p2p_port}) != nova::net::TransportError::kNone) {
         std::cerr << nova::node::NetworkName(*network) << " node P2P initialization failed\n";
         return 1;
     }

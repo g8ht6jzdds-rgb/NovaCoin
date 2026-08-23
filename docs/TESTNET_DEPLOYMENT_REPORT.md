@@ -35,6 +35,12 @@ DNS records, faucet, public explorer, monitoring deployment, or public RPC
 listener. The daemon binds RPC to loopback only; its `--testnet` startup path
 refuses selection while the immutable table remains disabled.
 
+Pre-approval templates now exist under `contrib/testnet/` for a non-root
+container, compose deployment, systemd service, log rotation, secret
+environment file, and a deliberately non-routable three-region bootstrap
+manifest. They are not deployed services and must not be populated with
+invented endpoints.
+
 ## Verification evidence
 
 Current-source pre-approval checks:

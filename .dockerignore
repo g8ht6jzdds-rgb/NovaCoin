@@ -1,0 +1,9 @@
+.git/
+build/
+.cache/
+.toolchain/
+vcpkg_installed/
+contrib/testnet/.env
+contrib/testnet/*.key
+contrib/testnet/*.pem
+contrib/testnet/*.log

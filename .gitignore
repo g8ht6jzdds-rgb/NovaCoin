@@ -3,6 +3,7 @@
 /.toolchain/
 /vcpkg_installed/
 /compile_commands.json
+/contrib/testnet/.env
 *.gcda
 *.gcno
 *.profraw

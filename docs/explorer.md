@@ -46,14 +46,15 @@ timeouts, and strictly decodes the versioned snapshot before rebuilding the
 index. Snapshot data is treated as hostile: malformed framing, JSON shape,
 hex, lengths, blocks, hashes, or linkage leave the prior index unchanged.
 
-`novacoind` exposes `getexplorersnapshot` only on regtest. It serializes the
-selected active chain as `u32_le version (1)`, compact block count, then for
-each block `u32_le height` and a compact-length canonical block byte vector.
-The endpoint is read-only and does not expose wallet, mempool, or UTXO mutation
-methods through the explorer.
+`novacoind` exposes `getexplorersnapshot` on enabled non-mainnet networks. It
+serializes the selected active chain as `u32_le version (1)`, compact block
+count, then for each block `u32_le height` and a compact-length canonical block
+byte vector. The endpoint is read-only and does not expose wallet, mempool, or
+UTXO mutation methods through the explorer. TESTNET remains disabled, so this
+does not create a public endpoint before the activation gate is satisfied.
 
-Run the independent process with `nova-explorer --regtest --rpcport <node-rpc>
---httpport <explorer-http>`. `NOVACOIN_RPC_PASSWORD` authenticates its node
+Run the independent process with `nova-explorer --regtest|--testnet --rpcport
+<node-rpc> --httpport <explorer-http>`. `NOVACOIN_RPC_PASSWORD` authenticates its node
 snapshot request; `NOVACOIN_EXPLORER_PASSWORD` authenticates its public
 loopback frontend under the fixed username `explorer`. Passwords are never
 accepted as command-line options or written to logs. The daemon refreshes the

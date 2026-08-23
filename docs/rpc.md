@@ -38,12 +38,14 @@ encrypted-wallet path before returning success.
 Read methods: `getblockchaininfo`, `getblock`, `gettransaction`, `getutxo`,
 `getmempoolinfo`, `getmempoolentry`, and `getpeerinfo`.
 
-Regtest additionally provides `getexplorersnapshot`, solely for the separate
-`nova-explorer` process. It returns no wallet, mempool, or mutable-state handle:
-the result is a bounded hex encoding of the versioned active-chain snapshot
-defined in `docs/explorer.md`. The daemon computes it only from its selected
-active chain after normal validation. The explorer must authenticate to the
-ordinary loopback RPC listener and validate the copied snapshot before use.
+Enabled non-mainnet networks provide `getexplorersnapshot`, solely for the
+separate `nova-explorer` process. It returns no wallet, mempool, or
+mutable-state handle: the result is a bounded hex encoding of the versioned
+active-chain snapshot defined in `docs/explorer.md`. The daemon computes it
+only from its selected active chain after normal validation. The explorer must
+authenticate to the ordinary loopback RPC listener and validate the copied
+snapshot before use. TESTNET remains disabled, so this does not expose a public
+service before approval.
 
 Wallet methods: `getnewaddress`, `getbalances`, `listunspent`,
 `createtransaction`, `signtransaction`, and `sendwallettransaction`.

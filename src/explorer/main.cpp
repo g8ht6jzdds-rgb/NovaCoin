@@ -34,6 +34,19 @@ namespace
     return seconds <= 0 ? 0U : static_cast<std::uint64_t>(seconds);
 }
 
+[[nodiscard]] const char* NetworkName(const nova::consensus::NetworkId network) noexcept
+{
+    switch (network) {
+    case nova::consensus::NetworkId::kRegtest:
+        return "regtest";
+    case nova::consensus::NetworkId::kTestnet:
+        return "testnet";
+    case nova::consensus::NetworkId::kMainnet:
+        return "mainnet";
+    }
+    return "invalid";
+}
+
 [[nodiscard]] std::optional<std::string> EnvironmentSecret(const char* const name)
 {
 #ifdef _WIN32
@@ -68,15 +81,23 @@ int main(const int argc, char* argv[])
 {
     std::optional<std::uint16_t> rpc_port;
     std::optional<std::uint16_t> http_port;
-    bool regtest{};
+    std::optional<nova::consensus::NetworkId> network;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option{argv[index]};
         if (option == "--regtest") {
-            if (regtest) {
-                std::cerr << "duplicate --regtest\n";
+            if (network.has_value()) {
+                std::cerr << "duplicate network selection\n";
                 return 2;
             }
-            regtest = true;
+            network = nova::consensus::NetworkId::kRegtest;
+            continue;
+        }
+        if (option == "--testnet") {
+            if (network.has_value()) {
+                std::cerr << "duplicate network selection\n";
+                return 2;
+            }
+            network = nova::consensus::NetworkId::kTestnet;
             continue;
         }
         if (++index >= argc) {
@@ -93,9 +114,18 @@ int main(const int argc, char* argv[])
             return 2;
         }
     }
-    if (!regtest || !rpc_port.has_value() || !http_port.has_value() || *rpc_port == *http_port) {
-        std::cerr << "usage: nova-explorer --regtest --rpcport <port> --httpport <port>\n";
+    if (!network.has_value() || !rpc_port.has_value() || !http_port.has_value() ||
+        *rpc_port == *http_port) {
+        std::cerr
+            << "usage: nova-explorer --regtest|--testnet --rpcport <port> --httpport <port>\n";
         return 2;
+    }
+    const auto& parameters = nova::consensus::GetNetworkParams(*network);
+    if (nova::consensus::CheckNetworkParams(parameters) !=
+            nova::consensus::NetworkParamsError::kNone ||
+        !parameters.enabled) {
+        std::cerr << NetworkName(*network) << " is disabled pending immutable parameter approval\n";
+        return 1;
     }
     const auto rpc_password = EnvironmentSecret("NOVACOIN_RPC_PASSWORD");
     const auto explorer_password = EnvironmentSecret("NOVACOIN_EXPLORER_PASSWORD");
@@ -105,7 +135,6 @@ int main(const int argc, char* argv[])
         return 2;
     }
 
-    const auto& parameters = nova::consensus::RegtestNetworkParams();
     const auto source = nova::explorer::AuthenticatedRpcSnapshotSource::Create(
         {"127.0.0.1", *rpc_port, "novacoin", *rpc_password, 32U * 1024U * 1024U, &parameters});
     if (source == nullptr) {
@@ -127,7 +156,7 @@ int main(const int argc, char* argv[])
     }
 
     std::uint64_t next_refresh{};
-    std::cout << "nova-explorer regtest read-only service ready\n";
+    std::cout << "nova-explorer " << NetworkName(*network) << " read-only service ready\n";
     while (true) {
         const auto now = NowSeconds();
         if (now >= next_refresh) {

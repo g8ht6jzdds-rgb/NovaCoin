@@ -272,6 +272,15 @@ TEST(RpcIntegration, ValidatesWalletAndRegtestArguments)
     const auto refused = disabled->HandleHttpPost(
         {"POST", kAuth, R"({"jsonrpc":"2.0","id":6,"method":"mineregtestheader"})"});
     EXPECT_NE(refused.body.find("-32005"), std::string::npos);
+
+    const auto snapshot = disabled->HandleHttpPost(
+        {"POST", kAuth, R"({"jsonrpc":"2.0","id":7,"method":"getexplorersnapshot"})"});
+    EXPECT_EQ(snapshot.status, 200U);
+    EXPECT_NE(snapshot.body.find("nova-snapshot-v1"), std::string::npos);
+
+    const auto testnet_mining = disabled->HandleHttpPost(
+        {"POST", kAuth, R"({"jsonrpc":"2.0","id":8,"method":"generateregtestblock"})"});
+    EXPECT_NE(testnet_mining.body.find("-32005"), std::string::npos);
 }
 
 TEST(RpcIntegration, RestrictsAndDelegatesRegtestHarnessOperations)

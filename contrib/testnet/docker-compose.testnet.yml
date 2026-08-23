@@ -1,0 +1,38 @@
+# Pre-approval template only. It intentionally publishes P2P but never RPC.
+# Supply secrets through an untracked .env file or an orchestrator secret store.
+services:
+  novacoind:
+    build:
+      context: ../..
+      dockerfile: contrib/testnet/Dockerfile
+    image: novacoin-testnet:${NOVACOIN_IMAGE_TAG:?set an immutable image tag}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NOVACOIN_RPC_PASSWORD: ${NOVACOIN_RPC_PASSWORD:?required}
+      NOVACOIN_WALLET_PASSPHRASE: ${NOVACOIN_WALLET_PASSPHRASE:?required}
+    command:
+      - --testnet
+      - --name
+      - ${NOVACOIN_NODE_NAME:?required}
+      - --datadir
+      - /var/lib/novacoin/testnet
+      - --logfile
+      - /var/log/novacoin/testnet.log
+      - --p2pport
+      - "28333"
+      - --p2pbind
+      - "0.0.0.0"
+      - --rpcport
+      - "28332"
+    ports:
+      - "${NOVACOIN_TESTNET_P2P_PORT:-28333}:28333/tcp"
+    volumes:
+      - ${NOVACOIN_TESTNET_DATA_DIR:?set an absolute host data directory}:/var/lib/novacoin/testnet
+      - ${NOVACOIN_TESTNET_LOG_DIR:?set an absolute host log directory}:/var/log/novacoin
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true

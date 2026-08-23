@@ -1,0 +1,30 @@
+{
+  "schema": "novacoin-testnet-bootstrap-v1",
+  "network": {
+    "id": "TESTNET",
+    "magic": "DAB5BFFB",
+    "p2p_port": 28333,
+    "genesis_hash": "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048"
+  },
+  "status": "UNPROVISIONED_EXAMPLE_ONLY",
+  "seeds": [
+    {
+      "region": "Europe",
+      "operator": "REPLACE_WITH_INDEPENDENT_OPERATOR",
+      "endpoint": "seed-eu.example.invalid:28333",
+      "removal_contact": "REPLACE_WITH_REAL_CONTACT"
+    },
+    {
+      "region": "North America",
+      "operator": "REPLACE_WITH_INDEPENDENT_OPERATOR",
+      "endpoint": "seed-na.example.invalid:28333",
+      "removal_contact": "REPLACE_WITH_REAL_CONTACT"
+    },
+    {
+      "region": "Asia",
+      "operator": "REPLACE_WITH_INDEPENDENT_OPERATOR",
+      "endpoint": "seed-asia.example.invalid:28333",
+      "removal_contact": "REPLACE_WITH_REAL_CONTACT"
+    }
+  ]
+}
