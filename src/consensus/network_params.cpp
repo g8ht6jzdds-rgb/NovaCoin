@@ -92,6 +92,7 @@ MakeGenesisBlock(const GenesisRequest& request, const primitives::BlockLimits& l
 
 [[nodiscard]] NetworkParams
 MakeNetwork(const NetworkId id, const bool enabled, const bool deployment_final,
+            const std::int32_t protocol_version, const std::int32_t minimum_peer_protocol_version,
             const std::uint32_t magic, const std::uint16_t p2p_port, const std::uint16_t rpc_port,
             const AddressPrefixes prefixes, const PowParameters& pow,
             const DifficultyParameters& difficulty, const ChainParams& monetary,
@@ -102,6 +103,8 @@ MakeNetwork(const NetworkId id, const bool enabled, const bool deployment_final,
     return NetworkParams{id,
                          enabled,
                          deployment_final,
+                         protocol_version,
+                         minimum_peer_protocol_version,
                          magic,
                          p2p_port,
                          rpc_port,
@@ -156,6 +159,10 @@ NetworkParamsError CheckNetworkParams(const NetworkParams& parameters) noexcept
 {
     if (parameters.network_magic == 0U) {
         return NetworkParamsError::kInvalidIdentity;
+    }
+    if (parameters.protocol_version <= 0 || parameters.minimum_peer_protocol_version <= 0 ||
+        parameters.minimum_peer_protocol_version > parameters.protocol_version) {
+        return NetworkParamsError::kInvalidProtocolParameters;
     }
     if (parameters.default_p2p_port == 0U || parameters.default_rpc_port == 0U ||
         parameters.default_p2p_port == parameters.default_rpc_port) {
@@ -222,7 +229,7 @@ NetworkParamsError CheckNetworkParams(const NetworkParams& parameters) noexcept
 const NetworkParams& RegtestNetworkParams() noexcept
 {
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kRegtest, true, true, 0xDAB5'BFFAU, 18'444U, 18'443U, {111U, 239U},
+        NetworkId::kRegtest, true, true, 1, 1, 0xDAB5'BFFAU, 18'444U, 18'443U, {111U, 239U},
         PowParameters{Target({0x7FU, 0xFFU, 0xFFU}), 0x207F'FFFFU},
         DifficultyParameters{600U, 1U, 600U, true, true},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 150U},
@@ -241,7 +248,7 @@ const NetworkParams& TestnetNetworkParams() noexcept
     // Development fixture only. See docs/testnet-genesis-review.md; explicit
     // reviewer approval is required before this can become a deployment set.
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kTestnet, false, false, 0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U},
+        NetworkId::kTestnet, false, false, 1, 1, 0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U},
         PowParameters{Target({0x70U, 0xFFU, 0xFFU}), 0x2070'FFFFU},
         DifficultyParameters{600U, 2'016U, 1'209'600U, true, false},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 210'000U},
@@ -260,7 +267,7 @@ const NetworkParams& MainnetNetworkParams() noexcept
     // NOT FINAL — DO NOT DEPLOY.  This provisional fixture is compiled only
     // to keep the table structurally complete; it is not an activation commitment.
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kMainnet, false, false, 0xDAB5'BFFCU, 39'333U, 39'332U, {68U, 128U},
+        NetworkId::kMainnet, false, false, 1, 1, 0xDAB5'BFFCU, 39'333U, 39'332U, {68U, 128U},
         PowParameters{Target({0x60U, 0xFFU, 0xFFU}), 0x2060'FFFFU},
         DifficultyParameters{600U, 2'016U, 1'209'600U, false, false},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 210'000U},

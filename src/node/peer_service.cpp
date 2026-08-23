@@ -34,7 +34,7 @@ ValidationParams(const consensus::NetworkParams& network) noexcept
 [[nodiscard]] net::P2PParams P2PParams(const consensus::NetworkParams& network) noexcept
 {
     return {network.network_magic,
-            1,
+            network.minimum_peer_protocol_version,
             network.block_limits.max_serialized_size,
             256U,
             1'000U,
@@ -57,25 +57,26 @@ std::unique_ptr<PeerService> PeerService::Create(RegtestNode& node) noexcept
 {
     const auto& network = node.network_params();
     const auto now = NowSeconds();
-    net::ConnectionParams connection{
-        P2PParams(network),
-        {1, 0U, static_cast<std::int64_t>(now), 1U, "/NovaCoin:0.1/", 0, true},
-        30U,
-        300U,
-        60U,
-        1'000U,
-        1'000U,
-        8U * 1024U * 1024U};
+    net::ConnectionParams connection{P2PParams(network),
+                                     {network.protocol_version, 0U, static_cast<std::int64_t>(now),
+                                      1U, "/NovaCoin:0.1/", 0, true},
+                                     30U,
+                                     300U,
+                                     60U,
+                                     1'000U,
+                                     1'000U,
+                                     8U * 1024U * 1024U};
     auto transport =
         net::TcpTransport::Create({{connection, 64U, 16U}, 64U * 1024U, 8U * 1024U * 1024U, 16U});
     if (transport == nullptr) {
         return nullptr;
     }
     try {
-        return std::unique_ptr<PeerService>{new PeerService{
-            node, std::move(transport),
-            Synchronizer{{ValidationParams(network), network.difficulty, 1, 2U, 2'000U},
-                         node.chain_state()}}};
+        return std::unique_ptr<PeerService>{
+            new PeerService{node, std::move(transport),
+                            Synchronizer{{ValidationParams(network), network.difficulty,
+                                          network.protocol_version, 2U, 2'000U},
+                                         node.chain_state()}}};
     } catch (...) {
         return nullptr;
     }

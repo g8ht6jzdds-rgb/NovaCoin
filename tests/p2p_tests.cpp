@@ -48,6 +48,18 @@ TEST(P2PFraming, RoundTripsCanonicalVersionAcrossFragmentedInput)
     EXPECT_TRUE(version->relay);
 }
 
+TEST(P2PFraming, RejectsPeerBelowConfiguredMinimumProtocolVersion)
+{
+    auto outdated = Version();
+    outdated.version = 0;
+    const nova::net::FramedMessage message{nova::net::Command::kVersion, outdated};
+    const auto serialized = nova::net::SerializeMessage(message, TestProtocolParams());
+    ASSERT_TRUE(serialized.has_value());
+
+    nova::net::MessageParser parser{TestProtocolParams()};
+    EXPECT_EQ(parser.PushBytes(*serialized).error, nova::net::P2PError::kMalformedPayload);
+}
+
 TEST(P2PFraming, RejectsBadChecksumMagicAndDeclaredOversize)
 {
     const nova::net::FramedMessage message{nova::net::Command::kPing, nova::net::NonceMessage{9U}};

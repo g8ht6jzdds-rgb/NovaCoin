@@ -43,6 +43,10 @@ TEST(NetworkParams, CommitsDistinctRegtestAndTestnetFixtures)
     EXPECT_FALSE(testnet.enabled);
     EXPECT_FALSE(testnet.deployment_final);
     EXPECT_NE(regtest.network_magic, testnet.network_magic);
+    EXPECT_EQ(regtest.protocol_version, 1);
+    EXPECT_EQ(regtest.minimum_peer_protocol_version, 1);
+    EXPECT_EQ(testnet.protocol_version, 1);
+    EXPECT_EQ(testnet.minimum_peer_protocol_version, 1);
     EXPECT_NE(regtest.default_p2p_port, testnet.default_p2p_port);
     EXPECT_NE(regtest.default_rpc_port, testnet.default_rpc_port);
     EXPECT_NE(regtest.address_prefixes.p2pkh, testnet.address_prefixes.p2pkh);
@@ -116,6 +120,14 @@ TEST(NetworkParams, RejectsAlteredEnabledNetworkParameters)
     altered = RegtestNetworkParams();
     altered.pow.pow_limit_compact = 0x2070'FFFFU;
     EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidPowParameters);
+
+    altered = RegtestNetworkParams();
+    altered.protocol_version = 0;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidProtocolParameters);
+
+    altered = RegtestNetworkParams();
+    altered.minimum_peer_protocol_version = altered.protocol_version + 1;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidProtocolParameters);
 }
 
 TEST(NetworkParams, RejectsTestnetActivationWithoutFinalApprovalFlag)

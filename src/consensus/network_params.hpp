@@ -54,6 +54,10 @@ struct NetworkParams final {
     NetworkId id{NetworkId::kRegtest};
     bool enabled{};
     bool deployment_final{};
+    // P2P compatibility is network-scoped configuration. It is not a
+    // consensus rule, but it must never be supplied ad hoc by a caller.
+    std::int32_t protocol_version{};
+    std::int32_t minimum_peer_protocol_version{};
     std::uint32_t network_magic{};
     std::uint16_t default_p2p_port{};
     std::uint16_t default_rpc_port{};
@@ -70,6 +74,7 @@ struct NetworkParams final {
 enum class NetworkParamsError : std::uint8_t {
     kNone,
     kInvalidIdentity,
+    kInvalidProtocolParameters,
     kInvalidPorts,
     kInvalidMonetaryParameters,
     kInvalidPowParameters,

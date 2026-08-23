@@ -88,7 +88,8 @@ an individual constant ad hoc.
 NetworkParams {
   NetworkId id;                         // REGTEST, TESTNET, or MAINNET
   bool enabled;                         // admission gate, immutable at run time
-  uint32_t protocol_version;
+  int32_t protocol_version;             // P2P version we advertise
+  int32_t minimum_peer_protocol_version; // minimum permitted P2P peer version
   Hash256 genesis_block_id;
   BlockHeader genesis_header;            // exact header commitment
   Uint512 genesis_chainwork;

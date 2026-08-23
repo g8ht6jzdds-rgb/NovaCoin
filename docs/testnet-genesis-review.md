@@ -34,6 +34,7 @@ record below is complete.
 | Network magic | `0xDAB5BFFB` |
 | Default P2P port | `28333` |
 | Default RPC port | `28332` |
+| P2P protocol / minimum peer version | `1` / `1` |
 | P2PKH / private-key presentation prefixes | `112` / `240` |
 | PoW compact limit | `0x2070ffff` |
 | Decoded PoW limit, big-endian | `70ffff0000000000000000000000000000000000000000000000000000000000` |

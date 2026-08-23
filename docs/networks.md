@@ -5,11 +5,11 @@ table.  It owns the network identity, transport ports, address presentation
 prefixes, monetary table, proof-of-work table, difficulty policy, and genesis
 block commitment.  No caller may combine fields from different networks.
 
-| Network | P2P magic | P2P port | RPC port | P2PKH prefix | PoW limit compact | spacing | halving | status |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| REGTEST | `0xDAB5BFFA` | 18444 | 18443 | 111 | `0x207fffff` | 600 s | 150 | enabled for local development |
-| TESTNET | `0xDAB5BFFB` | 28333 | 28332 | 112 | `0x2070ffff` | 600 s | 210000 | candidate fixture; approval pending and public deployment disabled |
-| MAINNET | `0xDAB5BFFC` | 39333 | 39332 | 68 | `0x2060ffff` | 600 s | 210000 | **NOT FINAL — DO NOT DEPLOY** |
+| Network | P2P magic | P2P port | RPC port | P2P / minimum peer version | P2PKH prefix | PoW limit compact | spacing | halving | status |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| REGTEST | `0xDAB5BFFA` | 18444 | 18443 | 1 / 1 | 111 | `0x207fffff` | 600 s | 150 | enabled for local development |
+| TESTNET | `0xDAB5BFFB` | 28333 | 28332 | 1 / 1 | 112 | `0x2070ffff` | 600 s | 210000 | candidate fixture; approval pending and public deployment disabled |
+| MAINNET | `0xDAB5BFFC` | 39333 | 39332 | 1 / 1 | 68 | `0x2060ffff` | 600 s | 210000 | **NOT FINAL — DO NOT DEPLOY** |
 
 REGTEST has `no_retargeting=true`; TESTNET permits minimum-difficulty blocks;
 MAINNET's difficulty policy is present only as a non-final placeholder.  The
