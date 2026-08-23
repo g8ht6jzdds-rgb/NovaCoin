@@ -33,6 +33,8 @@ namespace
 
 #ifdef _WIN32
 using NativeSocket = SOCKET;
+using NativeSocketLength = int;
+using NativeSocketIoSize = int;
 constexpr NativeSocket kInvalidSocket = INVALID_SOCKET;
 [[nodiscard]] int LastSocketError() noexcept
 {
@@ -50,6 +52,8 @@ void CloseNativeSocket(const NativeSocket socket) noexcept
 }
 #else
 using NativeSocket = int;
+using NativeSocketLength = socklen_t;
+using NativeSocketIoSize = std::size_t;
 constexpr NativeSocket kInvalidSocket = -1;
 [[nodiscard]] int LastSocketError() noexcept
 {
@@ -315,7 +319,7 @@ ExplorerLoopbackHttpServer::Create(ExplorerHttpServerParams parameters,
             address.sin6_port = htons(implementation->parameters.port);
             if (inet_pton(AF_INET6, "::1", &address.sin6_addr) != 1 ||
                 bind(listener.get(), reinterpret_cast<const sockaddr*>(&address),
-                     sizeof(address)) != 0) {
+                      static_cast<NativeSocketLength>(sizeof(address))) != 0) {
                 return nullptr;
             }
         } else {
@@ -324,7 +328,7 @@ ExplorerLoopbackHttpServer::Create(ExplorerHttpServerParams parameters,
             address.sin_port = htons(implementation->parameters.port);
             address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
             if (bind(listener.get(), reinterpret_cast<const sockaddr*>(&address),
-                     sizeof(address)) != 0) {
+                      static_cast<NativeSocketLength>(sizeof(address))) != 0) {
                 return nullptr;
             }
         }
@@ -401,7 +405,7 @@ ExplorerHttpServerResult ExplorerLoopbackHttpServer::Pump(const std::uint64_t no
                 std::array<char, 4096U> buffer{};
                 while (true) {
                     const auto received = recv(client.socket.get(), buffer.data(),
-                                               static_cast<int>(buffer.size()), 0);
+                                                static_cast<NativeSocketIoSize>(buffer.size()), 0);
                     if (received > 0) {
                         const auto count = static_cast<std::size_t>(received);
                         if (count >
@@ -441,7 +445,7 @@ ExplorerHttpServerResult ExplorerLoopbackHttpServer::Pump(const std::uint64_t no
             if (!close && !client.output.empty()) {
                 const auto remaining = client.output.size() - client.sent;
                 const auto sent = send(client.socket.get(), client.output.data() + client.sent,
-                                       static_cast<int>(remaining), 0);
+                                       static_cast<NativeSocketIoSize>(remaining), 0);
                 if (sent > 0) {
                     client.sent += static_cast<std::size_t>(sent);
                     client.last_activity = now;

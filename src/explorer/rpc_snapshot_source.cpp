@@ -39,6 +39,8 @@ constexpr std::uint64_t kMaximumSnapshotBlocks = 1'000'000U;
 
 #ifdef _WIN32
 using NativeSocket = SOCKET;
+using NativeSocketLength = int;
+using NativeSocketIoSize = int;
 constexpr NativeSocket kInvalidSocket = INVALID_SOCKET;
 void CloseSocket(const NativeSocket socket) noexcept
 {
@@ -67,6 +69,8 @@ class WinsockScope final
 };
 #else
 using NativeSocket = int;
+using NativeSocketLength = socklen_t;
+using NativeSocketIoSize = std::size_t;
 constexpr NativeSocket kInvalidSocket = -1;
 void CloseSocket(const NativeSocket socket) noexcept
 {
@@ -239,8 +243,8 @@ class Socket final
         endpoint.sin6_family = AF_INET6;
         endpoint.sin6_port = htons(config.port);
         if (inet_pton(AF_INET6, "::1", &endpoint.sin6_addr) != 1 ||
-            connect(socket.get(), reinterpret_cast<const sockaddr*>(&endpoint), sizeof(endpoint)) !=
-                0) {
+            connect(socket.get(), reinterpret_cast<const sockaddr*>(&endpoint),
+                    static_cast<NativeSocketLength>(sizeof(endpoint))) != 0) {
             return std::nullopt;
         }
     } else {
@@ -248,8 +252,8 @@ class Socket final
         endpoint.sin_family = AF_INET;
         endpoint.sin_port = htons(config.port);
         endpoint.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        if (connect(socket.get(), reinterpret_cast<const sockaddr*>(&endpoint), sizeof(endpoint)) !=
-            0) {
+        if (connect(socket.get(), reinterpret_cast<const sockaddr*>(&endpoint),
+                    static_cast<NativeSocketLength>(sizeof(endpoint))) != 0) {
             return std::nullopt;
         }
     }
@@ -263,7 +267,8 @@ class Socket final
     std::size_t sent{};
     while (sent < request.size()) {
         const auto result =
-            send(socket.get(), request.data() + sent, static_cast<int>(request.size() - sent), 0);
+            send(socket.get(), request.data() + sent,
+                 static_cast<NativeSocketIoSize>(request.size() - sent), 0);
         if (result <= 0) {
             return std::nullopt;
         }
@@ -273,7 +278,8 @@ class Socket final
     response.reserve(std::min(config.max_response_bytes, std::size_t{8U * 1024U}));
     std::array<char, 4096U> buffer{};
     while (true) {
-        const auto received = recv(socket.get(), buffer.data(), static_cast<int>(buffer.size()), 0);
+        const auto received =
+            recv(socket.get(), buffer.data(), static_cast<NativeSocketIoSize>(buffer.size()), 0);
         if (received == 0) {
             break;
         }
