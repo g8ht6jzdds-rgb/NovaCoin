@@ -16,3 +16,9 @@ Do not add placeholder evidence, copied output, secrets, or private-key data.
 The reviewer records the two file paths and their maintainers in
 `docs/testnet-genesis-review.md`; only then may the corresponding checklist
 items be changed from Pending.
+
+An optional detached signature (`.txt.asc`) establishes the integrity and
+signer identity of one evidence file only. It does not establish a clean
+checkout, pinned toolchain, separate machine/account, or independence of the
+two reproductions. Reviewers must verify each signature against an approved
+public-key fingerprint and still inspect the complete evidence contents.

@@ -23,6 +23,14 @@ $ErrorActionPreference = $previousErrorAction
 if ($gitExitCode -ne 0 -or $resolvedRevision.Trim().ToLowerInvariant() -ne $SourceRevision) {
     throw 'SourceRevision must name an immutable commit in this checkout.'
 }
+$headRevision = (& git -C $repositoryRoot rev-parse --verify HEAD 2>$null)
+if ($LASTEXITCODE -ne 0 -or $headRevision.Trim().ToLowerInvariant() -ne $SourceRevision) {
+    throw 'The checked-out HEAD must equal SourceRevision.'
+}
+$worktreeStatus = @(& git -C $repositoryRoot status --porcelain --untracked-files=all)
+if ($LASTEXITCODE -ne 0 -or $worktreeStatus.Count -ne 0) {
+    throw 'Genesis reproduction requires a clean checkout with no untracked files.'
+}
 
 $cmake = Join-Path $repositoryRoot '.toolchain/cmake/PFiles64/CMake/bin/cmake.exe'
 $ninja = Join-Path $repositoryRoot '.toolchain/vs-buildtools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
@@ -82,11 +90,20 @@ foreach ($line in $lines) {
     $parts = $line.Split('=', 2)
     if ($parts.Count -eq 2) { $evidence[$parts[0]] = $parts[1] }
 }
-if ($evidence['hash'] -ne '25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048' -or
-    $evidence['merkle_root'] -ne 'e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c' -or
-    $evidence['nonce'] -ne '0' -or $evidence['attempts'] -ne '1' -or
-    [string]::IsNullOrWhiteSpace($evidence['block_hex']) -or
-    [string]::IsNullOrWhiteSpace($evidence['block_sha256d'])) {
+$expected = @{
+    'nonce' = '0'
+    'hash' = '25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048'
+    'merkle_root' = 'e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c'
+    'block_hex' = '010000000000000000000000000000000000000000000000000000000000000000000000e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c00529365ffff7020000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1c005293654e6f7661436f696e20546573746e65742047656e65736973000000000100f2052a01000000015100000000'
+    'block_sha256d' = '04678f985ea3de5a84dffa8536218b65e599950c114034855e18434003014d63'
+    'attempts' = '1'
+}
+foreach ($name in $expected.Keys) {
+    if ($evidence[$name] -ne $expected[$name]) {
+        throw "Generated testnet genesis $name does not match the candidate commitment."
+    }
+}
+if ($evidence.Count -ne $expected.Count) {
     throw 'Generated testnet genesis evidence does not match the candidate commitment.'
 }
 

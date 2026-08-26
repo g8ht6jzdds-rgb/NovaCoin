@@ -82,7 +82,22 @@ TEST(NetworkParams, MatchesExactTestnetGenesisHashAndMerkleRoot)
     EXPECT_EQ(parameters.genesis_hash, *expected_hash);
     EXPECT_EQ(parameters.genesis_merkle_root, *expected_merkle);
     EXPECT_EQ(parameters.genesis_block.header.merkle_root, *expected_merkle);
+    EXPECT_EQ(parameters.genesis_block.header.version, 1);
+    EXPECT_EQ(parameters.genesis_block.header.time, 1'704'153'600U);
+    EXPECT_EQ(parameters.genesis_block.header.bits, 0x2070'FFFFU);
     EXPECT_EQ(parameters.genesis_block.header.nonce, 0U);
+    ASSERT_EQ(parameters.genesis_block.transactions.size(), 1U);
+    const auto& coinbase = parameters.genesis_block.transactions.front();
+    ASSERT_EQ(coinbase.inputs.size(), 1U);
+    ASSERT_EQ(coinbase.outputs.size(), 1U);
+    EXPECT_TRUE(coinbase.inputs.front().previous_output.IsNull());
+    EXPECT_EQ(coinbase.inputs.front().script_sig,
+              std::vector<std::uint8_t>({0x00U, 0x52U, 0x93U, 0x65U, 0x4EU, 0x6FU, 0x76U,
+                                         0x61U, 0x43U, 0x6FU, 0x69U, 0x6EU, 0x20U, 0x54U,
+                                         0x65U, 0x73U, 0x74U, 0x6EU, 0x65U, 0x74U, 0x20U,
+                                         0x47U, 0x65U, 0x6EU, 0x65U, 0x73U, 0x69U, 0x73U}));
+    EXPECT_EQ(coinbase.outputs.front().value, 50LL * nova::consensus::COIN);
+    EXPECT_EQ(coinbase.outputs.front().script_pubkey, std::vector<std::uint8_t>({0x51U}));
 }
 
 TEST(NetworkParams, CommitsExactTestnetGenesisSerializationEvidence)
@@ -141,6 +156,25 @@ TEST(NetworkParams, RejectsTestnetActivationWithoutFinalApprovalFlag)
     // enablement change sets both fields deliberately.
     EXPECT_FALSE(TestnetNetworkParams().enabled);
     EXPECT_FALSE(TestnetNetworkParams().deployment_final);
+}
+
+TEST(NetworkParams, RejectsAnyTestnetGenesisMutation)
+{
+    auto altered = TestnetNetworkParams();
+    altered.genesis_block.header.time += 1U;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidGenesisHash);
+
+    altered = TestnetNetworkParams();
+    altered.genesis_block.header.bits = 0x2070'FFFEU;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidGenesisTarget);
+
+    altered = TestnetNetworkParams();
+    altered.genesis_block.transactions.front().outputs.front().value += 1;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidGenesisStructure);
+
+    altered = TestnetNetworkParams();
+    altered.genesis_block.transactions.front().inputs.front().script_sig.back() ^= 0x01U;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidGenesisStructure);
 }
 
 TEST(NetworkParams, KeepsMainnetDisabledAndExplicitlyNonFinal)

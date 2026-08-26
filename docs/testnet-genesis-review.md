@@ -94,10 +94,12 @@ attempts=1
 ```
 
 On Windows, reviewers MUST use `scripts/verify_testnet_genesis.ps1`; it checks
-the pinned CMake, LLVM, vcpkg baseline, and installer checksums, builds
-`nova-genesis`, compares the candidate commitment, and writes a non-overwritable
-evidence file. The command requires a real immutable 40-hex source revision;
-it rejects labels such as `HEAD`, `pending`, and uncommitted-tree placeholders.
+that the requested 40-hex source revision is the clean checkout's `HEAD`, then
+validates the pinned CMake, LLVM, vcpkg baseline, and installer checksums,
+builds `nova-genesis`, compares the complete candidate commitment, and writes a
+non-overwritable evidence file. It rejects labels such as `HEAD`, `pending`,
+uncommitted trees, historical commits not currently checked out, and unrelated
+untracked files.
 
 ```powershell
 ./scripts/verify_testnet_genesis.ps1 `
@@ -141,8 +143,10 @@ testnet deployment.
 | Toolchain guard | `scripts/verify_testnet_genesis.ps1` verifies installer checksums, CMake 4.3.3, LLVM 20.1.8, MSVC 19.44.35228, and the vcpkg baseline before writing evidence | Implemented; requires a real Git commit |
 | Negative activation control | Candidate TESTNET has `enabled=false` and `deployment_final=false`; `CheckNetworkParams` rejects one-bit activation | Passed |
 
-This checkout has no Git `HEAD`, so it cannot supply an immutable source
-revision. Its local output is deliberately excluded from the approval record.
+Historical pre-approval output produced before a committed source revision is
+deliberately excluded from the approval record. Only a reproduction naming an
+immutable 40-hex commit and satisfying the independent-environment procedure
+above may be considered for the approval table.
 
 ## Operational-review evidence required
 
