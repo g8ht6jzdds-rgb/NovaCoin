@@ -88,6 +88,7 @@ an individual constant ad hoc.
 NetworkParams {
   NetworkId id;                         // REGTEST, TESTNET, or MAINNET
   bool enabled;                         // admission gate, immutable at run time
+  bool deployment_final;                // reviewed-finalization gate; not activation
   int32_t protocol_version;             // P2P version we advertise
   int32_t minimum_peer_protocol_version; // minimum permitted P2P peer version
   Hash256 genesis_block_id;
@@ -146,11 +147,17 @@ startup/configuration error, never a default.
 
 Initial enablement policy:
 
-| Network | `enabled` | Permitted use |
-| --- | --- | --- |
-| `REGTEST` | `true` once its complete parameter table and genesis vector exist | local deterministic development |
-| `TESTNET` | `false` | no public network until `docs/testnet-genesis-review.md` is fully approved and a separate immutable-table enablement change lands |
-| `MAINNET` | `false` | must remain disabled until an explicit later decision |
+| Network | `deployment_final` | `enabled` | Permitted use |
+| --- | --- | --- | --- |
+| `REGTEST` | `true` | `true` once its complete parameter table and genesis vector exist | local deterministic development |
+| `TESTNET` | `false` until a separately reviewed finalization change | `false` | no public network until finalization and a later, separate activation change |
+| `MAINNET` | `false` | `false` | must remain disabled until an explicit later decision |
+
+A TESTNET finalization-review candidate MAY set `deployment_final=true` while
+leaving `enabled=false`. This is explicitly non-activating: the daemon MUST
+still refuse TESTNET startup, it does not authorize deployment, and a distinct
+reviewed activation change is required before `enabled` may become `true`.
+MAINNET MUST remain `deployment_final=false` and `enabled=false`.
 
 An enabled network's genesis block is valid only if its canonical header hashes
 to `genesis_block_id`, its parent hash is all zero bytes, its transaction list

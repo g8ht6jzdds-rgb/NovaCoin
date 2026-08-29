@@ -41,7 +41,7 @@ TEST(NetworkParams, CommitsDistinctRegtestAndTestnetFixtures)
     EXPECT_EQ(CheckNetworkParams(testnet), NetworkParamsError::kNone);
     EXPECT_TRUE(regtest.enabled);
     EXPECT_FALSE(testnet.enabled);
-    EXPECT_FALSE(testnet.deployment_final);
+    EXPECT_TRUE(testnet.deployment_final);
     EXPECT_NE(regtest.network_magic, testnet.network_magic);
     EXPECT_EQ(regtest.protocol_version, 1);
     EXPECT_EQ(regtest.minimum_peer_protocol_version, 1);
@@ -152,10 +152,21 @@ TEST(NetworkParams, RejectsTestnetActivationWithoutFinalApprovalFlag)
     altered.deployment_final = false;
     EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kTestnetNotFinal);
 
-    // The compiled candidate remains unavailable until a separately reviewed
-    // enablement change sets both fields deliberately.
+    // The finalized review candidate remains unavailable until a separately
+    // reviewed activation change sets enabled deliberately.
     EXPECT_FALSE(TestnetNetworkParams().enabled);
-    EXPECT_FALSE(TestnetNetworkParams().deployment_final);
+    EXPECT_TRUE(TestnetNetworkParams().deployment_final);
+}
+
+TEST(NetworkParams, FinalizedTestnetRemainsNonActivating)
+{
+    const auto& testnet = TestnetNetworkParams();
+    const auto& mainnet = MainnetNetworkParams();
+    EXPECT_TRUE(testnet.deployment_final);
+    EXPECT_FALSE(testnet.enabled);
+    EXPECT_EQ(CheckNetworkParams(testnet), NetworkParamsError::kNone);
+    EXPECT_FALSE(mainnet.deployment_final);
+    EXPECT_FALSE(mainnet.enabled);
 }
 
 TEST(NetworkParams, RejectsAnyTestnetGenesisMutation)

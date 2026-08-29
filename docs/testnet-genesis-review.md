@@ -9,17 +9,19 @@ It deliberately distinguishes the currently compiled *candidate fixture* from
 a final, approved deployment commitment. No field below authorizes a launch.
 No code reads this document to determine consensus validity or enablement.
 
-Until every approval item is completed in a reviewed change, the compiled
-table must remain:
+This finalization-review candidate changes only the review gate. Until every
+approval item is completed and a distinct activation change is reviewed, the
+compiled table must remain:
 
 ```text
 TestnetNetworkParams().enabled          == false
-TestnetNetworkParams().deployment_final == false
+TestnetNetworkParams().deployment_final == true
 ```
 
 `CheckNetworkParams` also rejects a testnet table whose `enabled` bit is true
 while `deployment_final` is false. This is a defense against an accidental
-one-bit activation; it does not replace the human review recorded here.
+one-bit activation; it does not replace the human review recorded here. The
+`deployment_final` value alone does not authorize a launch or TESTNET startup.
 MAINNET has an independent, stricter **NOT FINAL — DO NOT DEPLOY** gate.
 
 ## Candidate immutable network parameters
@@ -141,7 +143,7 @@ testnet deployment.
 | Canonical serialization | `NetworkParams.CommitsExactTestnetGenesisSerializationEvidence` pins the full block bytes and SHA-256d `04678f985ea3de5a84dffa8536218b65e599950c114034855e18434003014d63` | Passed in the 103-test Debug suite |
 | PoW and generator | `GenesisGenerator.ReproducesTestnetCandidateFixture` and `nova-genesis` built with CMake 4.3.3 / MSVC 19.44.35228 produced nonce `0`, the committed candidate hash, and the committed Merkle root | Matched candidate fixture |
 | Toolchain guard | `scripts/verify_testnet_genesis.ps1` verifies installer checksums, CMake 4.3.3, LLVM 20.1.8, MSVC 19.44.35228, and the vcpkg baseline before writing evidence | Implemented; requires a real Git commit |
-| Negative activation control | Candidate TESTNET has `enabled=false` and `deployment_final=false`; `CheckNetworkParams` rejects one-bit activation | Passed |
+| Negative activation control | Candidate TESTNET has `enabled=false` and `deployment_final=true`; `CheckNetworkParams` rejects one-bit activation without finalization | Passed |
 
 Historical pre-approval output produced before a committed source revision is
 deliberately excluded from the approval record. Only a reproduction naming an

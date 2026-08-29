@@ -245,10 +245,10 @@ const NetworkParams& RegtestNetworkParams() noexcept
 
 const NetworkParams& TestnetNetworkParams() noexcept
 {
-    // Development fixture only. See docs/testnet-genesis-review.md; explicit
-    // reviewer approval is required before this can become a deployment set.
+    // Finalization-review candidate only. TESTNET remains disabled until a
+    // separate reviewed activation change sets enabled=true.
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kTestnet, false, false, 1, 1, 0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U},
+        NetworkId::kTestnet, false, true, 1, 1, 0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U},
         PowParameters{Target({0x70U, 0xFFU, 0xFFU}), 0x2070'FFFFU},
         DifficultyParameters{600U, 2'016U, 1'209'600U, true, false},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 210'000U},
