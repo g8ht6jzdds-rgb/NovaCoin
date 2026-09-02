@@ -32,6 +32,7 @@ constexpr std::int32_t kNotFound = -32002;
 constexpr std::int32_t kWalletFailure = -32003;
 constexpr std::int32_t kNodeFailure = -32004;
 constexpr std::int32_t kRegtestOnly = -32005;
+constexpr std::int32_t kAuthorizationFailure = -32006;
 constexpr std::size_t kMaximumExplorerSnapshotBytes = 32U * 1024U * 1024U;
 
 [[nodiscard]] bool IsLoopback(const std::string_view address) noexcept
@@ -42,6 +43,20 @@ constexpr std::size_t kMaximumExplorerSnapshotBytes = 32U * 1024U * 1024U;
 [[nodiscard]] bool IsRegtest(const consensus::NetworkId network) noexcept
 {
     return network == consensus::NetworkId::kRegtest;
+}
+
+enum class AuthenticatedRole : std::uint8_t { kAdmin, kExplorer, kFaucet };
+
+[[nodiscard]] bool IsAuthorized(const AuthenticatedRole role,
+                                const std::string_view method) noexcept
+{
+    if (role == AuthenticatedRole::kAdmin) {
+        return true;
+    }
+    if (role == AuthenticatedRole::kExplorer) {
+        return method == "getexplorersnapshot";
+    }
+    return method == "faucetpay";
 }
 
 [[nodiscard]] const char* NetworkName(const consensus::NetworkId network) noexcept
@@ -455,8 +470,21 @@ std::unique_ptr<RpcService> RpcService::Create(RpcConfig config,
 {
     if (!IsLoopback(config.bind_address) || config.username.empty() || config.password.empty() ||
         config.limits.max_header_bytes == 0U || config.limits.max_body_bytes == 0U ||
-        config.limits.max_mining_attempts == 0U) {
+        config.limits.max_mining_attempts == 0U || config.restricted_principals.size() > 2U) {
         return nullptr;
+    }
+    for (std::size_t index = 0U; index < config.restricted_principals.size(); ++index) {
+        const auto& principal = config.restricted_principals[index];
+        if (principal.username.empty() || principal.password.empty() ||
+            principal.username == config.username) {
+            return nullptr;
+        }
+        for (std::size_t other = 0U; other < index; ++other) {
+            if (principal.username == config.restricted_principals[other].username ||
+                principal.role == config.restricted_principals[other].role) {
+                return nullptr;
+            }
+        }
     }
     try {
         return std::unique_ptr<RpcService>{
@@ -480,7 +508,20 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
     }
     const auto credentials = DecodeBasic(request.authorization);
     const auto expected = config_.username + ":" + config_.password;
-    if (!credentials.has_value() || !ConstantTimeEqual(*credentials, expected)) {
+    std::optional<AuthenticatedRole> role;
+    if (credentials.has_value() && ConstantTimeEqual(*credentials, expected)) {
+        role = AuthenticatedRole::kAdmin;
+    }
+    if (credentials.has_value()) {
+        for (const auto& principal : config_.restricted_principals) {
+            const auto restricted = principal.username + ":" + principal.password;
+            if (ConstantTimeEqual(*credentials, restricted)) {
+                role = principal.role == RpcRole::kExplorer ? AuthenticatedRole::kExplorer
+                                                            : AuthenticatedRole::kFaucet;
+            }
+        }
+    }
+    if (!role.has_value()) {
         return {401U, ErrorResponse(kUnknownId, kAuthenticationFailure, "authentication failed")};
     }
     const auto version = Field(request.body, "jsonrpc");
@@ -494,6 +535,10 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
         return {400U, ErrorResponse(kUnknownId, kInvalidRequest, "invalid JSON-RPC request")};
     }
     const auto id = *id_raw;
+    if (!IsAuthorized(*role, *method)) {
+        return {403U,
+                ErrorResponse(id, kAuthorizationFailure, "RPC role is not authorized for method")};
+    }
     const auto parameter =
         [params](const std::string_view name) -> std::optional<std::string_view> {
         return !params.has_value() ? std::nullopt : Field(*params, name);
@@ -740,6 +785,29 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             const auto transaction_id = dependencies_.send_to_address({*key_hash, *amount});
             if (!transaction_id.has_value()) {
                 return {200U, ErrorResponse(id, kNodeFailure, "transaction broadcast failed")};
+            }
+            return {200U, ResultResponse(id, "\"" + Hex(transaction_id->bytes()) + "\"")};
+        }
+        if (*method == "faucetpay") {
+            const auto address_raw = parameter("address");
+            const auto amount_raw = parameter("amount");
+            const auto address = address_raw.has_value() ? JsonString(*address_raw) : std::nullopt;
+            const auto amount = amount_raw.has_value() ? JsonInteger(*amount_raw) : std::nullopt;
+            const auto key_hash = address.has_value()
+                                      ? wallet::DecodeP2pkhAddress(
+                                            *address, consensus::GetNetworkParams(config_.network))
+                                      : std::nullopt;
+            if (config_.network != consensus::NetworkId::kTestnet || !amount.has_value() ||
+                *amount <= 0 || *amount > config_.maximum_faucet_payout || !key_hash.has_value() ||
+                !dependencies_.send_to_address) {
+                return {200U,
+                        ErrorResponse(id, kInvalidParams,
+                                      "valid TESTNET address and bounded integer amount required")};
+            }
+            const auto transaction_id = dependencies_.send_to_address({*key_hash, *amount});
+            if (!transaction_id.has_value()) {
+                return {200U,
+                        ErrorResponse(id, kNodeFailure, "faucet transaction broadcast failed")};
             }
             return {200U, ResultResponse(id, "\"" + Hex(transaction_id->bytes()) + "\"")};
         }

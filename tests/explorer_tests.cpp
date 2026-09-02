@@ -4,6 +4,7 @@
 #include "explorer/http.hpp"
 #include "explorer/http_server.hpp"
 #include "node/regtest_node.hpp"
+#include "wallet/address.hpp"
 
 #include <array>
 #include <cstddef>
@@ -271,18 +272,29 @@ TEST(ExplorerHttpTests, RequiresAuthenticationAndOnlyServesReadOnlyGetRoutes)
     ASSERT_TRUE(snapshot.has_value());
     ExplorerIndex index;
     ASSERT_EQ(index.Rebuild(*snapshot).error, ExplorerError::kNone);
-    const auto service = nova::explorer::ExplorerHttpService::Create(
-        {"127.0.0.1", "viewer", "secret", {256U, 256U, 10U}}, index);
+    const auto service =
+        nova::explorer::ExplorerHttpService::Create({"127.0.0.1",
+                                                     "viewer",
+                                                     "secret",
+                                                     {256U, 256U, 10U},
+                                                     &nova::consensus::RegtestNetworkParams()},
+                                                    index);
     ASSERT_NE(service, nullptr);
-    EXPECT_EQ(nova::explorer::ExplorerHttpService::Create(
-                  {"0.0.0.0", "viewer", "secret", {256U, 256U, 10U}}, index),
-              nullptr);
+    EXPECT_EQ(
+        nova::explorer::ExplorerHttpService::Create({"0.0.0.0",
+                                                     "viewer",
+                                                     "secret",
+                                                     {256U, 256U, 10U},
+                                                     &nova::consensus::RegtestNetworkParams()},
+                                                    index),
+        nullptr);
 
     const nova::explorer::ExplorerHttpRequest authorized{"GET", "/api/v1/summary",
                                                          "Basic dmlld2VyOnNlY3JldA==", ""};
     const auto summary = service->Handle(authorized);
     EXPECT_EQ(summary.status, 200U);
     EXPECT_NE(summary.body.find("\"height\":1"), std::string::npos);
+    EXPECT_NE(summary.body.find("\"network\":\"regtest\""), std::string::npos);
 
     const auto unauthenticated =
         service->Handle({"GET", "/api/v1/summary", "Basic Zm9vOmJhcg==", ""});
@@ -302,6 +314,35 @@ TEST(ExplorerHttpTests, RequiresAuthenticationAndOnlyServesReadOnlyGetRoutes)
         service->Handle({"GET", "/api/v1/utxos?limit=2", "Basic dmlld2VyOnNlY3JldA==", ""});
     EXPECT_EQ(utxos.status, 200U);
     EXPECT_EQ(index.Summary()->height, 1U);
+
+    Hash160 expected_hash{};
+    expected_hash.fill(0x22U);
+    const auto address =
+        nova::wallet::EncodeP2pkhAddress(expected_hash, nova::consensus::RegtestNetworkParams());
+    ASSERT_TRUE(address.has_value());
+    EXPECT_NE(utxos.body.find(*address), std::string::npos);
+    const auto found = service->Handle({"GET", "/api/v1/addresses/" + *address + "/utxos?limit=1",
+                                        "Basic dmlld2VyOnNlY3JldA==", ""});
+    EXPECT_EQ(found.status, 200U);
+    EXPECT_NE(found.body.find(*address), std::string::npos);
+
+    const auto wrong_network =
+        nova::wallet::EncodeP2pkhAddress(expected_hash, nova::consensus::TestnetNetworkParams());
+    ASSERT_TRUE(wrong_network.has_value());
+    const auto rejected =
+        service->Handle({"GET", "/api/v1/addresses/" + *wrong_network + "/utxos?limit=1",
+                         "Basic dmlld2VyOnNlY3JldA==", ""});
+    EXPECT_EQ(rejected.status, 400U);
+
+    const auto wrong_network_service =
+        nova::explorer::ExplorerHttpService::Create({"127.0.0.1",
+                                                     "viewer",
+                                                     "secret",
+                                                     {256U, 256U, 10U},
+                                                     &nova::consensus::TestnetNetworkParams()},
+                                                    index);
+    ASSERT_NE(wrong_network_service, nullptr);
+    EXPECT_EQ(wrong_network_service->Handle(authorized).status, 409U);
 }
 
 TEST(ExplorerHttpSocketTests, ServesOnlyBoundedAuthenticatedLoopbackGetRequests)
@@ -310,8 +351,13 @@ TEST(ExplorerHttpSocketTests, ServesOnlyBoundedAuthenticatedLoopbackGetRequests)
     ASSERT_TRUE(snapshot.has_value());
     ExplorerIndex index;
     ASSERT_EQ(index.Rebuild(*snapshot).error, ExplorerError::kNone);
-    const auto service = nova::explorer::ExplorerHttpService::Create(
-        {"127.0.0.1", "viewer", "secret", {256U, 256U, 10U}}, index);
+    const auto service =
+        nova::explorer::ExplorerHttpService::Create({"127.0.0.1",
+                                                     "viewer",
+                                                     "secret",
+                                                     {256U, 256U, 10U},
+                                                     &nova::consensus::RegtestNetworkParams()},
+                                                    index);
     ASSERT_NE(service, nullptr);
     EXPECT_EQ(nova::explorer::ExplorerLoopbackHttpServer::Create(
                   {"0.0.0.0", 0U, 4U, 256U, 256U, 4'096U, 30U}, *service),

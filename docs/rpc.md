@@ -27,8 +27,13 @@ rejected.
 only `POST /` or `POST /rpc` over HTTP/1.1, requires exactly one canonical
 `Content-Length`, rejects duplicate length/authentication headers and every
 `Transfer-Encoding`, bounds concurrent connections, and closes each socket
-after one response. Daemon RPC passwords come only from
-`NOVACOIN_RPC_PASSWORD`; they are never command-line arguments or logs. The
+after one response. The administrator password comes only from
+`NOVACOIN_RPC_PASSWORD`; it is never a command-line argument or log. Optional
+restricted credentials are `NOVACOIN_EXPLORER_RPC_PASSWORD` for the `explorer`
+principal and, on TESTNET only, `NOVACOIN_FAUCET_RPC_PASSWORD` plus the positive
+integer `NOVACOIN_FAUCET_MAX_PAYOUT` for the `faucet` principal. The explorer
+role may call only `getexplorersnapshot`; the faucet role may call only
+`faucetpay`. Unauthorized methods return HTTP 403 and RPC error `-32006`. The
 daemon passes its live `ChainState`, UTXO set, mempool, P2P peer manager, and
 wallet to the service. Wallet address generation persists through the node's
 encrypted-wallet path before returning success.
@@ -43,7 +48,7 @@ separate `nova-explorer` process. It returns no wallet, mempool, or
 mutable-state handle: the result is a bounded hex encoding of the versioned
 active-chain snapshot defined in `docs/explorer.md`. The daemon computes it
 only from its selected active chain after normal validation. The explorer must
-authenticate to the ordinary loopback RPC listener and validate the copied
+authenticate using its dedicated restricted credential and validate the copied
 snapshot before use. TESTNET remains disabled, so this does not expose a public
 service before approval.
 
@@ -66,6 +71,12 @@ pipeline, and `connectpeer`/`disconnectpeers` control only loopback TCP peers.
 They exist to exercise real multi-process regtest flows. None accepts raw
 blocks, caller-supplied targets, or a direct chain-state mutation.
 
+The TESTNET-only `faucetpay` method is available only to the `faucet` principal.
+It decodes a TESTNET Base58Check address before building a recipient, requires
+a positive integer amount at or below the configured maximum, and delegates to
+the ordinary wallet/mempool/relay callback. It is not a rate limiter; the
+separate faucet service owns rate, abuse, audit, and kill-switch policy.
+
 ## Errors
 
 Responses use the JSON-RPC error object `{code, message}`.  Stable v0 codes:
@@ -78,6 +89,7 @@ Responses use the JSON-RPC error object `{code, message}`.  Stable v0 codes:
 * `-32003`: wallet operation failed
 * `-32004`: node/mempool operation failed
 * `-32005`: regtest-only operation refused
+* `-32006`: authenticated role is not authorized for the requested method
 
 Messages are diagnostics, not consensus data.  No endpoint returns private-key
 material, seed material, or plaintext keystore exports.

@@ -13,6 +13,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace nova::rpc
 {
@@ -23,12 +25,33 @@ struct RpcLimits final {
     std::uint64_t max_mining_attempts{};
 };
 
+// The administrator credential retains normal node and wallet authority.
+// Restricted principals have an allow-list enforced before method dispatch so
+// an explorer or faucet process cannot inherit administrative capabilities.
+enum class RpcRole : std::uint8_t { kExplorer, kFaucet };
+
+struct RpcRestrictedPrincipal final {
+    std::string username;
+    std::string password;
+    RpcRole role{RpcRole::kExplorer};
+};
+
 struct RpcConfig final {
     std::string bind_address{"127.0.0.1"};
     std::string username;
     std::string password;
     RpcLimits limits;
     consensus::NetworkId network{consensus::NetworkId::kRegtest};
+    std::vector<RpcRestrictedPrincipal> restricted_principals;
+    primitives::Amount maximum_faucet_payout{};
+
+    RpcConfig() = default;
+    RpcConfig(std::string bind, std::string administrator, std::string secret, RpcLimits rpc_limits,
+              const consensus::NetworkId selected_network)
+        : bind_address(std::move(bind)), username(std::move(administrator)),
+          password(std::move(secret)), limits(rpc_limits), network(selected_network)
+    {
+    }
 };
 
 struct RpcDependencies final {

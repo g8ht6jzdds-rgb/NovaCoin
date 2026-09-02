@@ -20,6 +20,10 @@ creation. Before any public deployment, that path must be exercised against
 the separately approved final table; a command-line request must never itself
 make TESTNET enabled. Simultaneous network flags are rejected.
 
+Validate container and systemd mechanics first using the REGTEST-only assets
+and evidence record in `docs/regtest-staging-validation.md`. This is not a way
+to bypass the TESTNET enablement gate.
+
 ### Bootstrap acceptance criteria
 
 Use signed, versioned static bootstrap records initially. DNS seeds must not be
@@ -44,6 +48,11 @@ Public TESTNET operations use separate hosts, service accounts, credentials,
 and network policies for each role. A compromise of one role must not grant
 access to another role's node RPC credentials, wallet material, signing keys,
 or deployment control.
+
+The record format, redaction rules, and required evidence fields are defined
+in `docs/testnet-access-boundary-inventory.md`. That inventory must be complete
+and independently reviewed before deployment; it is not satisfied by a
+template or self-attestation.
 
 | Role | Host and network boundary | Credential boundary | Prohibited access |
 | --- | --- | --- | --- |
@@ -90,6 +99,11 @@ disable switch that stops payouts without changing node consensus behavior.
 No public endpoint launches without a named on-call owner, dashboard URL,
 alert route, and access-control review. Monitoring must redact RPC credentials,
 wallet passphrases, private keys, full wallet files, and authorization headers.
+
+The specific rota, authority assignments, private-channel controls, alert
+schema, response objectives, and rollback-exercise record are in
+`docs/testnet-oncall-monitoring-rollback.md`. It must be completed with real
+evidence, not copied placeholders, before deployment.
 
 Required probes and alerts:
 

@@ -1,0 +1,34 @@
+# REGTEST-only staging validation. Do not replace --regtest with --testnet.
+# RPC is intentionally not published; P2P is loopback-only for staging.
+services:
+  novacoind:
+    build:
+      context: ../..
+      dockerfile: contrib/testnet/Dockerfile
+    image: novacoin-regtest-staging:${NOVACOIN_IMAGE_TAG:?set immutable image tag}
+    restart: "no"
+    environment:
+      NOVACOIN_RPC_PASSWORD: ${NOVACOIN_RPC_PASSWORD:?required}
+      NOVACOIN_WALLET_PASSPHRASE: ${NOVACOIN_WALLET_PASSPHRASE:?required}
+    command:
+      - --regtest
+      - --name
+      - ${NOVACOIN_NODE_NAME:?required}
+      - --datadir
+      - /var/lib/novacoin/regtest
+      - --logfile
+      - /var/log/novacoin/regtest.log
+      - --p2pport
+      - "18444"
+      - --p2pbind
+      - "127.0.0.1"
+      - --rpcport
+      - "18443"
+    volumes:
+      - ${NOVACOIN_REGTEST_DATA_DIR:?set absolute host data directory}:/var/lib/novacoin/regtest
+      - ${NOVACOIN_REGTEST_LOG_DIR:?set absolute host log directory}:/var/log/novacoin
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true

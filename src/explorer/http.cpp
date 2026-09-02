@@ -1,5 +1,7 @@
 #include "explorer/http.hpp"
 
+#include "wallet/address.hpp"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -133,38 +135,24 @@ namespace
     return Hex(hash.bytes());
 }
 
-[[nodiscard]] std::string AddressHex(const crypto::Hash160& address)
+[[nodiscard]] std::string AddressText(const crypto::Hash160& address,
+                                      const consensus::NetworkParams& network)
 {
-    return Hex(address);
+    const auto encoded = wallet::EncodeP2pkhAddress(address, network);
+    return encoded.value_or("");
 }
 
-[[nodiscard]] std::optional<crypto::Hash160> AddressFromHex(const std::string_view text) noexcept
+[[nodiscard]] const char* NetworkName(const consensus::NetworkId network) noexcept
 {
-    if (text.size() != 40U) {
-        return std::nullopt;
+    switch (network) {
+    case consensus::NetworkId::kRegtest:
+        return "regtest";
+    case consensus::NetworkId::kTestnet:
+        return "testnet";
+    case consensus::NetworkId::kMainnet:
+        return "mainnet";
     }
-    const auto nibble = [](const char character) -> std::optional<std::uint8_t> {
-        if (character >= '0' && character <= '9') {
-            return static_cast<std::uint8_t>(character - '0');
-        }
-        if (character >= 'a' && character <= 'f') {
-            return static_cast<std::uint8_t>(character - 'a' + 10);
-        }
-        if (character >= 'A' && character <= 'F') {
-            return static_cast<std::uint8_t>(character - 'A' + 10);
-        }
-        return std::nullopt;
-    };
-    crypto::Hash160 address{};
-    for (std::size_t index = 0U; index < address.size(); ++index) {
-        const auto high = nibble(text[index * 2U]);
-        const auto low = nibble(text[index * 2U + 1U]);
-        if (!high.has_value() || !low.has_value()) {
-            return std::nullopt;
-        }
-        address[index] = static_cast<std::uint8_t>((*high << 4U) | *low);
-    }
-    return address;
+    return "invalid";
 }
 
 [[nodiscard]] std::optional<std::size_t> ParseLimit(const std::string_view query,
@@ -189,7 +177,8 @@ namespace
     return {status, "application/json", "{\"error\":\"" + std::string{message} + "\"}"};
 }
 
-[[nodiscard]] std::string UtxoJson(const ExplorerUtxo& utxo)
+[[nodiscard]] std::string UtxoJson(const ExplorerUtxo& utxo,
+                                   const consensus::NetworkParams& network)
 {
     std::string result{"{\"txid\":\"" + HashHex(utxo.key.transaction_id) +
                        "\",\"vout\":" + std::to_string(utxo.key.output_index) +
@@ -198,14 +187,15 @@ namespace
                        (utxo.coin.is_coinbase ? "true" : "false") + ",\"script_pubkey\":\"" +
                        Hex(utxo.coin.output.script_pubkey) + "\",\"address\":"};
     if (utxo.address.has_value()) {
-        result += "\"" + AddressHex(*utxo.address) + "\"";
+        result += "\"" + AddressText(*utxo.address, network) + "\"";
     } else {
         result += "null";
     }
     return result + "}";
 }
 
-[[nodiscard]] std::string TransactionJson(const ExplorerTransaction& transaction)
+[[nodiscard]] std::string TransactionJson(const ExplorerTransaction& transaction,
+                                          const consensus::NetworkParams& network)
 {
     std::string result{"{\"txid\":\"" + HashHex(transaction.transaction_id) +
                        "\",\"block_hash\":\"" + HashHex(transaction.block_hash) +
@@ -234,7 +224,7 @@ namespace
                   ",\"value\":" + std::to_string(output.value) + ",\"script_pubkey\":\"" +
                   Hex(output.script_pubkey) + "\",\"address\":";
         const auto address = ExtractP2pkhAddress(output.script_pubkey);
-        result += address.has_value() ? "\"" + AddressHex(*address) + "\"" : "null";
+        result += address.has_value() ? "\"" + AddressText(*address, network) + "\"" : "null";
         result += '}';
     }
     return result + "]}";
@@ -272,8 +262,10 @@ std::unique_ptr<ExplorerHttpService>
 ExplorerHttpService::Create(ExplorerHttpConfig config, const ExplorerIndex& index) noexcept
 {
     if (!IsLoopback(config.bind_address) || !IsValidCredential(config.username, true) ||
-        !IsValidCredential(config.password, false) || config.limits.max_target_bytes == 0U ||
-        config.limits.max_authorization_bytes == 0U || config.limits.max_response_items == 0U) {
+        !IsValidCredential(config.password, false) || config.network == nullptr ||
+        consensus::CheckNetworkParams(*config.network) != consensus::NetworkParamsError::kNone ||
+        config.limits.max_target_bytes == 0U || config.limits.max_authorization_bytes == 0U ||
+        config.limits.max_response_items == 0U) {
         return nullptr;
     }
     try {
@@ -301,13 +293,25 @@ ExplorerHttpResponse ExplorerHttpService::Handle(const ExplorerHttpRequest& requ
             return Error(401U, "unauthorized");
         }
 
+        // A snapshot must never be rendered with a different network's
+        // address prefix. This also prevents a stale relay misconfiguration
+        // from presenting REGTEST data as TESTNET data.
+        const auto summary = index_.Summary();
+        if (!summary.has_value()) {
+            return Error(404U, "index_unavailable");
+        }
+        if (summary->network != config_.network->id) {
+            return Error(409U, "index_network_mismatch");
+        }
+
         if (request.target == "/api/v1/summary") {
-            const auto summary = index_.Summary();
-            if (!summary.has_value()) {
-                return Error(404U, "index_unavailable");
-            }
             return {200U, "application/json",
-                    "{\"height\":" + std::to_string(summary->height) + ",\"best_block\":\"" +
+                    std::string{"{\"network\":\""} + NetworkName(config_.network->id) +
+                        "\",\"notice\":\"" +
+                        (config_.network->id == consensus::NetworkId::kTestnet
+                             ? "NOVA TESTNET — COINS HAVE NO VALUE"
+                             : "") +
+                        "\",\"height\":" + std::to_string(summary->height) + ",\"best_block\":\"" +
                         HashHex(summary->best_block) + "\",\"difficulty_target\":\"" +
                         Hex(summary->target.bytes()) + "\",\"target_spacing_seconds\":" +
                         std::to_string(summary->target_spacing_seconds) +
@@ -369,9 +373,10 @@ ExplorerHttpResponse ExplorerHttpService::Handle(const ExplorerHttpRequest& requ
             const auto hash = crypto::Hash256::FromHex(request.target.substr(kTransaction.size()));
             const auto transaction =
                 hash.has_value() ? index_.FindTransaction(*hash) : std::nullopt;
-            return transaction.has_value() ? ExplorerHttpResponse{200U, "application/json",
-                                                                  TransactionJson(*transaction)}
-                                           : Error(404U, "not_found");
+            return transaction.has_value()
+                       ? ExplorerHttpResponse{200U, "application/json",
+                                              TransactionJson(*transaction, *config_.network)}
+                       : Error(404U, "not_found");
         }
 
         constexpr std::string_view kAddress{"/api/v1/addresses/"};
@@ -379,12 +384,12 @@ ExplorerHttpResponse ExplorerHttpService::Handle(const ExplorerHttpRequest& requ
         if (request.target.starts_with(kAddress)) {
             const auto remainder = request.target.substr(kAddress.size());
             const auto suffix_offset = remainder.find(kAddressSuffix);
-            if (suffix_offset != 40U ||
+            if (suffix_offset == std::string_view::npos ||
                 remainder.substr(suffix_offset, kAddressSuffix.size()) != kAddressSuffix) {
                 return Error(400U, "invalid_address_route");
             }
             const auto text = remainder.substr(0U, suffix_offset);
-            const auto address = AddressFromHex(text);
+            const auto address = wallet::DecodeP2pkhAddress(text, *config_.network);
             if (!address.has_value()) {
                 return Error(400U, "invalid_address");
             }
@@ -399,7 +404,7 @@ ExplorerHttpResponse ExplorerHttpService::Handle(const ExplorerHttpRequest& requ
                 if (body.size() != 1U) {
                     body += ',';
                 }
-                body += UtxoJson(utxo);
+                body += UtxoJson(utxo, *config_.network);
             }
             return {200U, "application/json", body + "]"};
         }
@@ -416,7 +421,7 @@ ExplorerHttpResponse ExplorerHttpService::Handle(const ExplorerHttpRequest& requ
                 if (body.size() != 1U) {
                     body += ',';
                 }
-                body += UtxoJson(utxo);
+                body += UtxoJson(utxo, *config_.network);
             }
             return {200U, "application/json", body + "]"};
         }

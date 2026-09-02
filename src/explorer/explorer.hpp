@@ -82,6 +82,7 @@ class AuthenticatedRpcSnapshotSource final : public ExplorerSource
 };
 
 struct ExplorerSummary final {
+    consensus::NetworkId network{consensus::NetworkId::kRegtest};
     std::uint32_t height{};
     crypto::Hash256 best_block;
     consensus::Target256 target;

@@ -193,7 +193,8 @@ ExplorerResult ExplorerIndex::Rebuild(const ExplorerSnapshot& snapshot) noexcept
 
         const auto estimated_blocks_per_day =
             static_cast<std::uint64_t>(86'400U) / snapshot.target_spacing_seconds;
-        const ExplorerSummary next_summary{snapshot.active_blocks.back().height,
+        const ExplorerSummary next_summary{snapshot.network,
+                                           snapshot.active_blocks.back().height,
                                            snapshot.active_blocks.back().hash,
                                            current_target,
                                            snapshot.target_spacing_seconds,

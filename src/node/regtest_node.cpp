@@ -2,6 +2,7 @@
 
 #include "consensus/monetary.hpp"
 #include "node/network_selection.hpp"
+#include "storage/network_identity.hpp"
 
 #include <algorithm>
 #include <array>
@@ -100,6 +101,10 @@ std::unique_ptr<RegtestNode> RegtestNode::Create(RegtestNodeConfig config) noexc
     }
     const auto& network = *selection.parameters;
     try {
+        if (storage::EnsureNetworkIdentity(config.data_directory, network) !=
+            storage::NetworkIdentityError::kNone) {
+            return nullptr;
+        }
         auto journal = storage::BlockJournal::Open(config.data_directory, network.block_limits);
         const auto anchor = GenesisAnchor(network);
         const wallet::WalletParams wallet_parameters{network.block_limits.transaction_limits, 1, 1U,

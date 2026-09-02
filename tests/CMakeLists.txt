@@ -19,7 +19,10 @@ add_executable(nova_unit_tests
     network_params_tests.cpp
     regtest_harness_tests.cpp
     storage_tests.cpp
+    network_identity_tests.cpp
+    bootstrap_tests.cpp
     explorer_tests.cpp
+    faucet_tests.cpp
     property_tests.cpp)
 nova_apply_project_options(nova_unit_tests)
 target_link_libraries(nova_unit_tests PRIVATE
@@ -33,6 +36,7 @@ target_link_libraries(nova_unit_tests PRIVATE
     nova_rpc
     nova_node
     nova_explorer)
+target_link_libraries(nova_unit_tests PRIVATE nova_faucet)
 
 add_test(NAME nova.unit COMMAND nova_unit_tests)
 set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")

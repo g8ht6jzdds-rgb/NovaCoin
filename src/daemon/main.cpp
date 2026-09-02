@@ -1,3 +1,4 @@
+#include "node/bootstrap_config.hpp"
 #include "node/network_selection.hpp"
 #include "node/peer_service.hpp"
 #include "node/regtest_node.hpp"
@@ -85,6 +86,23 @@ void ReleaseSecretEnvironmentString(char* value, const std::size_t size) noexcep
 }
 #endif
 
+[[nodiscard]] std::optional<std::string> EnvironmentValue(const char* name)
+{
+#ifdef _WIN32
+    char* value{};
+    std::size_t length{};
+    if (_dupenv_s(&value, &length, name) != 0 || value == nullptr) {
+        return std::nullopt;
+    }
+    std::string result{value, length == 0U ? 0U : length - 1U};
+    ReleaseSecretEnvironmentString(value, length);
+    return result;
+#else
+    const char* value = std::getenv(name);
+    return value == nullptr ? std::nullopt : std::optional<std::string>{value};
+#endif
+}
+
 } // namespace
 
 int main(const int argc, char* argv[])
@@ -98,6 +116,7 @@ int main(const int argc, char* argv[])
     std::optional<std::uint16_t> rpc_port;
     std::optional<std::string> p2p_bind_address;
     std::vector<nova::net::TcpEndpoint> peers;
+    std::optional<std::filesystem::path> bootstrap_config;
     std::optional<nova::consensus::NetworkId> network;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option{argv[index]};
@@ -150,6 +169,8 @@ int main(const int argc, char* argv[])
                 return 2;
             }
             peers.push_back(*endpoint);
+        } else if (option == "--bootstrap" && !bootstrap_config.has_value()) {
+            bootstrap_config = std::filesystem::path{value};
         } else {
             std::cerr << "invalid or duplicate option\n";
             return 2;
@@ -161,7 +182,7 @@ int main(const int argc, char* argv[])
         std::cerr
             << "usage: novacoind --regtest|--testnet|--mainnet --name <name> --datadir <path> "
                "--p2pport <port> --rpcport <port> --logfile <path> [--p2pbind loopback|wildcard] "
-               "[--connect host:port]\n";
+               "[--connect host:port] [--bootstrap static-bootstrap.conf]\n";
         return 2;
     }
     const auto selection = nova::node::SelectNetwork(*network);
@@ -182,6 +203,23 @@ int main(const int argc, char* argv[])
         return 1;
     }
     const auto start_time = selection.parameters->genesis_block.header.time + 600U;
+    if (bootstrap_config.has_value()) {
+        const auto bootstrap =
+            nova::node::LoadStaticBootstrapConfig(*bootstrap_config, *selection.parameters);
+        if (bootstrap.error != nova::node::BootstrapConfigError::kNone) {
+            std::cerr << "invalid static bootstrap configuration\n";
+            return 2;
+        }
+        for (const auto& endpoint : bootstrap.seeds) {
+            const auto duplicate =
+                std::any_of(peers.begin(), peers.end(), [&endpoint](const auto& item) {
+                    return item.host == endpoint.host && item.port == endpoint.port;
+                });
+            if (!duplicate) {
+                peers.push_back(endpoint);
+            }
+        }
+    }
 #ifdef _WIN32
     char* wallet_passphrase{};
     std::size_t wallet_passphrase_length{};
@@ -221,26 +259,47 @@ int main(const int argc, char* argv[])
     }
     // RPC credentials are intentionally provided via the environment, not
     // arguments or logs. The fixed account name keeps the surface small.
-#ifdef _WIN32
-    char* rpc_password_raw{};
-    std::size_t rpc_password_length{};
-    if (_dupenv_s(&rpc_password_raw, &rpc_password_length, "NOVACOIN_RPC_PASSWORD") != 0 ||
-        rpc_password_raw == nullptr || rpc_password_raw[0] == '\0') {
+    const auto rpc_password = EnvironmentValue("NOVACOIN_RPC_PASSWORD");
+    if (!rpc_password.has_value() || rpc_password->empty()) {
         std::cerr << "NOVACOIN_RPC_PASSWORD must be supplied out of band\n";
         return 2;
     }
-    const std::string rpc_password{rpc_password_raw};
-    ReleaseSecretEnvironmentString(rpc_password_raw, rpc_password_length);
-#else
-    const char* const rpc_password_raw = std::getenv("NOVACOIN_RPC_PASSWORD");
-    if (rpc_password_raw == nullptr || rpc_password_raw[0] == '\0') {
-        std::cerr << "NOVACOIN_RPC_PASSWORD must be supplied out of band\n";
-        return 2;
+    std::vector<nova::rpc::RpcRestrictedPrincipal> restricted_principals;
+    const auto explorer_rpc_password = EnvironmentValue("NOVACOIN_EXPLORER_RPC_PASSWORD");
+    if (explorer_rpc_password.has_value() && !explorer_rpc_password->empty()) {
+        restricted_principals.push_back(
+            {"explorer", *explorer_rpc_password, nova::rpc::RpcRole::kExplorer});
     }
-    const std::string rpc_password{rpc_password_raw};
-#endif
+    std::optional<nova::primitives::Amount> faucet_payout;
+    if (*network == nova::consensus::NetworkId::kTestnet) {
+        const auto faucet_rpc_password = EnvironmentValue("NOVACOIN_FAUCET_RPC_PASSWORD");
+        const auto faucet_maximum = EnvironmentValue("NOVACOIN_FAUCET_MAX_PAYOUT");
+        std::int64_t maximum_faucet_payout{};
+        const auto maximum_text =
+            faucet_maximum.has_value() ? std::string_view{*faucet_maximum} : std::string_view{};
+        const auto parsed =
+            maximum_text.empty()
+                ? std::from_chars_result{maximum_text.data(), std::errc::invalid_argument}
+                : std::from_chars(maximum_text.data(), maximum_text.data() + maximum_text.size(),
+                                  maximum_faucet_payout);
+        if (faucet_rpc_password.has_value() && !faucet_rpc_password->empty() &&
+            parsed.ec == std::errc{} && parsed.ptr == maximum_text.data() + maximum_text.size() &&
+            maximum_faucet_payout > 0) {
+            restricted_principals.push_back(
+                {"faucet", *faucet_rpc_password, nova::rpc::RpcRole::kFaucet});
+            faucet_payout = maximum_faucet_payout;
+        } else if (faucet_rpc_password.has_value() || faucet_maximum.has_value()) {
+            std::cerr << "invalid TESTNET faucet RPC configuration\n";
+            return 2;
+        }
+    }
+    const auto maximum_faucet_payout = faucet_payout.value_or(0);
+    nova::rpc::RpcConfig rpc_config{
+        "127.0.0.1", "novacoin", *rpc_password, {8'192U, 1'000'000U, 4'096U}, *network};
+    rpc_config.restricted_principals = std::move(restricted_principals);
+    rpc_config.maximum_faucet_payout = maximum_faucet_payout;
     auto rpc_service = nova::rpc::RpcService::Create(
-        {"127.0.0.1", "novacoin", rpc_password, {8'192U, 1'000'000U, 4'096U}, *network},
+        std::move(rpc_config),
         {node->chain_state(),
          node->utxos(),
          node->mempool(),

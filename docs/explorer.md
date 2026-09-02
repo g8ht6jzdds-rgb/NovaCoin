@@ -30,11 +30,11 @@ latest blocks, transactions, inputs/outputs, transaction fees, and currently
 unspent outputs. It searches blocks by height or hash, transactions by txid,
 and UTXOs by recognized address.
 
-NovaCoin v0 has no consensus-defined human address text encoding. The explorer
-recognizes an address only when an output script is exactly
-`76 a9 14 <20-byte HASH160> 88 ac`; it exposes that 20-byte identifier for a
-presentation layer to encode. Other script forms remain visible as scripts,
-but are not assigned an address.
+NovaCoin uses a network-aware Base58Check P2PKH presentation encoding. The
+explorer recognizes an address only when an output script is exactly
+`76 a9 14 <20-byte HASH160> 88 ac`; a presentation layer must encode it with
+the selected network prefix. Other script forms remain visible as scripts, but
+are not assigned an address.
 
 ## Service integration
 
@@ -54,8 +54,9 @@ UTXO mutation methods through the explorer. TESTNET remains disabled, so this
 does not create a public endpoint before the activation gate is satisfied.
 
 Run the independent process with `nova-explorer --regtest|--testnet --rpcport
-<node-rpc> --httpport <explorer-http>`. `NOVACOIN_RPC_PASSWORD` authenticates its node
-snapshot request; `NOVACOIN_EXPLORER_PASSWORD` authenticates its public
+<node-rpc> --httpport <explorer-http>`. `NOVACOIN_EXPLORER_RPC_PASSWORD`
+authenticates its node snapshot request using the dedicated read-only `explorer`
+RPC role; `NOVACOIN_EXPLORER_PASSWORD` authenticates its public
 loopback frontend under the fixed username `explorer`. Passwords are never
 accepted as command-line options or written to logs. The daemon refreshes the
 index every two seconds; a failed refresh preserves the last verified index.
@@ -75,7 +76,15 @@ Available routes are `GET /api/v1/summary`,
 `GET /api/v1/blocks/height/<height>`,
 `GET /api/v1/blocks/hash/<hash>`,
 `GET /api/v1/transactions/<txid>`, and
-`GET /api/v1/addresses/<hash160>/utxos?limit=N`, and `GET /api/v1/utxos?limit=N`.
+`GET /api/v1/addresses/<base58check-address>/utxos?limit=N`, and
+`GET /api/v1/utxos?limit=N`.
 All collection routes require a bounded `limit`. All hash text uses the raw canonical
 serialized-byte order already accepted by `Hash256::FromHex`; it does not
 introduce an address or identifier encoding rule.
+
+The configured immutable network table controls both rendered P2PKH addresses
+and address search decoding. A REGTEST or MAINNET Base58Check address is
+rejected by a TESTNET explorer rather than silently treated as a Hash160. The
+TESTNET summary includes the exact visible notice `NOVA TESTNET — COINS HAVE
+NO VALUE`; public reverse-proxy/UI deployment remains an operations gate and
+must not proxy node RPC.

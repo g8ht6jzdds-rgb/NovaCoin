@@ -11,17 +11,25 @@ The data path must be a TESTNET-specific absolute path such as
 `/var/lib/novacoin/testnet`; it must never be a REGTEST or MAINNET path, a
 shared volume, or a path populated by another network. The daemon validates its
 selected immutable network table before opening node, wallet, journal, or log
-state.
+state. Before the journal can open it creates or verifies `network.identity`:
+the exact 45-byte record `NVID || u32_le(1) || network_id || u32_le(magic) ||
+genesis_hash`. A malformed, mismatched, or markerless non-empty directory is
+refused. Migrate legacy data only by taking a backup and using a fresh,
+network-specific directory; never copy a journal/wallet directory between
+networks.
 
 ## Bootstrap
 
-`novacoind --connect host:port` remains the manual bootstrap mechanism. The
-repository does not ship hard-coded live seeds and does not implement DNS seeds:
-there are no approved independent endpoints yet. Before activation, publish a
-signed manifest derived from
-`contrib/testnet/bootstrap-manifest.example.json` with real operator names,
-endpoints, contacts, expiry, removal process, and detached signature. The
-example's `.example.invalid` names are deliberate non-routable placeholders.
+`novacoind --connect host:port` remains the manual bootstrap mechanism.
+`--bootstrap <path>` loads a bounded canonical static file such as
+`contrib/testnet/static-bootstrap.conf.example`. It requires an exact network
+name, magic, genesis hash, and unique `host:port` seed lines before dialing
+anything. The JSON manifest is an operational review template only and is not
+consumed by the daemon. There are no hard-coded live seeds or DNS seeds: no
+approved independent endpoints exist. Before activation, publish a separately
+reviewed and signed static configuration with real operator names, endpoints,
+contacts, expiry, and removal process. The example's `.example.invalid` names
+are deliberate non-routable placeholders.
 Seeds are discovery hints only. They receive no consensus privilege and every
 connection still undergoes normal handshake, framing, PoW, and block validation.
 
@@ -52,15 +60,17 @@ limits, framing limits, timeouts, parser rejections, and saturating
 non-consensus counters. Journal recovery tests are mandatory for every release.
 
 The independent explorer must use authenticated loopback `getexplorersnapshot`
-and a separate read-only credential. Its public frontend, if any, belongs behind
-a separately reviewed reverse proxy; node RPC must never be published.
+with the dedicated `explorer` RPC role. That role cannot access node, wallet,
+or mutation RPC methods. Its public frontend, if any, belongs behind a
+separately reviewed reverse proxy; node RPC must never be published.
 
 ## Faucet and releases
 
-No faucet exists in this repository. A future faucet must be a separate service
-with an isolated encrypted TESTNET hot wallet, Base58Check TESTNET-address
-validation, bounded request body and queue, per-source/per-address/global rate
-limits, payout caps, transaction-ID-only logs, monitoring, and a kill switch.
+`nova_faucet` is an un-deployed separate TESTNET-only component with a bounded
+per-source rate limiter, amount cap, wrong-network address rejection, durable
+audit log, metrics, and kill switch. Its restricted `faucet` RPC credential is
+separate from administrator and explorer credentials. See `docs/faucet.md`.
+It is not yet a public request transport or approved custody deployment.
 
 No signed release packages exist. Before release, establish Linux, Windows, and
 macOS signing identities, custodians, revocation procedures, reproducible build

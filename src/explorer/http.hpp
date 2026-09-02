@@ -22,6 +22,10 @@ struct ExplorerHttpConfig final {
     std::string username;
     std::string password;
     ExplorerHttpLimits limits;
+    // Presentation/search is network-aware even though the index itself only
+    // stores script hashes. The process supplies the immutable table selected
+    // at startup; it is never inferred from a user-provided address.
+    const consensus::NetworkParams* network{};
 };
 
 struct ExplorerHttpRequest final {

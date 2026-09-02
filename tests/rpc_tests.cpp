@@ -102,7 +102,8 @@ nova::net::PeerManager MakePeerManager()
 
 std::unique_ptr<nova::rpc::RpcService> CreateService(const std::string_view bind = "127.0.0.1",
                                                      const bool regtest = true,
-                                                     const bool harness_callbacks = false)
+                                                     const bool harness_callbacks = false,
+                                                     const bool restricted_credentials = false)
 {
     static UTXOSet utxos;
     static auto state = CreateChainState(utxos);
@@ -131,14 +132,18 @@ std::unique_ptr<nova::rpc::RpcService> CreateService(const std::string_view bind
         dependencies.connect_peer = [](const nova::net::TcpEndpoint&) { return true; };
         dependencies.disconnect_peers = []() {};
     }
-    return nova::rpc::RpcService::Create(
-        nova::rpc::RpcConfig{std::string{bind},
-                             "user",
-                             "pass",
-                             {256U, 8'192U, 4'096U},
-                             regtest ? nova::consensus::NetworkId::kRegtest
-                                     : nova::consensus::NetworkId::kTestnet},
-        std::move(dependencies));
+    nova::rpc::RpcConfig config{std::string{bind},
+                                "user",
+                                "pass",
+                                {256U, 8'192U, 4'096U},
+                                regtest ? nova::consensus::NetworkId::kRegtest
+                                        : nova::consensus::NetworkId::kTestnet};
+    if (restricted_credentials) {
+        config.restricted_principals = {{"explorer", "view", nova::rpc::RpcRole::kExplorer},
+                                        {"faucet", "faucet", nova::rpc::RpcRole::kFaucet}};
+        config.maximum_faucet_payout = 10U;
+    }
+    return nova::rpc::RpcService::Create(std::move(config), std::move(dependencies));
 }
 
 std::string SocketRequest(nova::rpc::LoopbackHttpServer& server, const std::string_view request)
@@ -200,6 +205,42 @@ TEST(RpcIntegration, RequiresLoopbackBindingAndBasicAuthentication)
         {"POST", "Basic dXNlcjp3cm9uZw==", R"({"jsonrpc":"2.0","id":1,"method":"getbalances"})"});
     EXPECT_EQ(rejected.status, 401U);
     EXPECT_NE(rejected.body.find("-32001"), std::string::npos);
+}
+
+TEST(RpcIntegration, RestrictsExplorerAndFaucetCredentialsToDedicatedMethods)
+{
+    auto service = CreateService("127.0.0.1", false, true, true);
+    ASSERT_NE(service, nullptr);
+    constexpr std::string_view kExplorer{"Basic ZXhwbG9yZXI6dmlldw=="};
+    constexpr std::string_view kFaucet{"Basic ZmF1Y2V0OmZhdWNldA=="};
+    const auto snapshot = service->HandleHttpPost(
+        {"POST", kExplorer, R"({"jsonrpc":"2.0","id":1,"method":"getexplorersnapshot"})"});
+    EXPECT_EQ(snapshot.status, 200U);
+    EXPECT_NE(snapshot.body.find("nova-snapshot-v1"), std::string::npos);
+    const auto explorer_denied = service->HandleHttpPost(
+        {"POST", kExplorer, R"({"jsonrpc":"2.0","id":2,"method":"getnewaddress"})"});
+    EXPECT_EQ(explorer_denied.status, 403U);
+    EXPECT_NE(explorer_denied.body.find("-32006"), std::string::npos);
+
+    nova::crypto::Hash160 recipient_hash{};
+    const auto address =
+        nova::wallet::EncodeP2pkhAddress(recipient_hash, nova::consensus::TestnetNetworkParams());
+    ASSERT_TRUE(address.has_value());
+    const auto paid = service->HandleHttpPost(
+        {"POST", kFaucet,
+         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"faucetpay\",\"params\":{\"address\":\"" +
+             *address + "\",\"amount\":10}}"});
+    EXPECT_EQ(paid.status, 200U);
+    EXPECT_NE(paid.body.find("b2"), std::string::npos);
+    const auto faucet_denied = service->HandleHttpPost(
+        {"POST", kFaucet, R"({"jsonrpc":"2.0","id":4,"method":"sendtoaddress"})"});
+    EXPECT_EQ(faucet_denied.status, 403U);
+
+    const auto oversized = service->HandleHttpPost(
+        {"POST", kFaucet,
+         "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"faucetpay\",\"params\":{\"address\":\"" +
+             *address + "\",\"amount\":11}}"});
+    EXPECT_NE(oversized.body.find("-32602"), std::string::npos);
 }
 
 TEST(RpcIntegration, ServesReadWalletAndStructuredFailureResponses)

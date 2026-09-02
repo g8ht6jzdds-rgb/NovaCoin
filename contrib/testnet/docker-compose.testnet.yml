@@ -11,6 +11,7 @@ services:
       - .env
     environment:
       NOVACOIN_RPC_PASSWORD: ${NOVACOIN_RPC_PASSWORD:?required}
+      NOVACOIN_EXPLORER_RPC_PASSWORD: ${NOVACOIN_EXPLORER_RPC_PASSWORD:-}
       NOVACOIN_WALLET_PASSPHRASE: ${NOVACOIN_WALLET_PASSPHRASE:?required}
     command:
       - --testnet

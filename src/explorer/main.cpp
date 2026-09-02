@@ -127,23 +127,24 @@ int main(const int argc, char* argv[])
         std::cerr << NetworkName(*network) << " is disabled pending immutable parameter approval\n";
         return 1;
     }
-    const auto rpc_password = EnvironmentSecret("NOVACOIN_RPC_PASSWORD");
+    const auto rpc_password = EnvironmentSecret("NOVACOIN_EXPLORER_RPC_PASSWORD");
     const auto explorer_password = EnvironmentSecret("NOVACOIN_EXPLORER_PASSWORD");
     if (!rpc_password.has_value() || !explorer_password.has_value()) {
-        std::cerr << "NOVACOIN_RPC_PASSWORD and NOVACOIN_EXPLORER_PASSWORD must be supplied out of "
+        std::cerr << "NOVACOIN_EXPLORER_RPC_PASSWORD and NOVACOIN_EXPLORER_PASSWORD must be "
+                     "supplied out of "
                      "band\n";
         return 2;
     }
 
     const auto source = nova::explorer::AuthenticatedRpcSnapshotSource::Create(
-        {"127.0.0.1", *rpc_port, "novacoin", *rpc_password, 32U * 1024U * 1024U, &parameters});
+        {"127.0.0.1", *rpc_port, "explorer", *rpc_password, 32U * 1024U * 1024U, &parameters});
     if (source == nullptr) {
         std::cerr << "explorer RPC source initialization failed\n";
         return 1;
     }
     nova::explorer::ExplorerIndex index;
     const auto service = nova::explorer::ExplorerHttpService::Create(
-        {"127.0.0.1", "explorer", *explorer_password, {1'024U, 1'024U, 100U}}, index);
+        {"127.0.0.1", "explorer", *explorer_password, {1'024U, 1'024U, 100U}, &parameters}, index);
     const auto server =
         service == nullptr
             ? nullptr

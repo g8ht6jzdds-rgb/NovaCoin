@@ -1,0 +1,23 @@
+[Unit]
+Description=NovaCoin REGTEST staging node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=novacoin
+Group=novacoin
+EnvironmentFile=/etc/novacoin/regtest-staging.env
+ExecStart=/usr/local/bin/novacoind --regtest --name ${NOVACOIN_NODE_NAME} --datadir /var/lib/novacoin/regtest --logfile /var/log/novacoin/regtest.log --p2pport 18444 --p2pbind 127.0.0.1 --rpcport 18443
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/novacoin/regtest /var/log/novacoin
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

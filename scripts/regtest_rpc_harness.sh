@@ -129,6 +129,7 @@ start_node() {
     fi
     NOVACOIN_WALLET_PASSPHRASE="${wallet_passphrase}" \
         NOVACOIN_RPC_PASSWORD="${rpc_password}" \
+        NOVACOIN_EXPLORER_RPC_PASSWORD="${rpc_password}" \
         "${daemon}" --regtest --name "${name}" --datadir "${node_root}/data" \
         --p2pport "${p2p_port}" --rpcport "${rpc_port}" \
         --logfile "${node_root}/logs/novacoind.log" "${connect_args[@]}" \
@@ -141,7 +142,7 @@ start_explorer() {
     local rpc_port=$1
     local http_port=$2
     local log_path="${work_root}/explorer.log"
-    NOVACOIN_RPC_PASSWORD="${rpc_password}" \
+    NOVACOIN_EXPLORER_RPC_PASSWORD="${rpc_password}" \
         NOVACOIN_EXPLORER_PASSWORD="${explorer_password}" \
         "${explorer}" --regtest --rpcport "${rpc_port}" --httpport "${http_port}" \
         >"${log_path}" 2>&1 &
