@@ -478,18 +478,31 @@ std::optional<BlockIndex> ChainState::GetBlockIndex(const crypto::Hash256& hash)
 std::optional<std::vector<BlockIndex>> ChainState::GetActiveBlockIndexes() const noexcept
 {
     try {
-        std::vector<BlockIndex> active;
-        active.reserve(static_cast<std::size_t>(active_chain_.height()) + 1U);
+        // Collect lightweight identifiers tip-to-anchor, then copy indexes in
+        // ascending height order.  Avoid reversing BlockIndex values: those
+        // contain complete blocks and reversing them performs unnecessary
+        // moves of untrusted block payloads.
+        std::vector<crypto::Hash256> hashes;
+        hashes.reserve(static_cast<std::size_t>(active_chain_.height()) + 1U);
         auto current = indexes_.find(active_chain_.tip());
         while (current != indexes_.end()) {
-            active.push_back(current->second);
+            hashes.push_back(current->first);
             const auto parent = indexes_.find(current->second.previous_hash);
             if (parent == indexes_.end()) {
                 break;
             }
             current = parent;
         }
-        std::reverse(active.begin(), active.end());
+
+        std::vector<BlockIndex> active;
+        active.reserve(hashes.size());
+        for (auto iterator = hashes.rbegin(); iterator != hashes.rend(); ++iterator) {
+            const auto index = indexes_.find(*iterator);
+            if (index == indexes_.end()) {
+                return std::nullopt;
+            }
+            active.push_back(index->second);
+        }
         return active;
     } catch (...) {
         return std::nullopt;

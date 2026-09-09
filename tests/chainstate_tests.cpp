@@ -158,6 +158,13 @@ TEST(ChainStateSelection, ExtendsAStraightChainByCumulativeWork)
     EXPECT_EQ(index->per_block_work, *work);
     EXPECT_TRUE(previous->chain_work < index->chain_work);
     EXPECT_EQ(index->status, BlockStatus::kActive);
+
+    const auto active = state->GetActiveBlockIndexes();
+    ASSERT_TRUE(active.has_value());
+    ASSERT_EQ(active->size(), 3U);
+    EXPECT_EQ(active->at(0U).height, 0U);
+    EXPECT_EQ(active->at(1U).hash, BlockHash(*first));
+    EXPECT_EQ(active->at(2U).hash, BlockHash(*second));
 }
 
 TEST(ChainStateSelection, RetainsTheHigherWorkBranchOverALowerWorkSideBranch)

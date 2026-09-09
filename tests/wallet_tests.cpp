@@ -148,9 +148,9 @@ TEST(Wallet, BuildsSignsVerifiesAndBroadcastsRegtestSpend)
     EXPECT_EQ(built.built->selected_inputs.size(), 1U);
     EXPECT_TRUE(built.built->change_output.has_value());
     ASSERT_EQ(built.built->transaction.outputs.size(), 2U);
-    EXPECT_EQ(built.built->transaction.outputs.front().script_pub_key,
+    EXPECT_EQ(built.built->transaction.outputs.front().script_pubkey,
               P2pkhScript(address->public_key_hash));
-    EXPECT_EQ(built.built->change_output->script_pub_key, P2pkhScript(address->public_key_hash));
+    EXPECT_EQ(built.built->change_output->script_pubkey, P2pkhScript(address->public_key_hash));
     EXPECT_TRUE(wallet->VerifySignaturesLocally(built.built->transaction));
 
     const auto funding_id =
