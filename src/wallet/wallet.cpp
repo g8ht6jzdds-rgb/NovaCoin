@@ -251,9 +251,16 @@ ParseP2pkhScript(const std::span<const std::uint8_t> script) noexcept
 
 [[nodiscard]] std::vector<std::uint8_t> MakeP2pkhScript(const crypto::Hash160& key_hash)
 {
-    std::vector<std::uint8_t> script{kOpDup, kOpHash160, kPushHash160};
-    script.insert(script.end(), key_hash.begin(), key_hash.end());
-    script.insert(script.end(), {kOpEqualVerify, kOpCheckSig});
+    std::vector<std::uint8_t> script;
+    script.reserve(kP2pkhScriptSize);
+    script.push_back(kOpDup);
+    script.push_back(kOpHash160);
+    script.push_back(kPushHash160);
+    for (const auto byte : key_hash) {
+        script.push_back(byte);
+    }
+    script.push_back(kOpEqualVerify);
+    script.push_back(kOpCheckSig);
     return script;
 }
 
