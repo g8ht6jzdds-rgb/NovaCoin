@@ -17,6 +17,9 @@ docker options:
   [--container <container-id>]
 systemd options:
   [--service novacoind-regtest-staging.service]
+  Before captures an invocation ID and journal cursor. After requires a new
+  invocation and a shutdown message from the baseline invocation after that
+  cursor. Journal access is required; old cursor-less baselines must be renewed.
 common options:
   [--baseline <before-record.txt>] [--external-probe <redacted-probe-output>]
   [--sign-key <full-openpgp-fingerprint>]
@@ -109,7 +112,9 @@ digest_or_missing() {
 
 baseline_value() {
     local key=$1
-    grep -E "^${key}=" -- "$baseline" | tail -n 1 | sed "s/^${key}=//"
+    awk -v key="$key" 'index($0, key "=") == 1 {
+        count++; value=substr($0, length(key)+2)
+    } END { if (count != 1 || value == "") exit 1; print value }' "$baseline"
 }
 
 capture_firewall() {
@@ -222,9 +227,10 @@ if [[ "$mode" == docker ]]; then
     record docker_published_ports "$ports"
 else
     command -v systemctl >/dev/null || { echo "missing command: systemctl" >&2; exit 2; }
+    command -v journalctl >/dev/null || { echo "missing command: journalctl" >&2; exit 2; }
     service_state=$(systemctl is-active "$service" 2>/dev/null || true)
     properties=$(systemctl show "$service" --property=User --property=Group --property=ReadWritePaths \
-        --property=ProtectSystem --property=NoNewPrivileges --property=MainPID --no-pager)
+        --property=ProtectSystem --property=NoNewPrivileges --property=MainPID --property=InvocationID --no-pager)
     [[ "$service_state" == active ]] || { echo "systemd service is not active" >&2; exit 1; }
     grep -qx 'User=novacoin' <<<"$properties" || { echo "systemd service user is not novacoin" >&2; exit 1; }
     grep -qx 'Group=novacoin' <<<"$properties" || { echo "systemd service group is not novacoin" >&2; exit 1; }
@@ -248,18 +254,73 @@ else
         record "systemd_${line%%=*}" "${line#*=}"
     done <<<"$properties"
     record systemd_runtime_uid "$systemd_uid"
+    invocation=$(grep '^InvocationID=' <<<"$properties" | sed 's/^InvocationID=//')
+    [[ "$invocation" =~ ^[0-9a-f]{32}$ ]] || {
+        echo "systemd invocation ID is missing or malformed" >&2; exit 1;
+    }
+    if [[ "$phase" == before ]]; then
+        journal_tail=$(journalctl --unit="$service" --no-pager --output=cat --lines=1 --show-cursor)
+        cursor=$(sed -n 's/^-- cursor: //p' <<<"$journal_tail")
+        [[ -n "$cursor" && "$cursor" != *$'\n'* ]] || {
+            echo "no unambiguous journal cursor available for baseline" >&2; exit 1;
+        }
+        record systemd_journal_cursor "$cursor"
+    else
+        [[ "$(baseline_value mode)" == systemd &&
+           "$(baseline_value lifecycle_phase)" == before &&
+           "$(baseline_value candidate_commit)" == "$candidate" &&
+           "$(baseline_value binary_sha256)" == "$(digest_or_missing "$binary")" &&
+           "$(baseline_value systemd_service)" == "$service" &&
+           "$(baseline_value data_dir)" == "$data_dir" ]] || {
+            echo "baseline does not identify this candidate/service lifecycle" >&2; exit 1;
+        }
+        previous_invocation=$(baseline_value systemd_InvocationID)
+        cursor=$(baseline_value systemd_journal_cursor)
+        [[ "$previous_invocation" =~ ^[0-9a-f]{32}$ && "$previous_invocation" != "$invocation" ]] || {
+            echo "service has not entered a new invocation since baseline" >&2; exit 1;
+        }
+        # Both boundaries matter: a historical shutdown (even for the same
+        # unit) must not qualify for the baseline invocation's later stop.
+        shutdown=$(journalctl --unit="$service" --after-cursor="$cursor" \
+            "_SYSTEMD_INVOCATION_ID=$previous_invocation" --no-pager --output=cat \
+            --grep='^novacoind shutdown complete .+' --lines=1) || {
+            echo "lifecycle journal query failed" >&2; exit 1;
+        }
+        [[ "$shutdown" == 'novacoind shutdown complete '* && "$shutdown" != *$'\n'* ]] || {
+            echo "baseline invocation has no post-baseline clean shutdown" >&2; exit 1;
+        }
+        record systemd_shutdown_invocation "$previous_invocation"
+        record systemd_shutdown_after_cursor "$cursor"
+        record systemd_shutdown_message "$shutdown"
+        record clean_shutdown_log journald
+    fi
+    [[ "$(systemctl show "$service" --property=InvocationID --value)" == "$invocation" ]] || {
+        echo "service invocation changed during collection" >&2; exit 1;
+    }
 fi
 
 capture_firewall
 record external_probe_sha256 "$(digest_or_missing "$external_probe")"
 record external_probe_reference "$external_probe"
-listeners=$(ss -H -ltn '( sport = :18443 or sport = :18444 )' 2>/dev/null | tr '\n' ';' || true)
-[[ "$listeners" != *"0.0.0.0:"* && "$listeners" != *"[::]:"* ]] || {
-    echo "REGTEST listener is bound publicly" >&2
-    exit 1
+listeners=$(ss -H -ltn '( sport = :18443 or sport = :18444 )') || {
+    echo "cannot query REGTEST listeners" >&2; exit 1;
 }
-record local_listeners "$listeners"
-if [[ "$phase" == after ]]; then
+# ss columns: state, recv-q, send-q, LOCAL endpoint, peer endpoint.
+# A wildcard peer is normal for a loopback listener, not public exposure.
+awk -v mode="$mode" '
+    NF != 5 || $1 != "LISTEN" || $4 !~ /^(127\.0\.0\.1|\[::1\]):1844[34]$/ { bad=1 }
+    $4 ~ /:18443$/ { rpc=1 }
+    $4 ~ /:18444$/ { p2p=1 }
+    END { exit (bad || (mode == "systemd" && (!rpc || !p2p))) }
+' <<<"${listeners}" || {
+    # Docker may have no host listeners; it separately forbids published ports.
+    if [[ "$mode" != docker || -n "$listeners" ]]; then
+        echo "REGTEST listeners are missing, malformed, or not loopback-only" >&2
+        exit 1
+    fi
+}
+record local_listeners "$(tr '\n' ';' <<<"$listeners")"
+if [[ "$phase" == after && "$mode" == docker ]]; then
     grep -Fq 'novacoind shutdown complete' "$log_dir/regtest.log" || {
         echo "clean shutdown was not found in the persistent daemon log" >&2
         exit 1
