@@ -29,11 +29,16 @@ enum class JournalFailurePoint : std::uint8_t {
     kBeforeWrite,
     kDuringWrite,
     kAfterDurableWrite,
+    kBeforeRecoveryCopy,
+    kDuringRecoveryWrite,
+    kBeforeRecoveryReplace,
+    kAfterRecoveryReplace,
 };
 
 struct BlockJournalLoadResult final {
     BlockJournalError error{BlockJournalError::kNone};
     std::vector<primitives::Block> blocks;
+    bool recovery_required{};
 };
 
 class BlockJournal final
@@ -56,9 +61,11 @@ class BlockJournal final
 
   private:
     BlockJournal(std::filesystem::path path, primitives::BlockLimits limits) noexcept;
+    [[nodiscard]] BlockJournalError EnsureRecovered() const noexcept;
 
     std::filesystem::path path_;
     primitives::BlockLimits limits_;
+    mutable bool recovery_required_{true};
 };
 
 } // namespace nova::storage

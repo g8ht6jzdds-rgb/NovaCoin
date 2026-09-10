@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -183,6 +184,70 @@ TEST(RegtestHarness, ExercisesFourNodeLifecycleAndAdversarialPaths)
     ASSERT_NE(alpha, nullptr);
     EXPECT_EQ(alpha->height(), persisted_height);
     EXPECT_EQ(alpha->tip(), persisted_tip);
+
+    // Recovery is not complete until NEW commits survive another restart.
+    ASSERT_EQ(alpha->MineBlock().error, RegtestNodeError::kNone);
+    ASSERT_EQ(alpha->MineBlock().error, RegtestNodeError::kNone);
+    const auto recovered_tip = alpha->tip();
+    const auto recovered_height = alpha->height();
+    const auto recovered_index = alpha->chain_state().GetBlockIndex(recovered_tip);
+    ASSERT_TRUE(recovered_index.has_value());
+    const auto recovered_coins = alpha->wallet().ListUTXOs();
+    const auto recovered_balance = alpha->wallet().ConfirmedBalance();
+    const auto recovered_utxo_count = alpha->utxos().size();
+    std::map<nova::chain::UTXOKey, nova::chain::Coin> recovered_utxos;
+    const auto active_blocks = alpha->chain_state().GetActiveBlockIndexes();
+    ASSERT_TRUE(active_blocks.has_value());
+    for (const auto& entry : *active_blocks) {
+        if (!entry.block.has_value()) {
+            continue;
+        }
+        for (const auto& transaction : entry.block->transactions) {
+            const auto txid = transaction.TxId(
+                nova::consensus::RegtestNetworkParams().block_limits.transaction_limits);
+            ASSERT_TRUE(txid.has_value());
+            for (std::size_t index = 0; index < transaction.outputs.size(); ++index) {
+                const nova::chain::UTXOKey key{*txid, static_cast<std::uint32_t>(index)};
+                const auto coin = alpha->utxos().GetCoin(key);
+                if (coin.has_value()) {
+                    recovered_utxos.emplace(key, *coin);
+                }
+            }
+        }
+    }
+    ASSERT_EQ(recovered_utxos.size(), recovered_utxo_count);
+    alpha.reset();
+    alpha = RegtestNode::Create(alpha_config);
+    ASSERT_NE(alpha, nullptr);
+    EXPECT_EQ(alpha->tip(), recovered_tip);
+    EXPECT_EQ(alpha->height(), recovered_height);
+    const auto restored_index = alpha->chain_state().GetBlockIndex(alpha->tip());
+    ASSERT_TRUE(restored_index.has_value());
+    EXPECT_EQ(restored_index->chain_work, recovered_index->chain_work);
+    EXPECT_EQ(alpha->wallet().ConfirmedBalance(), recovered_balance);
+    EXPECT_EQ(alpha->utxos().size(), recovered_utxo_count);
+    for (const auto& [key, expected] : recovered_utxos) {
+        const auto actual = alpha->utxos().GetCoin(key);
+        ASSERT_TRUE(actual.has_value());
+        EXPECT_EQ(actual->output.value, expected.output.value);
+        EXPECT_EQ(actual->output.script_pubkey, expected.output.script_pubkey);
+        EXPECT_EQ(actual->height, expected.height);
+        EXPECT_EQ(actual->is_coinbase, expected.is_coinbase);
+    }
+    const auto restored_coins = alpha->wallet().ListUTXOs();
+    ASSERT_EQ(restored_coins.size(), recovered_coins.size());
+    for (std::size_t index = 0; index < restored_coins.size(); ++index) {
+        const auto& expected = recovered_coins[index];
+        const auto& actual = restored_coins[index];
+        EXPECT_EQ(actual.key, expected.key);
+        EXPECT_EQ(actual.output.value, expected.output.value);
+        EXPECT_EQ(actual.output.script_pubkey, expected.output.script_pubkey);
+        EXPECT_EQ(actual.height, expected.height);
+        EXPECT_EQ(actual.confirmed, expected.confirmed);
+        const auto coin = alpha->utxos().GetCoin(expected.key);
+        ASSERT_TRUE(coin.has_value());
+        EXPECT_EQ(coin->output.value, expected.output.value);
+    }
 
     const nova::primitives::Block invalid_block{};
     EXPECT_EQ(delta->ReceiveBlock(invalid_block), RegtestNodeError::kBlockRejected);
