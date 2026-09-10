@@ -43,6 +43,13 @@ set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")
 
 if(UNIX)
     find_program(NOVA_BASH_EXECUTABLE bash REQUIRED)
+    add_test(NAME nova.regtest_staging_collector
+        COMMAND ${NOVA_BASH_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/test_collect_regtest_staging_evidence.sh
+                ${CMAKE_SOURCE_DIR}/scripts/collect_regtest_staging_evidence.sh)
+    set_tests_properties(nova.regtest_staging_collector PROPERTIES
+        LABELS "unit;staging;operations" TIMEOUT 30)
+
     add_test(NAME nova.regtest_rpc_process
         COMMAND ${NOVA_BASH_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/regtest_rpc_harness.sh
                 $<TARGET_FILE:novacoind> $<TARGET_FILE:nova-explorer>)

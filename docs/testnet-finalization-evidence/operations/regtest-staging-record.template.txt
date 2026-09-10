@@ -1,0 +1,26 @@
+Status: PENDING — TEMPLATE, NOT REAL-HOST EVIDENCE
+Network: REGTEST only
+Candidate commit: <exact 40-hex immutable revision>
+Deployment mode: <docker | systemd>
+Host/provider account alias: <redacted alias>
+Host region: <region>
+Collection UTC: <timestamp>
+Binary SHA-256: <sha256>
+Final image ID/digest: <sha256 or immutable digest>
+OCI source revision label: <40-hex revision>
+OCI digest-pinned base-image label: <image@sha256:...>
+Non-root check: <configured user and observed nonzero UID>
+Persistent data/log mount check: <source and destination mapping>
+Pre-recreation evidence: <protected path and SHA-256>
+Post-recreation evidence: <protected path and SHA-256>
+Persistent network-identity result: <PASS | FAIL>
+Persistent wallet-file result: <PASS | FAIL>
+Local firewall evidence: <protected path and SHA-256>
+Independent external probe: <protected path and SHA-256>
+RPC exposure result: <not publicly reachable>
+P2P exposure result: <REGTEST must not be publicly reachable>
+Clean shutdown/recovery result: <PASS | FAIL>
+Operator OpenPGP fingerprint: <full fingerprint>
+Detached signature: <record.asc>
+Decision: Pending
+Reviewer comments: This template is not approval and must be replaced by factual signed output from the collector.

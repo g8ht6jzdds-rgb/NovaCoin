@@ -2,7 +2,13 @@
 #   docker build -f contrib/testnet/Dockerfile -t novacoin-testnet:<revision> .
 # This image does not enable TESTNET; novacoind will fail closed until the
 # reviewed immutable parameter gate is opened.
-FROM debian:bookworm-slim AS builder
+ARG BASE_IMAGE=debian:bookworm-slim
+ARG SOURCE_REVISION=unreviewed
+
+FROM ${BASE_IMAGE} AS builder
+
+ARG BASE_IMAGE
+ARG SOURCE_REVISION
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -14,7 +20,14 @@ COPY . .
 RUN cmake -S . -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release \
     && cmake --build /build --target novacoind
 
-FROM debian:bookworm-slim
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.title="NovaCoin node" \
+      org.opencontainers.image.source="https://github.com/g8ht6jzdds-rgb/NovaCoin" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

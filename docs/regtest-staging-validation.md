@@ -55,6 +55,78 @@ sudo docker compose --env-file /etc/novacoin/regtest-docker.env -f contrib/stagi
 
 After recreation, query authenticated local RPC through a local execution context or private tunnel. Retain only redacted `getnodehealth`, `getblockchaininfo`, and `getnodemetrics` fields. Compare recovered height/tip, journal result, and encrypted-wallet persistence result with pre-restart data.
 
+### Factual host-evidence collection
+
+Use `scripts/collect_regtest_staging_evidence.sh` on the staging host only.
+It never starts or stops the service and never reads a secret environment file
+into its output. It records the final image ID, OCI source-revision and
+digest-pinned base-image labels, non-root execution, host bind mounts, local
+listener state, local firewall snapshot hash, and file hashes only—not wallet
+or journal contents. Preserve its output outside Git until it has been
+reviewed and redacted.
+
+Collect a baseline before recreating the container:
+
+```bash
+container_id=$(sudo docker compose --env-file /etc/novacoin/regtest-docker.env \
+  -f contrib/staging/docker-compose.regtest.yml ps -q novacoind)
+sudo docker cp "$container_id:/usr/local/bin/novacoind" \
+  /secure/novacoin-evidence/novacoind-candidate
+sudo chown "$USER":"$USER" /secure/novacoin-evidence/novacoind-candidate
+
+sudo bash scripts/collect_regtest_staging_evidence.sh \
+  --mode docker --candidate "$(git rev-parse HEAD)" \
+  --binary /secure/novacoin-evidence/novacoind-candidate \
+  --data-dir /srv/novacoin/regtest/data --log-dir /srv/novacoin/regtest/log \
+  --compose contrib/staging/docker-compose.regtest.yml \
+  --env-file /etc/novacoin/regtest-docker.env \
+  --external-probe /secure/novacoin-evidence/redacted-external-port-probe.txt \
+  --phase before --output /secure/novacoin-evidence/regtest-docker-before.txt
+
+sudo chown "$USER":"$USER" \
+  /secure/novacoin-evidence/regtest-docker-before.txt \
+  /secure/novacoin-evidence/regtest-docker-before.txt.firewall.txt
+gpg --batch --armor --local-user <operator-full-openpgp-fingerprint> --detach-sign \
+  --output /secure/novacoin-evidence/regtest-docker-before.txt.asc \
+  /secure/novacoin-evidence/regtest-docker-before.txt
+```
+
+Perform the reviewed stop/remove/recreate steps above, then collect the
+post-recreation evidence. The collector rejects a changed `network.identity`
+digest or missing wallet file:
+
+```bash
+sudo bash scripts/collect_regtest_staging_evidence.sh \
+  --mode docker --candidate "$(git rev-parse HEAD)" \
+  --binary /secure/novacoin-evidence/novacoind-candidate \
+  --data-dir /srv/novacoin/regtest/data --log-dir /srv/novacoin/regtest/log \
+  --compose contrib/staging/docker-compose.regtest.yml \
+  --env-file /etc/novacoin/regtest-docker.env \
+  --phase after --baseline /secure/novacoin-evidence/regtest-docker-before.txt \
+  --external-probe /secure/novacoin-evidence/redacted-external-port-probe.txt \
+  --output /secure/novacoin-evidence/regtest-docker-after.txt
+
+sudo chown "$USER":"$USER" \
+  /secure/novacoin-evidence/regtest-docker-after.txt \
+  /secure/novacoin-evidence/regtest-docker-after.txt.firewall.txt
+gpg --batch --armor --local-user <operator-full-openpgp-fingerprint> --detach-sign \
+  --output /secure/novacoin-evidence/regtest-docker-after.txt.asc \
+  /secure/novacoin-evidence/regtest-docker-after.txt
+```
+
+The independent external probe must be run from an authorized second host and
+saved in redacted form. It is required for both evidence phases. REGTEST must
+expose neither `18444` nor `18443`; future TESTNET validation has the different
+acceptance criterion of P2P `28333` reachable and RPC `28332` unreachable. The
+collector records only the probe file reference and SHA-256; its presence does
+not turn an unaudited probe into proof.
+
+Run the collector as an account that can inspect the deployment but does not
+hold an administrator-owned signing key. If privileged collection is required,
+produce an unsigned record, transfer ownership under the approved host change
+process, then have the named operator create the detached signature separately.
+The collector deliberately refuses `--sign-key` when run as root.
+
 For a reproducible disposable local exercise (not a substitute for real-host
 evidence), run:
 
@@ -85,6 +157,14 @@ sudo systemctl start novacoind-regtest-staging
 ```
 
 Record non-root execution, start/stop exit results, `novacoind shutdown complete` evidence, post-restart height/tip, journal replay outcome, and encrypted-wallet load/save result. Any journal or wallet persistence failure is a release blocker: preserve data, stop automatic recovery attempts, and follow the durability/rollback runbook.
+
+For a systemd-backed host, after the reviewed restart has completed, collect a
+separate factual record with `--mode systemd --service
+novacoind-regtest-staging.service` and the same candidate, data, log, phase,
+baseline, external-probe, and optional signing arguments. The collector checks
+`User=novacoin`, `Group=novacoin`, `ProtectSystem=strict`,
+`NoNewPrivileges=yes`, active service state, persistent identity, and the
+presence of a clean-shutdown log line without copying the journal into Git.
 
 ## Deferred TESTNET port validation
 
