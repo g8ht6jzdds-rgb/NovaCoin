@@ -66,6 +66,9 @@ journalctl)
         [[ "${FIXTURE_NO_CURSOR:-0}" == 0 ]] || exit 0
         printf 'earlier message\n-- cursor: fixture100\n'
     else
+        # Real journalctl implies --reverse for --grep + --lines=1.
+        # Require the explicitly forward form before simulating the cursor.
+        [[ "$*" == *--lines=+1* && "$*" != *--reverse* ]] || exit 8
         cursor=""; invocation=""
         for arg in "$@"; do
             case "$arg" in

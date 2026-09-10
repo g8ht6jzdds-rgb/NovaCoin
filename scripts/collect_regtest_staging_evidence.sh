@@ -281,9 +281,11 @@ else
         }
         # Both boundaries matter: a historical shutdown (even for the same
         # unit) must not qualify for the baseline invocation's later stop.
+        # With --grep, --lines=1 implies reverse traversal; +1 is essential
+        # to search forward from the cursor rather than accept an older stop.
         shutdown=$(journalctl --unit="$service" --after-cursor="$cursor" \
             "_SYSTEMD_INVOCATION_ID=$previous_invocation" --no-pager --output=cat \
-            --grep='^novacoind shutdown complete .+' --lines=1) || {
+            --grep='^novacoind shutdown complete .+' --lines=+1) || {
             echo "lifecycle journal query failed" >&2; exit 1;
         }
         [[ "$shutdown" == 'novacoind shutdown complete '* && "$shutdown" != *$'\n'* ]] || {
