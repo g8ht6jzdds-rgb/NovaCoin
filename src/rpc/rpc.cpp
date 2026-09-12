@@ -653,15 +653,22 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             const auto hash_raw = parameter("txid");
             const auto output_raw = parameter("vout");
             const auto hash_text = hash_raw.has_value() ? JsonString(*hash_raw) : std::nullopt;
-            const auto output = output_raw.has_value() ? JsonInteger(*output_raw) : std::nullopt;
             const auto hash =
                 hash_text.has_value() ? crypto::Hash256::FromHex(*hash_text) : std::nullopt;
-            if (!hash.has_value() || !output.has_value() || *output < 0 ||
-                static_cast<std::uint64_t>(*output) > std::numeric_limits<std::uint32_t>::max()) {
+            if (!hash.has_value() || !output_raw.has_value()) {
+                return {200U, ErrorResponse(id, kInvalidParams, "txid and vout required")};
+            }
+            const auto output = JsonInteger(*output_raw);
+            if (!output.has_value()) {
+                return {200U, ErrorResponse(id, kInvalidParams, "txid and vout required")};
+            }
+            const auto output_index = *output;
+            if (output_index < 0 || static_cast<std::uint64_t>(output_index) >
+                                        std::numeric_limits<std::uint32_t>::max()) {
                 return {200U, ErrorResponse(id, kInvalidParams, "txid and vout required")};
             }
             const auto coin = dependencies_.utxos.GetCoin(
-                chain::UTXOKey{*hash, static_cast<std::uint32_t>(*output)});
+                chain::UTXOKey{*hash, static_cast<std::uint32_t>(output_index)});
             if (!coin.has_value()) {
                 return {200U, ErrorResponse(id, kNotFound, "UTXO not found")};
             }
@@ -686,15 +693,23 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
         if (*method == "connectpeer") {
             const auto host_raw = parameter("host");
             const auto port_raw = parameter("port");
-            const auto host = host_raw.has_value() ? JsonString(*host_raw) : std::nullopt;
-            const auto port = port_raw.has_value() ? JsonInteger(*port_raw) : std::nullopt;
-            if (!IsRegtest(config_.network) || !host.has_value() ||
-                (*host != "127.0.0.1" && *host != "::1") || !port.has_value() || *port <= 0 ||
-                static_cast<std::uint64_t>(*port) > std::numeric_limits<std::uint16_t>::max() ||
-                !dependencies_.connect_peer ||
+            if (!IsRegtest(config_.network) || !host_raw.has_value() || !port_raw.has_value() ||
+                !dependencies_.connect_peer) {
+                return {200U, ErrorResponse(id, kNodeFailure, "peer connection failed")};
+            }
+            const auto host = JsonString(*host_raw);
+            const auto port = JsonInteger(*port_raw);
+            if (!host.has_value() || !port.has_value()) {
+                return {200U, ErrorResponse(id, kNodeFailure, "peer connection failed")};
+            }
+            const auto& host_value = *host;
+            const auto port_value = *port;
+            if ((host_value != "127.0.0.1" && host_value != "::1") || port_value <= 0 ||
+                static_cast<std::uint64_t>(port_value) >
+                    std::numeric_limits<std::uint16_t>::max() ||
                 !dependencies_.connect_peer(
-                    {std::string{*host},
-                     static_cast<std::uint16_t>(static_cast<std::uint64_t>(*port))})) {
+                    {std::string{host_value},
+                     static_cast<std::uint16_t>(static_cast<std::uint64_t>(port_value))})) {
                 return {200U, ErrorResponse(id, kNodeFailure, "peer connection failed")};
             }
             return {200U, ResultResponse(id, "true")};
@@ -791,20 +806,29 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
         if (*method == "faucetpay") {
             const auto address_raw = parameter("address");
             const auto amount_raw = parameter("amount");
-            const auto address = address_raw.has_value() ? JsonString(*address_raw) : std::nullopt;
-            const auto amount = amount_raw.has_value() ? JsonInteger(*amount_raw) : std::nullopt;
-            const auto key_hash = address.has_value()
-                                      ? wallet::DecodeP2pkhAddress(
-                                            *address, consensus::GetNetworkParams(config_.network))
-                                      : std::nullopt;
-            if (config_.network != consensus::NetworkId::kTestnet || !amount.has_value() ||
-                *amount <= 0 || *amount > config_.maximum_faucet_payout || !key_hash.has_value() ||
-                !dependencies_.send_to_address) {
+            if (config_.network != consensus::NetworkId::kTestnet || !address_raw.has_value() ||
+                !amount_raw.has_value() || !dependencies_.send_to_address) {
                 return {200U,
                         ErrorResponse(id, kInvalidParams,
                                       "valid TESTNET address and bounded integer amount required")};
             }
-            const auto transaction_id = dependencies_.send_to_address({*key_hash, *amount});
+            const auto address = JsonString(*address_raw);
+            const auto amount = JsonInteger(*amount_raw);
+            if (!address.has_value() || !amount.has_value()) {
+                return {200U,
+                        ErrorResponse(id, kInvalidParams,
+                                      "valid TESTNET address and bounded integer amount required")};
+            }
+            const auto key_hash =
+                wallet::DecodeP2pkhAddress(*address, consensus::GetNetworkParams(config_.network));
+            const auto amount_value = *amount;
+            if (amount_value <= 0 || amount_value > config_.maximum_faucet_payout ||
+                !key_hash.has_value()) {
+                return {200U,
+                        ErrorResponse(id, kInvalidParams,
+                                      "valid TESTNET address and bounded integer amount required")};
+            }
+            const auto transaction_id = dependencies_.send_to_address({*key_hash, amount_value});
             if (!transaction_id.has_value()) {
                 return {200U,
                         ErrorResponse(id, kNodeFailure, "faucet transaction broadcast failed")};

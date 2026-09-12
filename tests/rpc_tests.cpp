@@ -331,6 +331,45 @@ TEST(RpcIntegration, ValidatesWalletAndRegtestArguments)
     EXPECT_NE(testnet_mining.body.find("-32005"), std::string::npos);
 }
 
+TEST(RpcIntegration, ValidatesUtxoPeerAndFaucetOptionalParameters)
+{
+    constexpr std::string_view kAuth{"Basic dXNlcjpwYXNz"};
+    auto regtest = CreateService("127.0.0.1", true, true);
+    ASSERT_NE(regtest, nullptr);
+
+    const auto structurally_valid_missing_utxo = regtest->HandleHttpPost(
+        {"POST", kAuth,
+         R"({"jsonrpc":"2.0","id":1,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":0}})"});
+    EXPECT_NE(structurally_valid_missing_utxo.body.find("-32002"), std::string::npos);
+    for (
+        const std::string_view request : std::array{
+            R"({"jsonrpc":"2.0","id":2,"method":"getutxo","params":{"txid":"00","vout":0}})",
+            R"({"jsonrpc":"2.0","id":3,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":-1}})",
+            R"({"jsonrpc":"2.0","id":4,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":4294967296}})"}) {
+        const auto rejected = regtest->HandleHttpPost({"POST", kAuth, request});
+        EXPECT_NE(rejected.body.find("-32602"), std::string::npos) << request;
+    }
+    for (
+        const std::string_view request : std::array{
+            R"({"jsonrpc":"2.0","id":5,"method":"connectpeer","params":{"host":"127.0.0.1"}})",
+            R"({"jsonrpc":"2.0","id":6,"method":"connectpeer","params":{"host":"127.0.0.1","port":0}})"}) {
+        const auto rejected = regtest->HandleHttpPost({"POST", kAuth, request});
+        EXPECT_NE(rejected.body.find("-32004"), std::string::npos) << request;
+    }
+
+    auto testnet = CreateService("127.0.0.1", false, true, true);
+    ASSERT_NE(testnet, nullptr);
+    constexpr std::string_view kFaucet{"Basic ZmF1Y2V0OmZhdWNldA=="};
+    for (
+        const std::string_view request : std::array{
+            R"({"jsonrpc":"2.0","id":7,"method":"faucetpay","params":{}})",
+            R"({"jsonrpc":"2.0","id":8,"method":"faucetpay","params":{"address":1,"amount":1}})",
+            R"({"jsonrpc":"2.0","id":9,"method":"faucetpay","params":{"address":"invalid","amount":"one"}})"}) {
+        const auto rejected = testnet->HandleHttpPost({"POST", kFaucet, request});
+        EXPECT_NE(rejected.body.find("-32602"), std::string::npos) << request;
+    }
+}
+
 TEST(RpcIntegration, RestrictsAndDelegatesRegtestHarnessOperations)
 {
     constexpr std::string_view kAuth{"Basic dXNlcjpwYXNz"};
