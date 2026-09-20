@@ -3,6 +3,8 @@
 #include "consensus/network_params.hpp"
 #include "storage/block_journal.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -16,15 +18,33 @@ using nova::storage::BlockJournal;
 using nova::storage::BlockJournalError;
 using nova::storage::JournalFailurePoint;
 
+[[nodiscard]] std::filesystem::path CreateJournalTestDirectory()
+{
+    static std::atomic_uint64_t sequence{};
+    const auto parent = std::filesystem::temp_directory_path();
+    for (std::size_t attempt = 0U; attempt < 64U; ++attempt) {
+        auto candidate =
+            parent / ("novacoin-block-journal-test-" +
+                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                      "-" + std::to_string(sequence.fetch_add(1U, std::memory_order_relaxed)));
+        std::error_code error;
+        if (std::filesystem::create_directory(candidate, error)) {
+            return candidate;
+        }
+        if (error) {
+            return {};
+        }
+    }
+    return {};
+}
+
 class BlockJournalTest : public ::testing::Test
 {
   protected:
     void SetUp() override
     {
-        root_ = std::filesystem::temp_directory_path() / "novacoin-block-journal-test";
-        std::error_code error;
-        std::filesystem::remove_all(root_, error);
-        ASSERT_FALSE(error);
+        root_ = CreateJournalTestDirectory();
+        ASSERT_FALSE(root_.empty());
         journal_ = BlockJournal::Open(root_, nova::consensus::RegtestNetworkParams().block_limits);
         ASSERT_TRUE(journal_.has_value());
         hash_ = nova::consensus::RegtestNetworkParams().genesis_hash;
@@ -41,6 +61,24 @@ class BlockJournalTest : public ::testing::Test
     std::optional<BlockJournal> journal_;
     nova::crypto::Hash256 hash_;
 };
+
+TEST(BlockJournalTestEnvironment, CreatesDistinctDirectories)
+{
+    const auto first = CreateJournalTestDirectory();
+    const auto second = CreateJournalTestDirectory();
+    ASSERT_FALSE(first.empty());
+    ASSERT_FALSE(second.empty());
+    EXPECT_NE(first, second);
+    EXPECT_TRUE(std::filesystem::is_directory(first));
+    EXPECT_TRUE(std::filesystem::is_directory(second));
+
+    std::error_code error;
+    std::filesystem::remove_all(first, error);
+    EXPECT_FALSE(error);
+    error.clear();
+    std::filesystem::remove_all(second, error);
+    EXPECT_FALSE(error);
+}
 
 TEST_F(BlockJournalTest, RecoversOnlyCommittedRecordsAcrossInjectedWriteFailures)
 {
