@@ -3,6 +3,7 @@
 #include "faucet/faucet.hpp"
 #include "faucet/http.hpp"
 #include "faucet/http_server.hpp"
+#include "faucet/rpc_client.hpp"
 #include "wallet/address.hpp"
 
 #include <array>
@@ -100,7 +101,8 @@ class FaucetServiceTest : public ::testing::Test
     [[nodiscard]] std::unique_ptr<nova::faucet::FaucetService> Create()
     {
         return nova::faucet::FaucetService::Create(
-            nova::consensus::TestnetNetworkParams(), {10U, 10U, 60U, 1U, 2U, 64U}, audit_,
+            nova::consensus::TestnetNetworkParams(),
+            {10U, 10U, 60U, 1U, 2U, 64U, 60U, 1U, 2U, 60U, 20U}, audit_,
             [](const nova::wallet::Recipient&) -> std::optional<nova::crypto::Hash256> {
                 nova::crypto::Hash256::Bytes transaction{};
                 transaction.back() = 0x42U;
@@ -155,12 +157,70 @@ TEST_F(FaucetServiceTest, EnforcesRateLimitMaximumPayoutAndKillSwitch)
     EXPECT_FALSE(service->metrics().enabled);
 }
 
+TEST_F(FaucetServiceTest, PersistsSourceAddressGlobalQuotaAndKillSwitchAcrossRestart)
+{
+    nova::crypto::Hash160 key_hash{};
+    const auto address =
+        nova::wallet::EncodeP2pkhAddress(key_hash, nova::consensus::TestnetNetworkParams());
+    ASSERT_TRUE(address.has_value());
+    {
+        auto service = Create();
+        ASSERT_NE(service, nullptr);
+        EXPECT_EQ(service->RequestPayout({"source", *address, 10U, 100U}).error,
+                  nova::faucet::FaucetError::kNone);
+    }
+    {
+        auto service = Create();
+        ASSERT_NE(service, nullptr);
+        EXPECT_EQ(service->RequestPayout({"source", *address, 10U, 101U}).error,
+                  nova::faucet::FaucetError::kRateLimited);
+        service->SetEnabled(false);
+    }
+    {
+        auto service = Create();
+        ASSERT_NE(service, nullptr);
+        EXPECT_FALSE(service->metrics().enabled);
+        EXPECT_EQ(service->RequestPayout({"different", *address, 10U, 200U}).error,
+                  nova::faucet::FaucetError::kDisabled);
+    }
+}
+
 TEST(FaucetService, RefusesAnyNetworkOtherThanTestnet)
 {
     EXPECT_EQ(nova::faucet::FaucetService::Create(
-                  nova::consensus::RegtestNetworkParams(), {1U, 1U, 1U, 1U, 1U, 1U}, "audit.log",
+                  nova::consensus::RegtestNetworkParams(),
+                  {1U, 1U, 1U, 1U, 1U, 1U, 1U, 1U, 1U, 1U, 1U}, "audit.log",
                   [](const nova::wallet::Recipient&) { return std::nullopt; }),
               nullptr);
+}
+
+TEST(FaucetRpcClient, RefusesNonLoopbackDisabledAndNonTestnetConfigurations)
+{
+    auto enabled_testnet = nova::consensus::TestnetNetworkParams();
+    enabled_testnet.enabled = true;
+    ASSERT_EQ(nova::consensus::CheckNetworkParams(enabled_testnet),
+              nova::consensus::NetworkParamsError::kNone);
+    EXPECT_EQ(nova::faucet::FaucetRpcClient::Create(
+                  {"198.51.100.1", 28332U, "faucet", "secret", 1024U, &enabled_testnet}),
+              nullptr);
+    EXPECT_EQ(nova::faucet::FaucetRpcClient::Create({"127.0.0.1", 28332U, "faucet", "secret", 1024U,
+                                                     &nova::consensus::TestnetNetworkParams()}),
+              nullptr);
+    EXPECT_EQ(nova::faucet::FaucetRpcClient::Create({"127.0.0.1", 28332U, "faucet", "secret", 1024U,
+                                                     &nova::consensus::RegtestNetworkParams()}),
+              nullptr);
+}
+
+TEST(FaucetRpcClient, FailsClosedWhenRestrictedLoopbackRpcIsUnavailable)
+{
+    auto enabled_testnet = nova::consensus::TestnetNetworkParams();
+    enabled_testnet.enabled = true;
+    const auto client = nova::faucet::FaucetRpcClient::Create(
+        {"127.0.0.1", 1U, "faucet", "secret", 1024U, &enabled_testnet});
+    ASSERT_NE(client, nullptr);
+    nova::wallet::Recipient recipient{};
+    recipient.amount = 10U;
+    EXPECT_FALSE(client->Pay(recipient).has_value());
 }
 
 TEST_F(FaucetServiceTest, HttpTransportRejectsMalformedAndWrongNetworkRequestsBeforePayout)

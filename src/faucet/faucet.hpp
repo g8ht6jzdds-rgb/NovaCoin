@@ -33,6 +33,11 @@ struct FaucetLimits final {
     std::uint32_t maximum_requests_per_window{};
     std::size_t maximum_tracked_sources{};
     std::size_t maximum_source_identifier_bytes{};
+    std::uint64_t address_window_seconds{};
+    std::uint32_t maximum_requests_per_address_window{};
+    std::size_t maximum_tracked_addresses{};
+    std::uint64_t global_window_seconds{};
+    primitives::Amount maximum_payout_per_global_window{};
 };
 
 struct FaucetRequest final {
@@ -82,17 +87,32 @@ class FaucetService final
         std::uint32_t requests{};
     };
 
+    struct GlobalWindow final {
+        std::uint64_t starts_at{};
+        primitives::Amount paid{};
+    };
+
     FaucetService(const consensus::NetworkParams& network, FaucetLimits limits,
                   std::filesystem::path audit_log, PayoutCallback payout) noexcept;
     [[nodiscard]] bool AppendAudit(std::string_view outcome, const FaucetRequest& request,
                                    const std::optional<crypto::Hash256>& transaction_id) noexcept;
+    [[nodiscard]] bool AppendQuotaReservation(std::string_view source_key,
+                                              std::string_view address_key,
+                                              const FaucetRequest& request) noexcept;
+    [[nodiscard]] bool LoadQuotaReservations() noexcept;
+    [[nodiscard]] bool LoadKillSwitchState() noexcept;
+    void PruneExpired(std::uint64_t now) noexcept;
     [[nodiscard]] static bool IsValidLimits(const FaucetLimits& limits) noexcept;
 
     const consensus::NetworkParams* network_{};
     FaucetLimits limits_;
     std::filesystem::path audit_log_;
+    std::filesystem::path quota_log_;
+    std::filesystem::path kill_switch_state_;
     PayoutCallback payout_;
     std::map<std::string, SourceWindow, std::less<>> source_windows_;
+    std::map<std::string, SourceWindow, std::less<>> address_windows_;
+    GlobalWindow global_window_;
     FaucetMetrics metrics_;
 };
 
