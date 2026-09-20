@@ -49,6 +49,21 @@ TEST_F(BootstrapConfigTest, AcceptsCanonicalManifestBoundToRegtestIdentity)
     EXPECT_EQ(loaded.seeds.front().port, 18'444U);
 }
 
+TEST_F(BootstrapConfigTest, AcceptsBoundedCanonicalDnsSeedsOnlyWhenExplicitlyRequestedByDaemon)
+{
+    Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
+          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "dnsseed=bootstrap-one.novacoin.test\n"
+          "dnsseed=bootstrap-two.novacoin.test\n");
+    const auto loaded =
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::TestnetNetworkParams());
+    ASSERT_EQ(loaded.error, nova::node::BootstrapConfigError::kNone);
+    EXPECT_TRUE(loaded.seeds.empty());
+    ASSERT_EQ(loaded.dns_seeds.size(), 2U);
+    EXPECT_EQ(loaded.dns_seeds[0], "bootstrap-one.novacoin.test");
+    EXPECT_EQ(loaded.dns_seeds[1], "bootstrap-two.novacoin.test");
+}
+
 TEST_F(BootstrapConfigTest, RejectsWrongNetworkGenesisAndMagic)
 {
     Write("version=1\nnetwork=testnet\nmagic=dab5bffa\ngenesis="
@@ -73,6 +88,50 @@ TEST_F(BootstrapConfigTest, RejectsNoncanonicalAndHostileInputs)
     EXPECT_EQ(
         nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::RegtestNetworkParams()).error,
         nova::node::BootstrapConfigError::kInvalidEndpoint);
+}
+
+TEST_F(BootstrapConfigTest, RejectsMalformedDuplicateAndExcessDnsSeeds)
+{
+    Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
+          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "dnsseed=-bad.novacoin.test\n");
+    EXPECT_EQ(
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::TestnetNetworkParams()).error,
+        nova::node::BootstrapConfigError::kInvalidEndpoint);
+
+    Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
+          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "dnsseed=one.novacoin.test\n"
+          "dnsseed=one.novacoin.test\n");
+    EXPECT_EQ(
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::TestnetNetworkParams()).error,
+        nova::node::BootstrapConfigError::kNonCanonical);
+
+    Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
+          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "dnsseed=one.novacoin.test\n"
+          "dnsseed=two.novacoin.test\n"
+          "dnsseed=three.novacoin.test\n"
+          "dnsseed=four.novacoin.test\n"
+          "dnsseed=five.novacoin.test\n");
+    EXPECT_EQ(
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::TestnetNetworkParams()).error,
+        nova::node::BootstrapConfigError::kTooManyDnsSeeds);
+}
+
+TEST(BootstrapConfig, CompiledRegistryFailsClosedUntilReviewedOperatorsAreCommitted)
+{
+    const auto testnet =
+        nova::node::LoadCompiledBootstrapConfig(nova::consensus::TestnetNetworkParams());
+    EXPECT_EQ(testnet.error, nova::node::BootstrapConfigError::kNone);
+    EXPECT_TRUE(testnet.seeds.empty());
+    EXPECT_TRUE(testnet.dns_seeds.empty());
+
+    const auto regtest =
+        nova::node::LoadCompiledBootstrapConfig(nova::consensus::RegtestNetworkParams());
+    EXPECT_EQ(regtest.error, nova::node::BootstrapConfigError::kNone);
+    EXPECT_TRUE(regtest.seeds.empty());
+    EXPECT_TRUE(regtest.dns_seeds.empty());
 }
 
 } // namespace

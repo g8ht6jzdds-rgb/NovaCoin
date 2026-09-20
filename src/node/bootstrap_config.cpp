@@ -18,6 +18,7 @@ namespace
 
 constexpr std::size_t kMaximumBootstrapFileSize = 16U * 1024U;
 constexpr std::size_t kMaximumBootstrapSeeds = 16U;
+constexpr std::size_t kMaximumDnsSeeds = 4U;
 constexpr std::size_t kMaximumHostLength = 253U;
 
 [[nodiscard]] char HexDigit(const std::uint8_t value) noexcept
@@ -55,6 +56,29 @@ constexpr std::size_t kMaximumHostLength = 253U;
            });
 }
 
+[[nodiscard]] bool IsCanonicalDnsSeed(const std::string_view host) noexcept
+{
+    if (!IsCanonicalHost(host) || host.find('.') == std::string_view::npos ||
+        host.find("..") != std::string_view::npos) {
+        return false;
+    }
+    std::size_t label_begin{};
+    while (label_begin < host.size()) {
+        const auto label_end = host.find('.', label_begin);
+        const auto length =
+            (label_end == std::string_view::npos ? host.size() : label_end) - label_begin;
+        if (length == 0U || length > 63U || host[label_begin] == '-' ||
+            host[label_begin + length - 1U] == '-') {
+            return false;
+        }
+        if (label_end == std::string_view::npos) {
+            break;
+        }
+        label_begin = label_end + 1U;
+    }
+    return true;
+}
+
 [[nodiscard]] std::optional<net::TcpEndpoint> ParseEndpoint(const std::string_view text) noexcept
 {
     const auto separator = text.rfind(':');
@@ -86,98 +110,133 @@ constexpr std::size_t kMaximumHostLength = 253U;
 
 } // namespace
 
+BootstrapConfigResult LoadCompiledBootstrapConfig(const consensus::NetworkParams& network) noexcept
+{
+    if (consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
+        return {BootstrapConfigError::kInvalidPath, {}, {}};
+    }
+
+    // Do not add provisional addresses here.  This deliberately empty table
+    // is a fail-closed, source-controlled registry boundary.  A future
+    // reviewed change must add only candidate-matched signed operator records
+    // and DNS ownership review before TESTNET endpoints become compiled in.
+    switch (network.id) {
+    case consensus::NetworkId::kRegtest:
+    case consensus::NetworkId::kTestnet:
+    case consensus::NetworkId::kMainnet:
+        return {BootstrapConfigError::kNone, {}, {}};
+    }
+    return {BootstrapConfigError::kInvalidPath, {}, {}};
+}
+
 BootstrapConfigResult LoadStaticBootstrapConfig(const std::filesystem::path& path,
                                                 const consensus::NetworkParams& network) noexcept
 {
     if (path.empty() ||
         consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
-        return {BootstrapConfigError::kInvalidPath, {}};
+        return {BootstrapConfigError::kInvalidPath, {}, {}};
     }
     try {
         std::ifstream input{path, std::ios::binary};
         if (!input.is_open()) {
-            return {BootstrapConfigError::kReadFailure, {}};
+            return {BootstrapConfigError::kReadFailure, {}, {}};
         }
         const std::string text{std::istreambuf_iterator<char>{input},
                                std::istreambuf_iterator<char>{}};
         if (text.empty() || text.size() > kMaximumBootstrapFileSize) {
             return {text.size() > kMaximumBootstrapFileSize ? BootstrapConfigError::kOversized
                                                             : BootstrapConfigError::kNonCanonical,
+                    {},
                     {}};
         }
         if (text.back() != '\n' || text.find('\r') != std::string::npos ||
             text.find("\n\n") != std::string::npos) {
-            return {BootstrapConfigError::kNonCanonical, {}};
+            return {BootstrapConfigError::kNonCanonical, {}, {}};
         }
         bool version_seen{};
         bool network_seen{};
         bool magic_seen{};
         bool genesis_seen{};
         std::vector<net::TcpEndpoint> seeds;
+        std::vector<std::string> dns_seeds;
         std::size_t cursor{};
         while (cursor < text.size()) {
             const auto newline = text.find('\n', cursor);
             if (newline == std::string::npos || newline == cursor) {
-                return {BootstrapConfigError::kNonCanonical, {}};
+                return {BootstrapConfigError::kNonCanonical, {}, {}};
             }
             const std::string_view line{text.data() + cursor, newline - cursor};
             cursor = newline + 1U;
             if (const auto version = Value(line, "version"); version.has_value()) {
                 if (version_seen || *version != "1") {
-                    return {BootstrapConfigError::kNonCanonical, {}};
+                    return {BootstrapConfigError::kNonCanonical, {}, {}};
                 }
                 version_seen = true;
             } else if (const auto network_name = Value(line, "network"); network_name.has_value()) {
                 if (network_seen) {
-                    return {BootstrapConfigError::kNonCanonical, {}};
+                    return {BootstrapConfigError::kNonCanonical, {}, {}};
                 }
                 if (*network_name != NetworkName(network.id)) {
-                    return {BootstrapConfigError::kNetworkMismatch, {}};
+                    return {BootstrapConfigError::kNetworkMismatch, {}, {}};
                 }
                 network_seen = true;
             } else if (const auto magic = Value(line, "magic"); magic.has_value()) {
                 if (magic_seen) {
-                    return {BootstrapConfigError::kNonCanonical, {}};
+                    return {BootstrapConfigError::kNonCanonical, {}, {}};
                 }
                 if (*magic != Magic(network.network_magic)) {
-                    return {BootstrapConfigError::kNetworkMismatch, {}};
+                    return {BootstrapConfigError::kNetworkMismatch, {}, {}};
                 }
                 magic_seen = true;
             } else if (const auto genesis = Value(line, "genesis"); genesis.has_value()) {
                 if (genesis_seen) {
-                    return {BootstrapConfigError::kNonCanonical, {}};
+                    return {BootstrapConfigError::kNonCanonical, {}, {}};
                 }
                 if (*genesis != Hex(network.genesis_hash)) {
-                    return {BootstrapConfigError::kNetworkMismatch, {}};
+                    return {BootstrapConfigError::kNetworkMismatch, {}, {}};
                 }
                 genesis_seen = true;
             } else if (const auto seed = Value(line, "seed"); seed.has_value()) {
                 const auto endpoint = ParseEndpoint(*seed);
                 if (!endpoint.has_value()) {
-                    return {BootstrapConfigError::kInvalidEndpoint, {}};
+                    return {BootstrapConfigError::kInvalidEndpoint, {}, {}};
                 }
                 if (seeds.size() == kMaximumBootstrapSeeds) {
-                    return {BootstrapConfigError::kTooManySeeds, {}};
+                    return {BootstrapConfigError::kTooManySeeds, {}, {}};
                 }
                 if (std::any_of(
                         seeds.begin(), seeds.end(), [&endpoint](const net::TcpEndpoint& item) {
                             return item.host == endpoint->host && item.port == endpoint->port;
                         })) {
-                    return {BootstrapConfigError::kNonCanonical, {}};
+                    return {BootstrapConfigError::kNonCanonical, {}, {}};
                 }
                 seeds.push_back(*endpoint);
+            } else if (const auto dns_seed = Value(line, "dnsseed"); dns_seed.has_value()) {
+                if (!IsCanonicalDnsSeed(*dns_seed)) {
+                    return {BootstrapConfigError::kInvalidEndpoint, {}, {}};
+                }
+                if (dns_seeds.size() == kMaximumDnsSeeds) {
+                    return {BootstrapConfigError::kTooManyDnsSeeds, {}, {}};
+                }
+                if (std::any_of(
+                        dns_seeds.begin(), dns_seeds.end(),
+                        [dns_seed](const std::string& item) { return item == *dns_seed; })) {
+                    return {BootstrapConfigError::kNonCanonical, {}, {}};
+                }
+                dns_seeds.emplace_back(*dns_seed);
             } else {
-                return {BootstrapConfigError::kNonCanonical, {}};
+                return {BootstrapConfigError::kNonCanonical, {}, {}};
             }
         }
-        if (!version_seen || !network_seen || !magic_seen || !genesis_seen || seeds.empty()) {
-            return {BootstrapConfigError::kNonCanonical, {}};
+        if (!version_seen || !network_seen || !magic_seen || !genesis_seen ||
+            (seeds.empty() && dns_seeds.empty())) {
+            return {BootstrapConfigError::kNonCanonical, {}, {}};
         }
-        return {BootstrapConfigError::kNone, std::move(seeds)};
+        return {BootstrapConfigError::kNone, std::move(seeds), std::move(dns_seeds)};
     } catch (const std::bad_alloc&) {
-        return {BootstrapConfigError::kAllocationFailure, {}};
+        return {BootstrapConfigError::kAllocationFailure, {}, {}};
     } catch (...) {
-        return {BootstrapConfigError::kReadFailure, {}};
+        return {BootstrapConfigError::kReadFailure, {}, {}};
     }
 }
 

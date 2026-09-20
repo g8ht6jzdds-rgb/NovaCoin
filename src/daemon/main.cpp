@@ -107,6 +107,7 @@ void ReleaseSecretEnvironmentString(char* value, const std::size_t size) noexcep
 
 int main(const int argc, char* argv[])
 {
+    constexpr std::size_t kMaximumConfiguredPeers = 64U;
     static_cast<void>(std::signal(SIGINT, RequestShutdown));
     static_cast<void>(std::signal(SIGTERM, RequestShutdown));
     std::optional<std::string> name;
@@ -117,6 +118,7 @@ int main(const int argc, char* argv[])
     std::optional<std::string> p2p_bind_address;
     std::vector<nova::net::TcpEndpoint> peers;
     std::optional<std::filesystem::path> bootstrap_config;
+    bool enable_dns_seeds{};
     std::optional<nova::consensus::NetworkId> network;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option{argv[index]};
@@ -144,6 +146,14 @@ int main(const int argc, char* argv[])
             network = nova::consensus::NetworkId::kMainnet;
             continue;
         }
+        if (option == "--enable-dns-seeds") {
+            if (enable_dns_seeds) {
+                std::cerr << "duplicate --enable-dns-seeds option\n";
+                return 2;
+            }
+            enable_dns_seeds = true;
+            continue;
+        }
         if (++index >= argc) {
             std::cerr << "missing option value\n";
             return 2;
@@ -164,7 +174,7 @@ int main(const int argc, char* argv[])
             log_path = std::filesystem::path{value};
         } else if (option == "--connect") {
             const auto endpoint = Endpoint(value);
-            if (!endpoint.has_value()) {
+            if (!endpoint.has_value() || peers.size() == kMaximumConfiguredPeers) {
                 std::cerr << "invalid --connect endpoint\n";
                 return 2;
             }
@@ -182,7 +192,7 @@ int main(const int argc, char* argv[])
         std::cerr
             << "usage: novacoind --regtest|--testnet|--mainnet --name <name> --datadir <path> "
                "--p2pport <port> --rpcport <port> --logfile <path> [--p2pbind loopback|wildcard] "
-               "[--connect host:port] [--bootstrap static-bootstrap.conf]\n";
+               "[--connect host:port] [--bootstrap static-bootstrap.conf] [--enable-dns-seeds]\n";
         return 2;
     }
     const auto selection = nova::node::SelectNetwork(*network);
@@ -197,12 +207,40 @@ int main(const int argc, char* argv[])
         std::cerr << "public P2P binding is permitted only for TESTNET\n";
         return 2;
     }
+    if (enable_dns_seeds && *network != nova::consensus::NetworkId::kTestnet) {
+        std::cerr << "DNS seeds are available only for TESTNET\n";
+        return 2;
+    }
     if (selection.parameters->genesis_block.header.time >
         std::numeric_limits<std::uint32_t>::max() - 600U) {
         std::cerr << "selected network has an invalid genesis timestamp\n";
         return 1;
     }
     const auto start_time = selection.parameters->genesis_block.header.time + 600U;
+    const auto append_peer = [&peers](const nova::net::TcpEndpoint& endpoint) {
+        if (peers.size() == kMaximumConfiguredPeers) {
+            return false;
+        }
+        const auto duplicate =
+            std::any_of(peers.begin(), peers.end(), [&endpoint](const auto& item) {
+                return item.host == endpoint.host && item.port == endpoint.port;
+            });
+        if (!duplicate) {
+            peers.push_back(endpoint);
+        }
+        return true;
+    };
+    const auto compiled = nova::node::LoadCompiledBootstrapConfig(*selection.parameters);
+    if (compiled.error != nova::node::BootstrapConfigError::kNone) {
+        std::cerr << "invalid compiled bootstrap configuration\n";
+        return 1;
+    }
+    for (const auto& endpoint : compiled.seeds) {
+        if (!append_peer(endpoint)) {
+            std::cerr << "too many configured peers\n";
+            return 2;
+        }
+    }
     if (bootstrap_config.has_value()) {
         const auto bootstrap =
             nova::node::LoadStaticBootstrapConfig(*bootstrap_config, *selection.parameters);
@@ -211,12 +249,20 @@ int main(const int argc, char* argv[])
             return 2;
         }
         for (const auto& endpoint : bootstrap.seeds) {
-            const auto duplicate =
-                std::any_of(peers.begin(), peers.end(), [&endpoint](const auto& item) {
-                    return item.host == endpoint.host && item.port == endpoint.port;
-                });
-            if (!duplicate) {
-                peers.push_back(endpoint);
+            if (!append_peer(endpoint)) {
+                std::cerr << "too many configured peers\n";
+                return 2;
+            }
+        }
+        if (enable_dns_seeds) {
+            for (const auto& dns_seed : bootstrap.dns_seeds) {
+                // PeerService's bounded transport resolver uses getaddrinfo
+                // only to establish an ordinary P2P connection. DNS answers
+                // are never consensus data and must still pass handshake.
+                if (!append_peer({dns_seed, selection.parameters->default_p2p_port})) {
+                    std::cerr << "too many configured peers\n";
+                    return 2;
+                }
             }
         }
     }
