@@ -64,6 +64,26 @@ TEST_F(BootstrapConfigTest, AcceptsBoundedCanonicalDnsSeedsOnlyWhenExplicitlyReq
     EXPECT_EQ(loaded.dns_seeds[1], "bootstrap-two.novacoin.test");
 }
 
+TEST_F(BootstrapConfigTest, AcceptsCanonicalHeaderOnlyTestnetConfiguration)
+{
+    Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
+          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n");
+    const auto loaded =
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::TestnetNetworkParams());
+    ASSERT_EQ(loaded.error, nova::node::BootstrapConfigError::kNone);
+    EXPECT_TRUE(loaded.seeds.empty());
+    EXPECT_TRUE(loaded.dns_seeds.empty());
+}
+
+TEST_F(BootstrapConfigTest, RejectsCanonicalHeaderOnlyConfigurationForOtherNetworks)
+{
+    Write("version=1\nnetwork=regtest\nmagic=dab5bffa\ngenesis="
+          "c974d11a5276ca7eb69b1ec0a8062fb47b49c02f5ac726532483d090ac53eb79\n");
+    EXPECT_EQ(
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::RegtestNetworkParams()).error,
+        nova::node::BootstrapConfigError::kNonCanonical);
+}
+
 TEST_F(BootstrapConfigTest, RejectsWrongNetworkGenesisAndMagic)
 {
     Write("version=1\nnetwork=testnet\nmagic=dab5bffa\ngenesis="

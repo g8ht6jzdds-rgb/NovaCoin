@@ -228,8 +228,14 @@ BootstrapConfigResult LoadStaticBootstrapConfig(const std::filesystem::path& pat
                 return {BootstrapConfigError::kNonCanonical, {}, {}};
             }
         }
-        if (!version_seen || !network_seen || !magic_seen || !genesis_seen ||
-            (seeds.empty() && dns_seeds.empty())) {
+        if (!version_seen || !network_seen || !magic_seen || !genesis_seen) {
+            return {BootstrapConfigError::kNonCanonical, {}, {}};
+        }
+        // A canonical testnet header is useful before independently operated
+        // seed infrastructure is approved. It remains identity-bound and
+        // leaves peer discovery to explicit manual peers. Other networks must
+        // still declare at least one bootstrap record.
+        if (seeds.empty() && dns_seeds.empty() && network.id != consensus::NetworkId::kTestnet) {
             return {BootstrapConfigError::kNonCanonical, {}, {}};
         }
         return {BootstrapConfigError::kNone, std::move(seeds), std::move(dns_seeds)};
