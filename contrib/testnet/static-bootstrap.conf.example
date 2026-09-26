@@ -1,0 +1,4 @@
+version=1
+network=testnet
+magic=dab5bffb
+genesis=25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048

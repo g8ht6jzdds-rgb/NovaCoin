@@ -43,6 +43,59 @@ invented endpoints.
 
 ## Verification evidence
 
+### OCI candidate reproduction — 2026-09-22 UTC
+
+Candidate `task021-engineering-candidate-89edf30` resolves to
+`89edf303e93d20b16e4c33e362acccadef2273aa`. Its tag was verified with the
+approved public key fingerprint
+`77F0948246E379FA7BF17F779C30AE406D9271F1` on the private OCI validation
+host. The redacted evidence archive SHA-256 is
+`258094b1dc8ffa8725b05dc33669e7ea0650f020ef92c411a8207e7ee5d9ccaf`; its
+outer and internal relative-path manifests were independently rechecked.
+
+| Check | Result |
+| --- | --- |
+| Debug / Release build and CTest | passed |
+| ASan / UBSan build and CTest | passed |
+| Strict clang-tidy and clang-format | passed |
+| Focused bootstrap and faucet tests | passed |
+| Four-process Unix REGTEST harness | passed |
+| Direct non-executable harness invocation | exit `126`; external wrapper-permission condition, not a storage finding |
+
+This is single-host OCI validation only. It is not an independent operator
+approval, a public deployment result, or full-chain UTXO verification.
+
+### Bootstrap header-only configuration proposal — 2026-09-23 UTC
+
+The parser-only, no-endpoint bootstrap proposal was committed separately as
+`50e99c62980857d6bd9a29d6627eeeb1d1794271` (`testnet: allow header-only
+bootstrap configuration`). It is intentionally separate from this report and
+from the frozen engineering candidate. OCI content-equivalence verification
+matched the three committed source objects, and the focused bootstrap suite
+and `/usr/bin/clang-format-18` check passed. The associated post-commit
+evidence remains single-host validation only.
+
+### AWS successor validation — 2026-09-26 UTC
+
+The reviewed successor revision
+`346f64970d6f00c9c7d5f3402e92bf733e9cc5f6` was validated on the separate AWS
+host using the external R4 driver. Debug, Release, ASan, UBSan, strict
+clang-tidy, clang-format, focused bootstrap/faucet tests, the four-process
+REGTEST harness, and valid-argument TESTNET/MAINNET refusal checks all passed.
+The driver generated and verified a relative-path `SHA256SUMS` manifest.
+
+This is a separate AWS machine validation only. Operator independence and a
+detached signature remain pending; it is not an independent approval, public
+deployment result, or full-chain UTXO verification.
+
+### Independent review — 2026-09-24 UTC
+
+GitHub user `alielhajj694-glitch` was granted Write access (not Admin) and
+submitted a formal approval for pull request #1 at
+`346f64970d6f00c9c7d5f3402e92bf733e9cc5f6`. GitHub Actions build-and-test,
+ASan, and UBSan jobs passed for that head. This report update requires a
+renewed review before merge. A detached operator attestation remains pending.
+
 Current-source pre-approval checks:
 
 | Check | Result |
@@ -91,6 +144,19 @@ enablement candidate.
    immutable enablement candidate, then make the separately reviewed
    `deployment_final=true` followed by `enabled=true` changes without changing
    the exact genesis vectors.
+
+## Remaining operational requirements
+
+- A second independently controlled, detached and signed reproduction record.
+- A complete chain UTXO inspection method and its independent evidence; wallet
+  `listunspent` observations are insufficient.
+- Three independently operated live seed nodes and, if enabled, DNS ownership
+  and removal controls.
+- A TESTNET-only faucet custody ceremony, documented dual-custodian emergency
+  stop process, monitoring, and on-call ownership.
+- A deployed public explorer with the required no-value banner and operational
+  monitoring, plus signed Linux/Windows/macOS release artifacts and
+  reproducible-build metadata.
 
 ## MAINNET blockers
 
