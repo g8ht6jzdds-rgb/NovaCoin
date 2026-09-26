@@ -75,14 +75,26 @@ matched the three committed source objects, and the focused bootstrap suite
 and `/usr/bin/clang-format-18` check passed. The associated post-commit
 evidence remains single-host validation only.
 
-### Independent review request — 2026-09-24 UTC
+### AWS successor validation — 2026-09-26 UTC
+
+The reviewed successor revision
+`346f64970d6f00c9c7d5f3402e92bf733e9cc5f6` was validated on the separate AWS
+host using the external R4 driver. Debug, Release, ASan, UBSan, strict
+clang-tidy, clang-format, focused bootstrap/faucet tests, the four-process
+REGTEST harness, and valid-argument TESTNET/MAINNET refusal checks all passed.
+The driver generated and verified a relative-path `SHA256SUMS` manifest.
+
+This is a separate AWS machine validation only. Operator independence and a
+detached signature remain pending; it is not an independent approval, public
+deployment result, or full-chain UTXO verification.
+
+### Independent review — 2026-09-24 UTC
 
 GitHub user `alielhajj694-glitch` was granted Write access (not Admin) and
-requested to review pull request #1 at the committed head
-`b026339ff5b8b9d5bb1155e0af2e3d2f766bc930`. At the time of this record, the
-PR build-and-test, ASan, and UBSan checks were successful. This is a review
-request only: no independent review approval or detached operator attestation
-has yet been received.
+submitted a formal approval for pull request #1 at
+`346f64970d6f00c9c7d5f3402e92bf733e9cc5f6`. GitHub Actions build-and-test,
+ASan, and UBSan jobs passed for that head. This report update requires a
+renewed review before merge. A detached operator attestation remains pending.
 
 Current-source pre-approval checks:
 
