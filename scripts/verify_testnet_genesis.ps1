@@ -1,14 +1,77 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string]$SourceRevision,
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$EvidencePath,
-    [string]$BuildDirectory
+    [string]$BuildDirectory,
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Get-VcpkgBaseline([string]$ConfigPath) {
+    try {
+        $configuration = Get-Content -LiteralPath $ConfigPath -Raw -ErrorAction Stop |
+            ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Invalid vcpkg configuration: $ConfigPath"
+    }
+
+    $registry = $configuration.'default-registry'
+    if ($null -eq $registry -or $registry.kind -cne 'git' -or
+        $registry.repository -cne 'https://github.com/microsoft/vcpkg') {
+        throw 'Unexpected default registry configuration.'
+    }
+
+    $baseline = [string]$registry.baseline
+    if ($baseline -notmatch '^[0-9a-f]{40}$') {
+        throw 'vcpkg baseline must be a lowercase 40-hex git revision.'
+    }
+    return $baseline
+}
+
+if ($SelfTest) {
+    $testRoot = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("novacoin-genesis-verifier-selftest-" + [System.Guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $testRoot | Out-Null
+        $validPath = Join-Path $testRoot 'valid.json'
+        @'
+{
+  "default-registry": {
+    "kind": "git",
+    "repository": "https://github.com/microsoft/vcpkg",
+    "baseline": "b8b8df2201ad8509b81a830fe0957bcb98e06c27"
+  }
+}
+'@ | Set-Content -LiteralPath $validPath -NoNewline
+        if ((Get-VcpkgBaseline $validPath) -ne 'b8b8df2201ad8509b81a830fe0957bcb98e06c27') {
+            throw 'Current vcpkg baseline was not accepted.'
+        }
+
+        foreach ($case in @(
+                '{}',
+                '{"default-registry":{"kind":"git","repository":"https://github.com/microsoft/vcpkg","baseline":"not-a-revision"}}',
+                '{"default-registry":{"kind":"filesystem","repository":"https://github.com/microsoft/vcpkg","baseline":"b8b8df2201ad8509b81a830fe0957bcb98e06c27"}}'
+            )) {
+            $invalidPath = Join-Path $testRoot ([System.Guid]::NewGuid().ToString('N') + '.json')
+            Set-Content -LiteralPath $invalidPath -Value $case -NoNewline
+            $rejected = $false
+            try { Get-VcpkgBaseline $invalidPath | Out-Null } catch { $rejected = $true }
+            if (-not $rejected) { throw 'Invalid vcpkg configuration was accepted.' }
+        }
+    } finally {
+        if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
+    }
+    Write-Output 'verify_testnet_genesis configuration self-test passed'
+    return
+}
+
+if ([string]::IsNullOrWhiteSpace($SourceRevision) -or [string]::IsNullOrWhiteSpace($EvidencePath)) {
+    throw 'SourceRevision and EvidencePath are required unless -SelfTest is used.'
+}
+
 $scriptRoot = Split-Path -Parent $PSCommandPath
 $repositoryRoot = Split-Path -Parent $scriptRoot
 if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
@@ -67,10 +130,7 @@ if ($cmakeVersion -ne 'cmake version 4.3.3' -or $clangVersion -ne 'clang version
     throw "Pinned compiler identity mismatch: $cmakeVersion; $clangVersion"
 }
 
-$vcpkgConfig = Get-Content -LiteralPath (Join-Path $repositoryRoot 'vcpkg-configuration.json') -Raw
-if ($vcpkgConfig -notmatch 'e0612b42ce44e55a0e630f2ee9d3c533a63d8bc1') {
-    throw 'Pinned vcpkg baseline is absent.'
-}
+$vcpkgBaseline = Get-VcpkgBaseline (Join-Path $repositoryRoot 'vcpkg-configuration.json')
 
 $configure = 'call "{0}" >nul && "{1}" -S "{2}" -B "{3}" -G Ninja -DCMAKE_MAKE_PROGRAM="{4}" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="{5}" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR="{6}"' -f $vcvars, $cmake, $repositoryRoot, $BuildDirectory, $ninja, $vcpkgToolchain, $vcpkgInstalled
 & cmd.exe /d /c $configure
@@ -119,7 +179,7 @@ if (Test-Path -LiteralPath $EvidencePath) { throw 'Refusing to overwrite existin
     "cmake=$cmakeVersion",
     'msvc=19.44.35228',
     "clang=$clangVersion",
-    'vcpkg_baseline=e0612b42ce44e55a0e630f2ee9d3c533a63d8bc1',
+    "vcpkg_baseline=$vcpkgBaseline",
     'cmake_installer_sha256=b6c50584847f02fe7f11d94ad1d99d592b5b371c476e2de3770ae3ee823b2638',
     'llvm_installer_sha256=3197846a2b19063687dd56e93e34cd941e3548d907f23a6131571321bdf9fe7b',
     'vs_buildtools_bootstrapper_sha256=15df9d3b4c2b2eaf44704d5e938c895341b9cd8ba40a9a18610f8d18cbe01b53'
