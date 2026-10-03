@@ -16,6 +16,11 @@ namespace
 constexpr primitives::TransactionLimits kTransactionLimits{MAX_MONEY, 100'000U, 128U, 128U, 256U};
 constexpr primitives::BlockLimits kBlockLimits{kTransactionLimits, 1'000'000U, 256U, 100U};
 constexpr std::size_t kMaximumGenesisMessage = 64U;
+constexpr std::uint8_t kOpDup = 0x76U;
+constexpr std::uint8_t kOpHash160 = 0xA9U;
+constexpr std::uint8_t kPushHash160 = 0x14U;
+constexpr std::uint8_t kOpEqualVerify = 0x88U;
+constexpr std::uint8_t kOpCheckSig = 0xACU;
 
 [[nodiscard]] bool IsAllZero(const crypto::Hash256& hash) noexcept
 {
@@ -46,6 +51,23 @@ constexpr std::size_t kMaximumGenesisMessage = 64U;
     return script;
 }
 
+[[nodiscard]] std::vector<std::uint8_t>
+GenesisOutputScript(const std::optional<crypto::Hash160>& recipient)
+{
+    if (!recipient.has_value()) {
+        return {0x51U};
+    }
+    std::vector<std::uint8_t> script;
+    script.reserve(25U);
+    script.push_back(kOpDup);
+    script.push_back(kOpHash160);
+    script.push_back(kPushHash160);
+    script.insert(script.end(), recipient->begin(), recipient->end());
+    script.push_back(kOpEqualVerify);
+    script.push_back(kOpCheckSig);
+    return script;
+}
+
 [[nodiscard]] std::optional<primitives::Block>
 MakeGenesisBlock(const GenesisRequest& request, const primitives::BlockLimits& limits,
                  const std::uint32_t nonce) noexcept
@@ -59,7 +81,7 @@ MakeGenesisBlock(const GenesisRequest& request, const primitives::BlockLimits& l
             1,
             {{primitives::OutPoint{crypto::Hash256{}, std::numeric_limits<std::uint32_t>::max()},
               CoinbaseScript(request.timestamp, request.message), 0U}},
-            {{request.reward, {0x51U}}},
+            {{request.reward, GenesisOutputScript(request.p2pkh_recipient)}},
             0U};
         primitives::Block block{{1, crypto::Hash256{}, crypto::Hash256{}, request.timestamp,
                                  request.compact_target, nonce},
@@ -208,6 +230,22 @@ NetworkParamsError CheckNetworkParams(const NetworkParams& parameters) noexcept
         primitives::BlockStructureError::kNone) {
         return NetworkParamsError::kInvalidGenesisStructure;
     }
+    const auto scheduled_issuance = CalculateTheoreticalIssuance(parameters.monetary);
+    if (!scheduled_issuance.has_value()) {
+        return NetworkParamsError::kInvalidMonetaryParameters;
+    }
+    Amount genesis_total = 0;
+    for (const auto& transaction : parameters.genesis_block.transactions) {
+        for (const auto& output : transaction.outputs) {
+            if (output.value < 0 || output.value > parameters.monetary.max_money - genesis_total) {
+                return NetworkParamsError::kGenesisSupplyExceedsMaxMoney;
+            }
+            genesis_total += output.value;
+        }
+    }
+    if (genesis_total > parameters.monetary.max_money - *scheduled_issuance) {
+        return NetworkParamsError::kGenesisSupplyExceedsMaxMoney;
+    }
     if (!IsAllZero(parameters.genesis_block.header.previous_block_id)) {
         return NetworkParamsError::kInvalidGenesisParent;
     }
@@ -252,13 +290,16 @@ const NetworkParams& TestnetNetworkParams() noexcept
         PowParameters{Target({0x70U, 0xFFU, 0xFFU}), 0x2070'FFFFU},
         DifficultyParameters{600U, 2'016U, 1'209'600U, true, false},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 210'000U},
-        GenesisRequest{1'704'153'600U, "NovaCoin Testnet Genesis", 0x2070'FFFFU, 50LL * COIN}, 0U,
-        Hash({0x25U, 0xF9U, 0x44U, 0xA0U, 0x0FU, 0x3DU, 0x55U, 0x94U, 0x52U, 0xB9U, 0x56U,
-              0x53U, 0xA2U, 0x0AU, 0x03U, 0x93U, 0x22U, 0xABU, 0x32U, 0x43U, 0xA5U, 0x77U,
-              0xD1U, 0xCCU, 0x3BU, 0x8FU, 0x48U, 0xE4U, 0xF3U, 0x0FU, 0xD0U, 0x48U}),
-        Hash({0xE0U, 0xE0U, 0xD4U, 0x3CU, 0x6EU, 0xF8U, 0xF4U, 0x2FU, 0x2EU, 0x2DU, 0x07U,
-              0xEAU, 0xF8U, 0x9BU, 0x85U, 0x66U, 0xD7U, 0x6FU, 0xBCU, 0x1DU, 0x69U, 0x8DU,
-              0x82U, 0x6EU, 0x5FU, 0x4AU, 0x26U, 0xE6U, 0xA3U, 0xD7U, 0x72U, 0x4CU}));
+        GenesisRequest{
+            1'704'153'600U, "NovaCoin Testnet Genesis", 0x2070'FFFFU, TESTNET_CREATOR_ALLOCATION,
+            crypto::Hash160{0x37U, 0xF3U, 0x43U, 0x2CU, 0xB4U, 0x7AU, 0x3FU, 0x07U, 0x8EU, 0xD6U,
+                            0x35U, 0x1CU, 0x5FU, 0xA2U, 0x5DU, 0x8CU, 0xFEU, 0xD1U, 0xADU, 0x64U}},
+        2U, Hash({0x78U, 0x25U, 0x77U, 0x2AU, 0x2DU, 0xD1U, 0x8DU, 0x46U, 0x19U, 0x62U, 0x2BU,
+                  0x19U, 0x80U, 0x52U, 0xA9U, 0xC8U, 0x2CU, 0xA1U, 0x7BU, 0x0FU, 0x84U, 0x77U,
+                  0x54U, 0xF6U, 0xCBU, 0x24U, 0x96U, 0x0DU, 0xF7U, 0xA7U, 0x91U, 0x4CU}),
+        Hash({0x9CU, 0x6FU, 0x88U, 0x3CU, 0x0AU, 0xD5U, 0x0FU, 0x42U, 0xCFU, 0x53U, 0xC8U,
+              0x22U, 0x38U, 0x87U, 0x89U, 0x05U, 0x2BU, 0x58U, 0xEDU, 0x35U, 0x0CU, 0x2BU,
+              0x7EU, 0x3BU, 0x7AU, 0xA4U, 0xBDU, 0xEAU, 0x2FU, 0x32U, 0x7AU, 0x63U}));
     return parameters;
 }
 

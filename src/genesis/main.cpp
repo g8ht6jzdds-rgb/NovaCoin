@@ -53,6 +53,24 @@ namespace
     return value;
 }
 
+[[nodiscard]] std::optional<nova::crypto::Hash160> ParseHash160(const std::string_view text)
+{
+    if (text.size() != 40U) {
+        return std::nullopt;
+    }
+    nova::crypto::Hash160 result{};
+    for (std::size_t index = 0U; index < result.size(); ++index) {
+        const auto hex = text.substr(index * 2U, 2U);
+        unsigned int value{};
+        const auto parsed = std::from_chars(hex.data(), hex.data() + hex.size(), value, 16);
+        if (parsed.ec != std::errc{} || parsed.ptr != hex.data() + hex.size()) {
+            return std::nullopt;
+        }
+        result[index] = static_cast<std::uint8_t>(value);
+    }
+    return result;
+}
+
 [[nodiscard]] std::string Hex(const std::span<const std::uint8_t> bytes)
 {
     constexpr std::string_view digits{"0123456789abcdef"};
@@ -69,15 +87,17 @@ namespace
 
 int main(const int argc, char* argv[])
 {
-    if (argc != 9) {
+    if (argc != 9 && argc != 11) {
         std::cerr << "usage: nova-genesis --timestamp <u32> --message <ASCII> "
-                     "--target <compact-hex> --reward <amount>\n";
+                     "--target <compact-hex> --reward <amount> "
+                     "[--recipient-p2pkh <40-hex>]\n";
         return 2;
     }
     std::optional<std::string_view> timestamp;
     std::optional<std::string_view> message;
     std::optional<std::string_view> target;
     std::optional<std::string_view> reward;
+    std::optional<std::string_view> recipient;
     for (int index = 1; index < argc; index += 2) {
         const std::string_view key{argv[index]};
         const std::string_view value{argv[index + 1]};
@@ -89,6 +109,8 @@ int main(const int argc, char* argv[])
             target = value;
         } else if (key == "--reward" && !reward.has_value()) {
             reward = value;
+        } else if (key == "--recipient-p2pkh" && !recipient.has_value()) {
+            recipient = value;
         } else {
             std::cerr << "invalid or duplicate option\n";
             return 2;
@@ -97,13 +119,15 @@ int main(const int argc, char* argv[])
     const auto parsed_timestamp = timestamp.has_value() ? ParseU32(*timestamp) : std::nullopt;
     const auto parsed_target = target.has_value() ? ParseCompactTarget(*target) : std::nullopt;
     const auto parsed_reward = reward.has_value() ? ParseAmount(*reward) : std::nullopt;
+    const auto parsed_recipient =
+        recipient.has_value() ? ParseHash160(*recipient) : std::optional<nova::crypto::Hash160>{};
     if (!parsed_timestamp.has_value() || !message.has_value() || !parsed_target.has_value() ||
-        !parsed_reward.has_value()) {
+        !parsed_reward.has_value() || (recipient.has_value() && !parsed_recipient.has_value())) {
         std::cerr << "invalid genesis argument\n";
         return 2;
     }
     const auto generated = nova::consensus::GenerateGenesis(
-        {*parsed_timestamp, *message, *parsed_target, *parsed_reward},
+        {*parsed_timestamp, *message, *parsed_target, *parsed_reward, parsed_recipient},
         nova::consensus::RegtestNetworkParams().block_limits, std::uint64_t{1} << 32U);
     if (generated.error != nova::consensus::GenesisError::kNone ||
         !generated.block_hash.has_value() || !generated.merkle_root.has_value() ||

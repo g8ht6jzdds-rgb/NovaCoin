@@ -12,7 +12,7 @@ used in monetary consensus.
 
 ```text
 COIN            = 100,000,000 atomic units
-MAX_MONEY       = 21,000,000 * COIN
+MAX_MONEY       = 31,000,000 * COIN
 INITIAL_SUBSIDY = 50 * COIN
 ```
 
@@ -43,7 +43,12 @@ sum(subsidy(era) * halving_interval) for every nonzero subsidy era
 ```
 
 Any `ChainParams` value for which that sum is greater than `MAX_MONEY` is
-invalid and must not be used by a validator.
+invalid and must not be used by a validator. Network-parameter validation also
+adds the exact genesis output total to the scheduled issuance using checked
+integer arithmetic and rejects a combined total above `MAX_MONEY`. The TESTNET
+genesis proposal adds a 10,000,000-NOVA P2PKH allocation; its
+21,000,000-NOVA scheduled subsidy issuance plus that allocation is bounded by
+the 31,000,000-NOVA cap.
 
 ## Coinbase reward ceiling
 

@@ -19,6 +19,7 @@ using nova::consensus::CoinbaseRewardError;
 using nova::consensus::GetBlockSubsidy;
 using nova::consensus::INITIAL_SUBSIDY;
 using nova::consensus::MAX_MONEY;
+using nova::consensus::TESTNET_CREATOR_ALLOCATION;
 using nova::primitives::Amount;
 using nova::primitives::OutPoint;
 using nova::primitives::Transaction;
@@ -76,7 +77,7 @@ TEST(MonetaryParameters, RejectsInvalidIntervalsConstantsAndExcessIssuance)
     altered_money.max_money -= 1;
     EXPECT_EQ(CheckChainParams(altered_money), ChainParamsError::kInvalidMonetaryConstants);
 
-    const ChainParams excessive_issuance{COIN, MAX_MONEY, INITIAL_SUBSIDY, 210'001U};
+    const ChainParams excessive_issuance{COIN, MAX_MONEY, INITIAL_SUBSIDY, 310'001U};
     EXPECT_EQ(CheckChainParams(excessive_issuance),
               ChainParamsError::kTheoreticalIssuanceExceedsMaxMoney);
     EXPECT_FALSE(CalculateTheoreticalIssuance(excessive_issuance).has_value());
@@ -105,6 +106,14 @@ TEST(MonetaryIssuance, SummingEveryTheoreticalBlockSubsidyNeverExceedsMaxMoney)
     const auto maximum_interval_total = CalculateTheoreticalIssuance(kMaximumIssuanceParams);
     ASSERT_TRUE(maximum_interval_total.has_value());
     EXPECT_LE(*maximum_interval_total, MAX_MONEY);
+}
+
+TEST(MonetaryIssuance, TestnetCreatorAllocationAndScheduledIssuanceFitTheSupplyCap)
+{
+    const auto scheduled = CalculateTheoreticalIssuance(kMaximumIssuanceParams);
+    ASSERT_TRUE(scheduled.has_value());
+    ASSERT_LE(TESTNET_CREATOR_ALLOCATION, MAX_MONEY - *scheduled);
+    EXPECT_LE(TESTNET_CREATOR_ALLOCATION + *scheduled, MAX_MONEY);
 }
 
 TEST(MonetaryCoinbaseReward, PermitsAtMostSubsidyPlusValidatedFees)

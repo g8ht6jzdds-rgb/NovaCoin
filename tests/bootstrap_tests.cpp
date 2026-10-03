@@ -52,7 +52,7 @@ TEST_F(BootstrapConfigTest, AcceptsCanonicalManifestBoundToRegtestIdentity)
 TEST_F(BootstrapConfigTest, AcceptsBoundedCanonicalDnsSeedsOnlyWhenExplicitlyRequestedByDaemon)
 {
     Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
-          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c\n"
           "dnsseed=bootstrap-one.novacoin.test\n"
           "dnsseed=bootstrap-two.novacoin.test\n");
     const auto loaded =
@@ -67,7 +67,7 @@ TEST_F(BootstrapConfigTest, AcceptsBoundedCanonicalDnsSeedsOnlyWhenExplicitlyReq
 TEST_F(BootstrapConfigTest, AcceptsCanonicalHeaderOnlyTestnetConfiguration)
 {
     Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
-          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n");
+          "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c\n");
     const auto loaded =
         nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::TestnetNetworkParams());
     ASSERT_EQ(loaded.error, nova::node::BootstrapConfigError::kNone);
@@ -113,14 +113,14 @@ TEST_F(BootstrapConfigTest, RejectsNoncanonicalAndHostileInputs)
 TEST_F(BootstrapConfigTest, RejectsMalformedDuplicateAndExcessDnsSeeds)
 {
     Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
-          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c\n"
           "dnsseed=-bad.novacoin.test\n");
     EXPECT_EQ(
         nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::TestnetNetworkParams()).error,
         nova::node::BootstrapConfigError::kInvalidEndpoint);
 
     Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
-          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c\n"
           "dnsseed=one.novacoin.test\n"
           "dnsseed=one.novacoin.test\n");
     EXPECT_EQ(
@@ -128,7 +128,7 @@ TEST_F(BootstrapConfigTest, RejectsMalformedDuplicateAndExcessDnsSeeds)
         nova::node::BootstrapConfigError::kNonCanonical);
 
     Write("version=1\nnetwork=testnet\nmagic=dab5bffb\ngenesis="
-          "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048\n"
+          "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c\n"
           "dnsseed=one.novacoin.test\n"
           "dnsseed=two.novacoin.test\n"
           "dnsseed=three.novacoin.test\n"

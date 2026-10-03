@@ -74,9 +74,9 @@ TEST(NetworkParams, MatchesExactTestnetGenesisHashAndMerkleRoot)
 {
     const auto& parameters = TestnetNetworkParams();
     const auto expected_hash = nova::crypto::Hash256::FromHex(
-        "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048");
+        "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c");
     const auto expected_merkle = nova::crypto::Hash256::FromHex(
-        "e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c");
+        "9c6f883c0ad50f42cf53c822388789052b58ed350c2b7e3b7aa4bdea2f327a63");
     ASSERT_TRUE(expected_hash.has_value());
     ASSERT_TRUE(expected_merkle.has_value());
     EXPECT_EQ(parameters.genesis_hash, *expected_hash);
@@ -85,7 +85,7 @@ TEST(NetworkParams, MatchesExactTestnetGenesisHashAndMerkleRoot)
     EXPECT_EQ(parameters.genesis_block.header.version, 1);
     EXPECT_EQ(parameters.genesis_block.header.time, 1'704'153'600U);
     EXPECT_EQ(parameters.genesis_block.header.bits, 0x2070'FFFFU);
-    EXPECT_EQ(parameters.genesis_block.header.nonce, 0U);
+    EXPECT_EQ(parameters.genesis_block.header.nonce, 2U);
     ASSERT_EQ(parameters.genesis_block.transactions.size(), 1U);
     const auto& coinbase = parameters.genesis_block.transactions.front();
     ASSERT_EQ(coinbase.inputs.size(), 1U);
@@ -96,8 +96,13 @@ TEST(NetworkParams, MatchesExactTestnetGenesisHashAndMerkleRoot)
                                          0x61U, 0x43U, 0x6FU, 0x69U, 0x6EU, 0x20U, 0x54U,
                                          0x65U, 0x73U, 0x74U, 0x6EU, 0x65U, 0x74U, 0x20U,
                                          0x47U, 0x65U, 0x6EU, 0x65U, 0x73U, 0x69U, 0x73U}));
-    EXPECT_EQ(coinbase.outputs.front().value, 50LL * nova::consensus::COIN);
-    EXPECT_EQ(coinbase.outputs.front().script_pubkey, std::vector<std::uint8_t>({0x51U}));
+    EXPECT_EQ(coinbase.outputs.front().value, nova::consensus::TESTNET_CREATOR_ALLOCATION);
+    EXPECT_EQ(
+        coinbase.outputs.front().script_pubkey,
+        std::vector<std::uint8_t>({0x76U, 0xA9U, 0x14U, 0x37U, 0xF3U, 0x43U, 0x2CU, 0xB4U, 0x7AU,
+                                   0x3FU, 0x07U, 0x8EU, 0xD6U, 0x35U, 0x1CU, 0x5FU, 0xA2U, 0x5DU,
+                                   0x8CU, 0xFEU, 0xD1U, 0xADU, 0x64U, 0x88U, 0xACU}));
+    EXPECT_EQ(parameters.monetary.max_money, 31'000'000LL * nova::consensus::COIN);
 }
 
 TEST(NetworkParams, CommitsExactTestnetGenesisSerializationEvidence)
@@ -105,17 +110,18 @@ TEST(NetworkParams, CommitsExactTestnetGenesisSerializationEvidence)
     const auto& parameters = TestnetNetworkParams();
     nova::primitives::BinaryWriter writer;
     ASSERT_TRUE(parameters.genesis_block.Serialize(writer, parameters.block_limits));
-    EXPECT_EQ(Hex(writer.bytes()),
-              "01000000"
-              "0000000000000000000000000000000000000000000000000000000000000000"
-              "e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c"
-              "00529365ffff70200000000001"
-              "0100000001"
-              "0000000000000000000000000000000000000000000000000000000000000000"
-              "ffffffff1c005293654e6f7661436f696e20546573746e65742047656e65736973"
-              "000000000100f2052a01000000015100000000");
+    EXPECT_EQ(
+        Hex(writer.bytes()),
+        "01000000"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "9c6f883c0ad50f42cf53c822388789052b58ed350c2b7e3b7aa4bdea2f327a63"
+        "00529365ffff70200200000001"
+        "0100000001"
+        "0000000000000000000000000000000000000000000000000000000000000000"
+        "ffffffff1c005293654e6f7661436f696e20546573746e65742047656e65736973"
+        "00000000010080c6a47e8d03001976a91437f3432cb47a3f078ed6351c5fa25d8cfed1ad6488ac00000000");
     const auto expected_digest = nova::crypto::Hash256::FromHex(
-        "04678f985ea3de5a84dffa8536218b65e599950c114034855e18434003014d63");
+        "a44b52e7067d9724b2d2086ca5a015cf9e6f564f8a0c194c90465d40599dfc74");
     const auto digest = nova::crypto::Hash256::DoubleSha256(writer.bytes());
     ASSERT_TRUE(expected_digest.has_value());
     ASSERT_TRUE(digest.has_value());
@@ -188,6 +194,18 @@ TEST(NetworkParams, RejectsAnyTestnetGenesisMutation)
     EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidGenesisStructure);
 }
 
+TEST(NetworkParams, RejectsGenesisAllocationThatExceedsTheSupplyCap)
+{
+    auto altered = TestnetNetworkParams();
+    altered.genesis_block.transactions.front().outputs.front().value =
+        10'000'001LL * nova::consensus::COIN;
+    const auto merkle_root = nova::primitives::ComputeMerkleRoot(
+        altered.genesis_block.transactions, altered.block_limits.transaction_limits);
+    ASSERT_TRUE(merkle_root.has_value());
+    altered.genesis_block.header.merkle_root = *merkle_root;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kGenesisSupplyExceedsMaxMoney);
+}
+
 TEST(NetworkParams, KeepsMainnetDisabledAndExplicitlyNonFinal)
 {
     const auto& mainnet = MainnetNetworkParams();
@@ -235,16 +253,19 @@ TEST(GenesisGenerator, ReproducesRegtestFixtureAndRejectsMalformedInput)
 TEST(GenesisGenerator, ReproducesTestnetCandidateFixture)
 {
     const auto& parameters = TestnetNetworkParams();
-    const auto generated =
-        GenerateGenesis(GenesisRequest{1'704'153'600U, "NovaCoin Testnet Genesis", 0x2070'FFFFU,
-                                       50LL * nova::consensus::COIN},
-                        parameters.block_limits, 1U);
+    const auto generated = GenerateGenesis(
+        GenesisRequest{1'704'153'600U, "NovaCoin Testnet Genesis", 0x2070'FFFFU,
+                       nova::consensus::TESTNET_CREATOR_ALLOCATION,
+                       nova::crypto::Hash160{0x37U, 0xF3U, 0x43U, 0x2CU, 0xB4U, 0x7AU, 0x3FU,
+                                             0x07U, 0x8EU, 0xD6U, 0x35U, 0x1CU, 0x5FU, 0xA2U,
+                                             0x5DU, 0x8CU, 0xFEU, 0xD1U, 0xADU, 0x64U}},
+        parameters.block_limits, 3U);
     ASSERT_EQ(generated.error, GenesisError::kNone);
     ASSERT_TRUE(generated.block.has_value());
     ASSERT_TRUE(generated.block_hash.has_value());
     ASSERT_TRUE(generated.merkle_root.has_value());
-    EXPECT_EQ(generated.block->header.nonce, 0U);
-    EXPECT_EQ(generated.attempts, 1U);
+    EXPECT_EQ(generated.block->header.nonce, 2U);
+    EXPECT_EQ(generated.attempts, 3U);
     EXPECT_EQ(*generated.block_hash, parameters.genesis_hash);
     EXPECT_EQ(*generated.merkle_root, parameters.genesis_merkle_root);
 }
