@@ -45,7 +45,7 @@ record below is complete.
 | Minimum-difficulty exception | enabled |
 | No-retargeting | disabled |
 | Halving interval | `210000` |
-| Initial subsidy / maximum money | `5000000000` / `2100000000000000` base units |
+| Initial subsidy / maximum money | `5000000000` / `3100000000000000` base units |
 | Block limits | `1000000` bytes, `256` transactions |
 
 ## Candidate genesis commitment
@@ -59,12 +59,13 @@ must be compared byte-for-byte, not interpreted as host-order integers.
 | Previous block hash | 32 zero bytes |
 | Timestamp | `1704153600` |
 | Coinbase message, printable ASCII | `NovaCoin Testnet Genesis` |
-| Coinbase reward | `5000000000` base units |
+| Coinbase reward | `1000000000000000` base units (10,000,000 NOVA) |
+| Coinbase output | P2PKH `37f3432cb47a3f078ed6351c5fa25d8cfed1ad64` |
 | Header bits | `0x2070ffff` |
-| First valid nonce | `0` |
-| Generator attempts | `1` |
-| Merkle root | `e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c` |
-| Genesis block hash | `25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048` |
+| First valid nonce | `2` |
+| Generator attempts | `3` |
+| Merkle root | `9c6f883c0ad50f42cf53c822388789052b58ed350c2b7e3b7aa4bdea2f327a63` |
+| Genesis block hash | `7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c` |
 
 The candidate proof of work is valid only when the canonical header hash is
 compared using the documented NovaCoin little-endian hash interpretation
@@ -81,18 +82,19 @@ nova-genesis \
   --timestamp 1704153600 \
   --message "NovaCoin Testnet Genesis" \
   --target 2070ffff \
-  --reward 5000000000
+  --reward 1000000000000000 \
+  --recipient-p2pkh 37f3432cb47a3f078ed6351c5fa25d8cfed1ad64
 ```
 
 Expected candidate output:
 
 ```text
-nonce=0
-hash=25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048
-merkle_root=e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c
-block_hex=010000000000000000000000000000000000000000000000000000000000000000000000e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c00529365ffff7020000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1c005293654e6f7661436f696e20546573746e65742047656e65736973000000000100f2052a01000000015100000000
-block_sha256d=04678f985ea3de5a84dffa8536218b65e599950c114034855e18434003014d63
-attempts=1
+nonce=2
+hash=7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c
+merkle_root=9c6f883c0ad50f42cf53c822388789052b58ed350c2b7e3b7aa4bdea2f327a63
+block_hex=0100000000000000000000000000000000000000000000000000000000000000000000009c6f883c0ad50f42cf53c822388789052b58ed350c2b7e3b7aa4bdea2f327a6300529365ffff7020020000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1c005293654e6f7661436f696e20546573746e65742047656e6573697300000000010080c6a47e8d03001976a91437f3432cb47a3f078ed6351c5fa25d8cfed1ad6488ac00000000
+block_sha256d=a44b52e7067d9724b2d2086ca5a015cf9e6f564f8a0c194c90465d40599dfc74
+attempts=3
 ```
 
 On Windows, reviewers MUST use `scripts/verify_testnet_genesis.ps1`; it checks

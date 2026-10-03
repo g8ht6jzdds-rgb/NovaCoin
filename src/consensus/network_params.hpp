@@ -31,6 +31,7 @@ struct GenesisRequest final {
     std::string_view message;
     std::uint32_t compact_target{};
     primitives::Amount reward{};
+    std::optional<crypto::Hash160> p2pkh_recipient;
 };
 
 enum class GenesisError : std::uint8_t {
@@ -81,6 +82,7 @@ enum class NetworkParamsError : std::uint8_t {
     kInvalidDifficultyParameters,
     kInvalidBlockLimits,
     kInvalidGenesisStructure,
+    kGenesisSupplyExceedsMaxMoney,
     kInvalidGenesisParent,
     kInvalidGenesisTarget,
     kInvalidGenesisMerkleRoot,

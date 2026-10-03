@@ -478,6 +478,31 @@ coinbase transaction and Merkle root, canonical target, valid PoW, and exact
 hash test vector.  MAINNET remains **NOT FINAL — DO NOT DEPLOY**.  The
 parameter values and generator input contract are in `docs/networks.md`.
 
+### TESTNET creator allocation proposal
+
+This review branch proposes a TESTNET-only genesis allocation of
+`1,000,000,000,000,000` atomic units (10,000,000 NOVA).  The output uses the
+canonical P2PKH locking script for public-key hash
+`37f3432cb47a3f078ed6351c5fa25d8cfed1ad64`:
+
+```text
+OP_DUP OP_HASH160 PUSH20 37f3432cb47a3f078ed6351c5fa25d8cfed1ad64
+OP_EQUALVERIFY OP_CHECKSIG
+```
+
+The supplied textual source was a Base58Check address with version byte zero.
+That text is not a NovaCoin TESTNET address and is not committed as an address
+encoding; only its checksum-validated 20-byte public-key hash is committed.
+The allocation is immediately spendable by the holder of the matching private
+key.  It is part of TESTNET genesis only and has no consensus privilege.
+
+The proposed monetary cap is 31,000,000 NOVA.  The existing halving schedule
+remains bounded by 21,000,000 NOVA, so the 10,000,000-NOVA allocation plus
+scheduled subsidy issuance does not exceed the proposed cap.  The allocation,
+cap, P2PKH script, complete coinbase serialization, Merkle root, and genesis
+hash are immutable parameters once reviewed and merged.  TESTNET remains
+disabled pending its separate enablement decision.
+
 ## 18. Regtest integration harness
 
 The REGTEST integration harness runs isolated local node runtimes with

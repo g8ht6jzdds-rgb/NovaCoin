@@ -11,8 +11,9 @@ namespace nova::consensus
 using primitives::Amount;
 
 inline constexpr Amount COIN = 100'000'000LL;
-inline constexpr Amount MAX_MONEY = 21'000'000LL * COIN;
+inline constexpr Amount MAX_MONEY = 31'000'000LL * COIN;
 inline constexpr Amount INITIAL_SUBSIDY = 50LL * COIN;
+inline constexpr Amount TESTNET_CREATOR_ALLOCATION = 10'000'000LL * COIN;
 
 // Monetary constants are carried with the network's chain parameters so a
 // validator never relies on an implicit process-wide default.
