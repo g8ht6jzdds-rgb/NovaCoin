@@ -228,10 +228,10 @@ TEST(NetworkParams, KeepsMainnetDisabledAndExplicitlyNonFinal)
 TEST(GenesisGenerator, ReproducesRegtestFixtureAndRejectsMalformedInput)
 {
     const auto& parameters = RegtestNetworkParams();
-    const auto generated =
-        GenerateGenesis(GenesisRequest{1'704'067'200U, "NovaCoin Regtest Genesis", 0x207F'FFFFU,
-                                       50LL * nova::consensus::COIN},
-                        parameters.block_limits, 4U);
+    const auto generated = GenerateGenesis(
+        GenesisRequest{1'704'067'200U, "NovaCoin Regtest Genesis", 0x207F'FFFFU,
+                       50LL * nova::consensus::COIN, std::optional<nova::crypto::Hash160>{}},
+        parameters.block_limits, 4U);
     ASSERT_EQ(generated.error, GenesisError::kNone);
     ASSERT_TRUE(generated.block_hash.has_value());
     ASSERT_TRUE(generated.merkle_root.has_value());
@@ -239,14 +239,17 @@ TEST(GenesisGenerator, ReproducesRegtestFixtureAndRejectsMalformedInput)
     EXPECT_EQ(*generated.merkle_root, parameters.genesis_merkle_root);
     EXPECT_EQ(generated.attempts, 4U);
 
-    const auto invalid_message =
-        GenerateGenesis(GenesisRequest{1U, "\x01", 0x207F'FFFFU, 1}, parameters.block_limits, 1U);
+    const auto invalid_message = GenerateGenesis(
+        GenesisRequest{1U, "\x01", 0x207F'FFFFU, 1, std::optional<nova::crypto::Hash160>{}},
+        parameters.block_limits, 1U);
     EXPECT_EQ(invalid_message.error, GenesisError::kInvalidMessage);
-    const auto invalid_target =
-        GenerateGenesis(GenesisRequest{1U, "valid", 0x1D80'FFFFU, 1}, parameters.block_limits, 1U);
+    const auto invalid_target = GenerateGenesis(
+        GenesisRequest{1U, "valid", 0x1D80'FFFFU, 1, std::optional<nova::crypto::Hash160>{}},
+        parameters.block_limits, 1U);
     EXPECT_EQ(invalid_target.error, GenesisError::kInvalidTarget);
-    const auto invalid_reward =
-        GenerateGenesis(GenesisRequest{1U, "valid", 0x207F'FFFFU, -1}, parameters.block_limits, 1U);
+    const auto invalid_reward = GenerateGenesis(
+        GenesisRequest{1U, "valid", 0x207F'FFFFU, -1, std::optional<nova::crypto::Hash160>{}},
+        parameters.block_limits, 1U);
     EXPECT_EQ(invalid_reward.error, GenesisError::kInvalidReward);
 }
 
