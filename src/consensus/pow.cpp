@@ -163,7 +163,10 @@ TargetDecodeResult TargetFromCompact(const std::uint32_t compact) noexcept
     if (mantissa == 0U) {
         return {TargetError::kZero, std::nullopt};
     }
-    if (size > 34U || (mantissa > 0xFFU && size > 33U) || (mantissa > 0xFFFFU && size > 32U)) {
+    constexpr auto kTargetSize = static_cast<std::uint32_t>(Target256::kSize);
+    const auto mantissa_bytes = mantissa > 0xFFFFU ? 3U : (mantissa > 0xFFU ? 2U : 1U);
+    const auto exponent_bytes = size > 3U ? static_cast<std::uint32_t>(size) - 3U : 0U;
+    if (exponent_bytes + mantissa_bytes > kTargetSize) {
         return {TargetError::kOverflow, std::nullopt};
     }
 
@@ -175,10 +178,12 @@ TargetDecodeResult TargetFromCompact(const std::uint32_t compact) noexcept
                 (value >> static_cast<std::uint32_t>(8U * index)) & 0xFFU);
         }
     } else {
-        const auto offset = Target256::kSize - static_cast<std::size_t>(size);
-        target_bytes.at(offset) = static_cast<std::uint8_t>(mantissa >> 16U);
-        target_bytes.at(offset + 1U) = static_cast<std::uint8_t>(mantissa >> 8U);
-        target_bytes.at(offset + 2U) = static_cast<std::uint8_t>(mantissa);
+        const auto offset = static_cast<std::size_t>(kTargetSize - exponent_bytes - mantissa_bytes);
+        for (std::uint32_t index = 0U; index < mantissa_bytes; ++index) {
+            const auto shift = 8U * (mantissa_bytes - 1U - index);
+            target_bytes.at(offset + index) =
+                static_cast<std::uint8_t>((mantissa >> shift) & 0xFFU);
+        }
     }
 
     const Target256 target{target_bytes};

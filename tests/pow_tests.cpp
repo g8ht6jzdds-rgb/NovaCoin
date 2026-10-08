@@ -67,6 +67,27 @@ TEST(PowCompactTarget, RejectsMalformedAndNonCanonicalEncodings)
     EXPECT_EQ(TargetFromCompact(0x0400'0100U).error, TargetError::kNonCanonical);
 }
 
+TEST(PowCompactTarget, HandlesBoundaryMantissasWithoutOutOfRangeAccess)
+{
+    // 0x2100002a was found by fuzzing. It fits mathematically but is not the
+    // canonical compact representation of its target, so it must be rejected
+    // with a decode error rather than indexing before the 256-bit target.
+    EXPECT_EQ(TargetFromCompact(0x2100'002AU).error, TargetError::kNonCanonical);
+
+    const auto high_bit_boundary = TargetFromCompact(0x2100'8000U);
+    ASSERT_EQ(high_bit_boundary.error, TargetError::kNone);
+    ASSERT_TRUE(high_bit_boundary.target.has_value());
+    EXPECT_EQ(CompactFromTarget(*high_bit_boundary.target), 0x2100'8000U);
+
+    const auto max_boundary = TargetFromCompact(0x2100'FFFFU);
+    ASSERT_EQ(max_boundary.error, TargetError::kNone);
+    ASSERT_TRUE(max_boundary.target.has_value());
+    EXPECT_EQ(CompactFromTarget(*max_boundary.target), 0x2100'FFFFU);
+
+    EXPECT_EQ(TargetFromCompact(0x2101'0000U).error, TargetError::kOverflow);
+    EXPECT_EQ(TargetFromCompact(0x2200'00FFU).error, TargetError::kNonCanonical);
+}
+
 TEST(PowValidation, RejectsZeroAndTargetsAboveTheConfiguredLimit)
 {
     const Target256 zero{};
