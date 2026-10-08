@@ -135,11 +135,9 @@ checking that its next addition cannot exceed `money_supply_cap`.  One
 NovaCoin (`NOVA`) is exactly `100,000,000` atomic units, but no consensus
 calculation uses a decimal conversion.
 
-The parameter schema is normative.  The following *activation values* are
-intentionally not finalized in this first document: all genesis commitments,
-all subsidy values, the supply cap, every TESTNET and MAINNET PoW limit, and
-every resource limit. The development-only REGTEST PoW limit is documented in
-`docs/pow.md`; it is not an enablement decision for any network. Values MUST be
+The parameter schema is normative. REGTEST has a complete development table;
+the tagged TESTNET internal candidate has reviewed immutable values and exact
+vectors but remains non-activating; MAINNET remains non-final. Values MUST be
 selected in a reviewable parameter decision, recorded in this document and in
 compiled-in parameter tables, then covered by exact-vector tests before the
 corresponding network is enabled. A missing or invalid parameter is a
@@ -150,7 +148,7 @@ Initial enablement policy:
 | Network | `deployment_final` | `enabled` | Permitted use |
 | --- | --- | --- | --- |
 | `REGTEST` | `true` | `true` once its complete parameter table and genesis vector exist | local deterministic development |
-| `TESTNET` | `false` until a separately reviewed finalization change | `false` | no public network until finalization and a later, separate activation change |
+| `TESTNET` | `true` for the reviewed internal candidate | `false` | no public network until a later, separate activation change |
 | `MAINNET` | `false` | `false` | must remain disabled until an explicit later decision |
 
 A TESTNET finalization-review candidate MAY set `deployment_final=true` while
@@ -478,9 +476,9 @@ coinbase transaction and Merkle root, canonical target, valid PoW, and exact
 hash test vector.  MAINNET remains **NOT FINAL — DO NOT DEPLOY**.  The
 parameter values and generator input contract are in `docs/networks.md`.
 
-### TESTNET creator allocation proposal
+### TESTNET creator allocation
 
-This review branch proposes a TESTNET-only genesis allocation of
+The tagged internal candidate commits a TESTNET-only genesis allocation of
 `1,000,000,000,000,000` atomic units (10,000,000 NOVA).  The output uses the
 canonical P2PKH locking script for public-key hash
 `37f3432cb47a3f078ed6351c5fa25d8cfed1ad64`:
@@ -496,12 +494,12 @@ encoding; only its checksum-validated 20-byte public-key hash is committed.
 The allocation is immediately spendable by the holder of the matching private
 key.  It is part of TESTNET genesis only and has no consensus privilege.
 
-The proposed monetary cap is 31,000,000 NOVA.  The existing halving schedule
-remains bounded by 21,000,000 NOVA, so the 10,000,000-NOVA allocation plus
-scheduled subsidy issuance does not exceed the proposed cap.  The allocation,
-cap, P2PKH script, complete coinbase serialization, Merkle root, and genesis
-hash are immutable parameters once reviewed and merged.  TESTNET remains
-disabled pending its separate enablement decision.
+The monetary cap is 31,000,000 NOVA. The existing halving schedule remains
+bounded by 21,000,000 NOVA, so the 10,000,000-NOVA allocation plus scheduled
+subsidy issuance does not exceed the cap. The allocation, cap, P2PKH script,
+complete coinbase serialization, Merkle root, and genesis hash are immutable
+parameters in the tagged internal candidate. TESTNET remains disabled pending
+its separate enablement decision.
 
 ## 18. Regtest integration harness
 

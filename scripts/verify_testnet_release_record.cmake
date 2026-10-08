@@ -1,0 +1,60 @@
+cmake_minimum_required(VERSION 3.25)
+
+# This check deliberately validates release-facing copies of immutable TESTNET
+# values. The C++ parameter tests remain the authority for runtime behavior;
+# this script prevents examples and review records from silently drifting away
+# from that tested table.
+set(NOVA_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
+set(NOVA_TESTNET_HASH "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c")
+set(NOVA_TESTNET_MERKLE "9c6f883c0ad50f42cf53c822388789052b58ed350c2b7e3b7aa4bdea2f327a63")
+set(NOVA_TESTNET_RECIPIENT "37f3432cb47a3f078ed6351c5fa25d8cfed1ad64")
+set(NOVA_TESTNET_ALLOCATION "1000000000000000")
+set(NOVA_TESTNET_MAX_MONEY "31,000,000")
+set(NOVA_PRE_ALLOCATION_HASH "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048")
+
+function(nova_require_text path text)
+    file(READ "${path}" content)
+    string(FIND "${content}" "${text}" offset)
+    if(offset EQUAL -1)
+        message(FATAL_ERROR "${path} is missing required TESTNET release-record text: ${text}")
+    endif()
+endfunction()
+
+function(nova_forbid_text path text)
+    file(READ "${path}" content)
+    string(FIND "${content}" "${text}" offset)
+    if(NOT offset EQUAL -1)
+        message(FATAL_ERROR "${path} contains a superseded TESTNET release-record value: ${text}")
+    endif()
+endfunction()
+
+set(NOVA_PARAMETER_SOURCE "${NOVA_SOURCE_ROOT}/src/consensus/network_params.cpp")
+set(NOVA_MONETARY_SOURCE "${NOVA_SOURCE_ROOT}/src/consensus/monetary.hpp")
+set(NOVA_PARAMETER_TESTS "${NOVA_SOURCE_ROOT}/tests/network_params_tests.cpp")
+set(NOVA_BOOTSTRAP_EXAMPLE "${NOVA_SOURCE_ROOT}/contrib/testnet/static-bootstrap.conf.example")
+set(NOVA_BOOTSTRAP_MANIFEST "${NOVA_SOURCE_ROOT}/contrib/testnet/bootstrap-manifest.example.json")
+set(NOVA_DEPLOYMENT_REPORT "${NOVA_SOURCE_ROOT}/docs/TESTNET_DEPLOYMENT_REPORT.md")
+set(NOVA_GENESIS_REVIEW "${NOVA_SOURCE_ROOT}/docs/testnet-genesis-review.md")
+set(NOVA_NETWORKS_DOCUMENT "${NOVA_SOURCE_ROOT}/docs/networks.md")
+
+nova_require_text("${NOVA_PARAMETER_SOURCE}"
+    "NetworkId::kTestnet, false, true, 1, 1, 0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U},")
+nova_require_text("${NOVA_PARAMETER_SOURCE}" "2U, Hash({0x78U, 0x25U, 0x77U")
+nova_require_text("${NOVA_MONETARY_SOURCE}" "MAX_MONEY = 31'000'000LL * COIN")
+nova_require_text("${NOVA_MONETARY_SOURCE}" "TESTNET_CREATOR_ALLOCATION = 10'000'000LL * COIN")
+foreach(value IN ITEMS "${NOVA_TESTNET_HASH}" "${NOVA_TESTNET_MERKLE}" "${NOVA_TESTNET_RECIPIENT}")
+    nova_require_text("${NOVA_PARAMETER_TESTS}" "${value}")
+endforeach()
+
+nova_require_text("${NOVA_BOOTSTRAP_EXAMPLE}" "genesis=${NOVA_TESTNET_HASH}")
+nova_require_text("${NOVA_BOOTSTRAP_MANIFEST}" "\"genesis_hash\": \"${NOVA_TESTNET_HASH}\"")
+foreach(path IN ITEMS "${NOVA_DEPLOYMENT_REPORT}" "${NOVA_GENESIS_REVIEW}" "${NOVA_NETWORKS_DOCUMENT}")
+    foreach(value IN ITEMS "${NOVA_TESTNET_HASH}" "${NOVA_TESTNET_MERKLE}" "${NOVA_TESTNET_RECIPIENT}" "${NOVA_TESTNET_ALLOCATION}")
+        nova_require_text("${path}" "${value}")
+    endforeach()
+endforeach()
+nova_require_text("${NOVA_DEPLOYMENT_REPORT}" "${NOVA_TESTNET_MAX_MONEY}")
+nova_require_text("${NOVA_GENESIS_REVIEW}" "First valid nonce | `2`")
+nova_forbid_text("${NOVA_BOOTSTRAP_EXAMPLE}" "${NOVA_PRE_ALLOCATION_HASH}")
+nova_forbid_text("${NOVA_BOOTSTRAP_MANIFEST}" "${NOVA_PRE_ALLOCATION_HASH}")
+nova_forbid_text("${NOVA_DEPLOYMENT_REPORT}" "${NOVA_PRE_ALLOCATION_HASH}")

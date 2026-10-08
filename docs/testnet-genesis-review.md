@@ -1,12 +1,12 @@
 # NovaCoin testnet genesis review and approval record
 
 **Artifact ID:** `NOVACOIN-TESTNET-GENESIS-001`  
-**Status:** **PENDING — CANDIDATE ONLY — TESTNET DISABLED**  
-**Last reviewed source revision:** Pending clean, pinned-toolchain reproduction
+**Status:** **INTERNAL CANDIDATE FINALIZED — TESTNET DISABLED — PUBLIC OPERATIONS/ACTIVATION PENDING**
+**Last reviewed source revision:** `2b6f31f4f8aa9a3cb726dbdaa8069566afcab909` (`task021-engineering-candidate-2b6f31f`)
 
 This is the release-gate record for a public NovaCoin testnet genesis block.
-It deliberately distinguishes the currently compiled *candidate fixture* from
-a final, approved deployment commitment. No field below authorizes a launch.
+It distinguishes the compiled internal candidate from a final public deployment
+commitment. No field below authorizes a launch.
 No code reads this document to determine consensus validity or enablement.
 
 This finalization-review candidate changes only the review gate. Until every
@@ -24,11 +24,11 @@ one-bit activation; it does not replace the human review recorded here. The
 `deployment_final` value alone does not authorize a launch or TESTNET startup.
 MAINNET has an independent, stricter **NOT FINAL — DO NOT DEPLOY** gate.
 
-## Candidate immutable network parameters
+## Immutable internal-candidate network parameters
 
-These are candidate values copied from
-`src/consensus/network_params.cpp`. They are **not final** until the approval
-record below is complete.
+These values are copied from `src/consensus/network_params.cpp` at the reviewed
+revision. They are immutable for the internal candidate but do not authorize
+activation or public deployment.
 
 | Parameter | Candidate value |
 | --- | --- |
@@ -45,10 +45,10 @@ record below is complete.
 | Minimum-difficulty exception | enabled |
 | No-retargeting | disabled |
 | Halving interval | `210000` |
-| Initial subsidy / maximum money | `5000000000` / `3100000000000000` base units |
+| Initial subsidy / maximum money | `5000000000` / `3100000000000000` base units (31,000,000 NOVA) |
 | Block limits | `1000000` bytes, `256` transactions |
 
-## Candidate genesis commitment
+## Immutable internal-candidate genesis commitment
 
 All hex values below use NovaCoin's raw canonical-byte display order. They
 must be compared byte-for-byte, not interpreted as host-order integers.
@@ -86,7 +86,7 @@ nova-genesis \
   --recipient-p2pkh 37f3432cb47a3f078ed6351c5fa25d8cfed1ad64
 ```
 
-Expected candidate output:
+Expected output:
 
 ```text
 nonce=2
@@ -124,20 +124,20 @@ not approval.
 
 | Gate | Required evidence | Status |
 | --- | --- | --- |
-| Independent reproduction A | Clean pinned-toolchain command, source revision, full serialized block hex, hash, and Merkle root | Pending |
-| Independent reproduction B | Same artifacts produced independently by a second maintainer | Pending |
-| Parameter review | Magic, ports, prefixes, monetary table, limits, and difficulty policy checked for collisions and intended behavior | Pending |
-| PoW and serialization review | Canonical encoding, compact-target canonicality, nonce, raw hash order, Merkle root, and PoW comparison checked | Pending |
-| Test evidence | Exact candidate vectors pass; altered hash, root, target, and activation-without-finalization tests fail | Pending |
+| Independent reproduction A | Clean pinned-toolchain command, source revision, full serialized block hex, hash, and Merkle root | Signed record verified; declared control boundary is not independently audited |
+| Independent reproduction B | Same artifacts produced independently by a second maintainer | Signed record verified; declared control boundary is not independently audited |
+| Parameter review | Magic, ports, prefixes, monetary table, limits, and difficulty policy checked for collisions and intended behavior | Consensus-owner decision recorded on Issue #6 |
+| PoW and serialization review | Canonical encoding, compact-target canonicality, nonce, raw hash order, Merkle root, and PoW comparison checked | Exact vectors and post-merge compact-target regression reviewed; see Issue #6 and tag provenance |
+| Test evidence | Exact candidate vectors pass; altered hash, root, target, and activation-without-finalization tests fail | Exact-vector tests and exact-commit CI recorded; not a public-network test |
 | Public testnet operational review | Seed/bootstrap, monitoring, release rollback, abuse handling, and disclosure plan approved | Pending |
 | Explicit enablement decision | Separate reviewed commit sets `deployment_final=true` and then `enabled=true`; release owner records its revision | Pending |
 
-## Pre-approval engineering evidence (not an approval)
+## Historical pre-allocation engineering evidence (not current approval evidence)
 
-The following evidence was generated in the local development workspace on
-2026-08-22. It demonstrates that the candidate is internally reproducible; it
-does **not** establish either independent reproduction and does not authorize
-testnet deployment.
+The following 2026-08-22 local evidence predates the committed creator
+allocation and current genesis vectors. It is preserved as historical context
+only. It does **not** establish either independent reproduction, validate the
+current immutable candidate, or authorize testnet deployment.
 
 | Area | Evidence | Result |
 | --- | --- | --- |
@@ -167,10 +167,10 @@ are forbidden.
 
 | Role | Name | Date (UTC) | Source revision | Signature/reference |
 | --- | --- | --- | --- | --- |
-| Reproducer A | Pending | Pending | Pending | Pending |
-| Reproducer B | Pending | Pending | Pending | Pending |
-| Consensus reviewer | Pending | Pending | Pending | Pending |
-| Release owner | Pending | Pending | Pending | Pending |
+| Reproducer A | ALI NOUR EL HAJJ | 2026-10-08 | `2b6f31f4f8aa9a3cb726dbdaa8069566afcab909` | Signed record and control-boundary declaration audited outside the repository |
+| Reproducer B | Ali El Hajj | 2026-10-08 | `2b6f31f4f8aa9a3cb726dbdaa8069566afcab909` | Signed record and control-boundary declaration audited outside the repository |
+| Consensus reviewer | `ane23-dot` | 2026-10-08 | `2b6f31f4f8aa9a3cb726dbdaa8069566afcab909` | https://github.com/g8ht6jzdds-rgb/NovaCoin/issues/6#issuecomment-6061539588 |
+| Release owner | `anemee-coder` | 2026-10-08 | `2b6f31f4f8aa9a3cb726dbdaa8069566afcab909` | https://github.com/g8ht6jzdds-rgb/NovaCoin/issues/6#issuecomment-6061588246 |
 | Explicit enablement commit | Pending | Pending | Pending | Pending |
 
 ## Assigned review roles
@@ -181,10 +181,8 @@ approval signatures remain required in the table above.
 
 | Review role | Assigned owner | Status |
 | --- | --- | --- |
-| Consensus/parameter reviewer | ALI NOUR EL HAJJ | Assigned; independent review pending |
-| PoW and serialization reviewer | ALI NOUR EL HAJJ | Assigned; independent review pending |
-| Security reviewer | ALI NOUR EL HAJJ | Assigned; independent review pending |
-| Release owner | ALI NOUR EL HAJJ | Assigned; release decision pending |
+| Consensus/parameter owner | `ane23-dot` | Decision recorded on Issue #6; no activation authorization |
+| Release owner | `anemee-coder` | Decision recorded on Issue #6; no activation authorization |
 
 ## Activation rule
 
@@ -192,5 +190,5 @@ After approval, activation still requires a separate, reviewed source change
 that updates the immutable testnet table and exact regression vectors together.
 That change must set `deployment_final=true` before `enabled=true`, preserve
 all approved bytes exactly, and state the authorization reference. It must not
-change MAINNET status. Until that change lands, this document remains
-**PENDING — TESTNET DISABLED**.
+change MAINNET status. Until that change lands, TESTNET remains disabled and
+this document is not public-launch authorization.
