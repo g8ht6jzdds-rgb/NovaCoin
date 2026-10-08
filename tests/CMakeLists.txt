@@ -41,6 +41,10 @@ target_link_libraries(nova_unit_tests PRIVATE nova_faucet)
 add_test(NAME nova.unit COMMAND nova_unit_tests)
 set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")
 
+add_test(NAME nova.testnet_release_record
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_SOURCE_DIR}/scripts/verify_testnet_release_record.cmake)
+set_tests_properties(nova.testnet_release_record PROPERTIES LABELS "unit;testnet;release-record")
+
 if(UNIX)
     find_program(NOVA_BASH_EXECUTABLE bash REQUIRED)
     add_test(NAME nova.regtest_staging_collector

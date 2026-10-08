@@ -1,8 +1,9 @@
 # NovaCoin TESTNET deployment report
 
 **Status:** **NOT DEPLOYED — TESTNET DISABLED**
-**Report date:** 2026-08-23 UTC
-**Implementation revision:** `2a8c9d875221ca15542af719ee4d5582bf76696e`
+**Report date:** 2026-10-08 UTC
+**Implementation revision:** `2b6f31f4f8aa9a3cb726dbdaa8069566afcab909`
+**Internal engineering tag:** `task021-engineering-candidate-2b6f31f`
 
 This is a factual readiness record, not a release announcement or approval.
 It does not enable TESTNET and it does not change the independently disabled
@@ -20,13 +21,18 @@ MAINNET table.
 | Target spacing / retarget interval | 600 seconds / 2016 blocks |
 | Minimum-difficulty exception | enabled |
 | Initial subsidy / halving interval | 5000000000 base units / 210000 blocks |
+| Maximum money | `3100000000000000` base units (31,000,000 NOVA) |
 | Maximum block size / transactions | 1000000 bytes / 256 |
-| Genesis hash | `25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048` |
-| Genesis Merkle root | `e0e0d43c6ef8f42f2e2d07eaf89b8566d76fbc1d698d826e5f4a26e6a3d7724c` |
+| Genesis allocation / recipient | `1000000000000000` base units / P2PKH `37f3432cb47a3f078ed6351c5fa25d8cfed1ad64` |
+| Genesis nonce | `2` |
+| Genesis hash | `7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c` |
+| Genesis Merkle root | `9c6f883c0ad50f42cf53c822388789052b58ed350c2b7e3b7aa4bdea2f327a63` |
 
 The full canonical genesis block, coinbase message, nonce, target, and digest
 are committed in `docs/testnet-genesis-review.md`. Both
-`TestnetNetworkParams().enabled` and `.deployment_final` remain `false`.
+`TestnetNetworkParams().enabled` remains `false` and `.deployment_final` is
+`true`. That finalization bit is non-activating and does not authorize a
+deployment.
 
 ## Services
 
@@ -42,6 +48,17 @@ manifest. They are not deployed services and must not be populated with
 invented endpoints.
 
 ## Verification evidence
+
+### Internal successor candidate and genesis gate — 2026-10-08 UTC
+
+The signed internal engineering tag
+`task021-engineering-candidate-2b6f31f` resolves to
+`2b6f31f4f8aa9a3cb726dbdaa8069566afcab909`. The tag is signed by
+`77F0948246E379FA7BF17F779C30AE406D9271F1` and was verified from a fresh
+detached checkout. Issue #6 records the associated consensus-owner,
+release-owner, and limited tag decisions. Those records close only the internal
+immutable-genesis evidence gate; they do not authorize TESTNET activation,
+deployment, infrastructure, release packages, or public launch.
 
 ### OCI candidate reproduction — 2026-09-22 UTC
 
@@ -117,8 +134,8 @@ enablement candidate.
 
 ## Security considerations and known limitations
 
-- TESTNET is intentionally unavailable until independent genesis reproduction
-  and named reviews are complete.
+- TESTNET is intentionally unavailable pending a separate activation decision
+  and completion of the remaining operational launch gates.
 - No DNS seed is implemented or advertised. A manually configured peer is
   still required for future bootstrap testing.
 - No public faucet exists; any future faucet must be a separate service using
@@ -129,9 +146,8 @@ enablement candidate.
 
 ## Required work before deployment
 
-1. Obtain two genuinely independent pinned-toolchain genesis reproductions
-   and complete the named approval tables in
-   `docs/testnet-genesis-review.md` and `docs/testnet-operations-review.md`.
+1. Complete the operational review in `docs/testnet-operations-review.md` with
+   real named owners, dated evidence, and a rollback exercise.
 2. Provision independently operated Europe, North America, and Asia seed
    nodes with real endpoints, removal procedures, ownership contacts, and no
    consensus privilege.
@@ -147,7 +163,9 @@ enablement candidate.
 
 ## Remaining operational requirements
 
-- A second independently controlled, detached and signed reproduction record.
+- Reaudit the retained signed A/B genesis-reproduction evidence and its stated
+  control-boundary limitation before any activation decision; a signature alone
+  is not an independent operational audit.
 - A complete chain UTXO inspection method and its independent evidence; wallet
   `listunspent` observations are insufficient.
 - Three independently operated live seed nodes and, if enabled, DNS ownership

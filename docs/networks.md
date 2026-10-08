@@ -8,15 +8,16 @@ block commitment.  No caller may combine fields from different networks.
 | Network | P2P magic | P2P port | RPC port | P2P / minimum peer version | P2PKH prefix | PoW limit compact | spacing | halving | status |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | REGTEST | `0xDAB5BFFA` | 18444 | 18443 | 1 / 1 | 111 | `0x207fffff` | 600 s | 150 | enabled for local development |
-| TESTNET | `0xDAB5BFFB` | 28333 | 28332 | 1 / 1 | 112 | `0x2070ffff` | 600 s | 210000 | candidate fixture; approval pending and public deployment disabled |
+| TESTNET | `0xDAB5BFFB` | 28333 | 28332 | 1 / 1 | 112 | `0x2070ffff` | 600 s | 210000 | internal candidate finalized; activation and public deployment pending |
 | MAINNET | `0xDAB5BFFC` | 39333 | 39332 | 1 / 1 | 68 | `0x2060ffff` | 600 s | 210000 | **NOT FINAL — DO NOT DEPLOY** |
 
 REGTEST has `no_retargeting=true`; TESTNET permits minimum-difficulty blocks;
-MAINNET's difficulty policy is present only as a non-final placeholder.  The
-initial subsidy is 50 NOVA and the supply cap is 31,000,000 NOVA.  TESTNET has
-a 10,000,000-NOVA genesis P2PKH allocation, while its scheduled subsidy
-issuance remains bounded by 21,000,000 NOVA. Address prefixes are presentation data; they do not alter the
-P2PKH consensus script.
+MAINNET's difficulty policy is present only as a non-final placeholder. The
+initial subsidy is 50 NOVA and the supply cap is 31,000,000 NOVA. TESTNET has
+a 10,000,000-NOVA genesis P2PKH allocation to
+`37f3432cb47a3f078ed6351c5fa25d8cfed1ad64`, while its scheduled subsidy
+issuance remains bounded by 21,000,000 NOVA. Address prefixes are presentation
+data; they do not alter the P2PKH consensus script.
 
 All current tables use these explicit primitive limits: maximum transaction
 size 100,000 bytes, 128 inputs, 128 outputs, 256-byte scripts, 1,000,000-byte

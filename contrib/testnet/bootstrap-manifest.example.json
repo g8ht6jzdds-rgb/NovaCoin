@@ -4,7 +4,7 @@
     "id": "TESTNET",
     "magic": "DAB5BFFB",
     "p2p_port": 28333,
-    "genesis_hash": "25f944a00f3d559452b95653a20a039322ab3243a577d1cc3b8f48e4f30fd048"
+    "genesis_hash": "7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c"
   },
   "status": "UNPROVISIONED_EXAMPLE_ONLY",
   "seeds": [
