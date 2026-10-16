@@ -2,17 +2,22 @@
 set -euo pipefail
 
 # Runs four real novacoind processes and drives only their authenticated
-# localhost RPC interfaces.  It is intentionally regtest-only and makes no
+# localhost RPC interfaces plus a bounded loopback test peer. It is regtest-only and makes no
 # consensus decision itself: assertions query state already selected by nodes.
 
 daemon=${1:?usage: regtest_rpc_harness.sh /path/to/novacoind /path/to/nova-explorer}
 explorer=${2:?usage: regtest_rpc_harness.sh /path/to/novacoind /path/to/nova-explorer}
+invalid_block_peer=${3:?usage: regtest_rpc_harness.sh daemon explorer invalid-block-peer}
 if [[ ! -x "${daemon}" ]]; then
     echo "novacoind is not executable: ${daemon}" >&2
     exit 2
 fi
 if [[ ! -x "${explorer}" ]]; then
     echo "nova-explorer is not executable: ${explorer}" >&2
+    exit 2
+fi
+if [[ ! -x "${invalid_block_peer}" ]]; then
+    echo "invalid-block peer is not executable: ${invalid_block_peer}" >&2
     exit 2
 fi
 
@@ -201,6 +206,46 @@ wait_mempool 29642 1
 rpc 29643 generateregtestblock >/dev/null
 wait_height 29642 3
 wait_mempool 29643 0
+wait_mempool 29642 0
+
+# A canonical block with invalid PoW must reach the ordinary validator. A
+# disconnect alone would also pass for a framing error, so require the node's
+# specific rejection counter to advance and all active-chain state to stay put.
+stable_state() {
+    local response
+    response=$(rpc "$1" getnodehealth)
+    sed -n 's/.*"height":\([0-9]*\),"bestblockhash":"\([0-9a-f]*\)","chainwork":"\([0-9a-f]*\)","mempool_bytes":\([0-9]*\),"peers":[0-9]*,"mempool":\([0-9]*\).*/\1 \2 \3 \4 \5/p' <<<"${response}"
+}
+rejected_blocks() {
+    rpc "$1" getnodemetrics | sed -n 's/.*"blocks_rejected":\([0-9]*\).*/\1/p'
+}
+declare -A invalid_before=()
+for port in 29643 29642 29641 29640; do
+    invalid_before[${port}]=$(stable_state "${port}")
+    [[ -n "${invalid_before[${port}]}" ]]
+    printf '%s %s\n' "${port}" "${invalid_before[${port}]}" >>"${work_root}/invalid-block-before.txt"
+done
+rejected_before=$(rejected_blocks 29643)
+[[ "${rejected_before}" =~ ^[0-9]+$ ]]
+control_hash=$(rpc 29643 getblockchaininfo | sed -n 's/.*"bestblockhash":"\([0-9a-f]*\)".*/\1/p')
+[[ "${control_hash}" =~ ^[0-9a-f]{64}$ ]]
+set +e
+"${invalid_block_peer}" 29644 "${control_hash}" >"${work_root}/invalid-block-peer.log" 2>&1
+peer_exit=$?
+set -e
+printf 'exit=%s\n' "${peer_exit}" >>"${work_root}/invalid-block-peer.log"
+[[ "${peer_exit}" == 0 ]]
+rejected_after=$(rejected_blocks 29643)
+[[ "${rejected_after}" =~ ^[0-9]+$ ]]
+[[ "${rejected_after}" -eq $((rejected_before + 1)) ]]
+for port in 29643 29642 29641 29640; do
+    invalid_after=$(stable_state "${port}")
+    printf '%s %s\n' "${port}" "${invalid_after}" >>"${work_root}/invalid-block-after.txt"
+    [[ "${invalid_after}" == "${invalid_before[${port}]}" ]]
+done
+printf 'rejected_before=%s\nrejected_after=%s\n' "${rejected_before}" "${rejected_after}" >"${work_root}/invalid-block-counters.txt"
+# Subsequent ordinary mining/propagation and SIGTERM restart below remain
+# positive controls; successful completion is required before the result marker.
 
 # The independent explorer process obtains copied snapshots through the
 # authenticated node RPC endpoint, then exposes only its own authenticated

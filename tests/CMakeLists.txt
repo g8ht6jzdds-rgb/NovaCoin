@@ -46,6 +46,17 @@ add_test(NAME nova.testnet_release_record
 set_tests_properties(nova.testnet_release_record PROPERTIES LABELS "unit;testnet;release-record")
 
 if(UNIX)
+    add_executable(nova_regtest_invalid_block_peer regtest_invalid_block_peer.cpp)
+    nova_apply_project_options(nova_regtest_invalid_block_peer)
+    target_link_libraries(nova_regtest_invalid_block_peer PRIVATE nova_net nova_consensus)
+    add_test(NAME nova.invalid_block_peer_fixture
+        COMMAND nova_regtest_invalid_block_peer --self-test)
+    add_test(NAME nova.invalid_block_peer_arguments
+        COMMAND nova_regtest_invalid_block_peer 65536 not-a-hash)
+    set_tests_properties(nova.invalid_block_peer_arguments PROPERTIES WILL_FAIL TRUE)
+    set_tests_properties(nova.invalid_block_peer_fixture nova.invalid_block_peer_arguments
+        PROPERTIES TIMEOUT 5 LABELS "unit;regtest;p2p")
+
     find_program(NOVA_BASH_EXECUTABLE bash REQUIRED)
     add_test(NAME nova.regtest_staging_collector
         COMMAND ${NOVA_BASH_EXECUTABLE}
@@ -56,7 +67,8 @@ if(UNIX)
 
     add_test(NAME nova.regtest_rpc_process
         COMMAND ${NOVA_BASH_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/regtest_rpc_harness.sh
-                $<TARGET_FILE:novacoind> $<TARGET_FILE:nova-explorer>)
+                $<TARGET_FILE:novacoind> $<TARGET_FILE:nova-explorer>
+                $<TARGET_FILE:nova_regtest_invalid_block_peer>)
     set_tests_properties(nova.regtest_rpc_process PROPERTIES
         LABELS "integration;regtest;rpc;explorer" TIMEOUT 90
         ENVIRONMENT "NOVACOIN_REGTEST_ARTIFACT_DIR=${CMAKE_BINARY_DIR}/regtest-artifacts")

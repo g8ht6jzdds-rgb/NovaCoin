@@ -27,6 +27,17 @@ for result_file in "${result_files[@]}"; do
         echo "regtest harness did not complete successfully: ${result_file}" >&2
         exit 1
     fi
+    run_directory=$(dirname "${result_file}")
+    for evidence in invalid-block-peer.log invalid-block-before.txt invalid-block-after.txt invalid-block-counters.txt; do
+        if [[ ! -s "${run_directory}/${evidence}" ]]; then
+            echo "missing invalid-block evidence: ${evidence}" >&2
+            exit 1
+        fi
+    done
+    grep -Fxq 'structure_roundtrip=passed' "${run_directory}/invalid-block-peer.log"
+    grep -Fxq 'pow=invalid' "${run_directory}/invalid-block-peer.log"
+    grep -Fxq 'exit=0' "${run_directory}/invalid-block-peer.log"
+    cmp "${run_directory}/invalid-block-before.txt" "${run_directory}/invalid-block-after.txt"
 done
 
 echo "verified retained Unix multi-process regtest evidence"
