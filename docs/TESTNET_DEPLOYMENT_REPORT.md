@@ -9,6 +9,11 @@ This is a factual readiness record, not a release announcement or approval.
 It does not enable TESTNET and it does not change the independently disabled
 MAINNET table.
 
+The implementation/deployment distinctions below were checked against
+`4790342c5cf8d74a48c1b80a2a873891ebf8f68e` on 2026-10-16. The dated
+verification entries retain their original revisions and do not assert that
+historical tests were rerun on this revision.
+
 ## Candidate configuration
 
 | Item | Candidate value |
@@ -113,7 +118,7 @@ submitted a formal approval for pull request #1 at
 ASan, and UBSan jobs passed for that head. This report update requires a
 renewed review before merge. A detached operator attestation remains pending.
 
-Current-source pre-approval checks:
+Historical pre-approval checks recorded with the review above:
 
 | Check | Result |
 | --- | --- |
@@ -136,10 +141,15 @@ enablement candidate.
 
 - TESTNET is intentionally unavailable pending a separate activation decision
   and completion of the remaining operational launch gates.
-- No DNS seed is implemented or advertised. A manually configured peer is
-  still required for future bootstrap testing.
-- No public faucet exists; any future faucet must be a separate service using
-  TESTNET-only address decoding and an isolated encrypted hot wallet.
+- Optional DNS-seed parsing and explicit `--enable-dns-seeds` handling are
+  implemented, with bootstrap input tests. No public DNS seed is advertised
+  or operationally verified. Manually specified peers remain supported;
+  public TESTNET bootstrap and DNS ownership/removal tests remain pending.
+- A separate faucet implementation and tests exist under `src/faucet/` and
+  `tests/faucet_tests.cpp`, including TESTNET address restrictions, payout/rate
+  limits, durable audit state, and emergency disablement. No public faucet
+  exists. Actual encrypted wallet custody, funding, recovery, and deployed
+  payout/abuse tests remain required before accepting the service.
 - No public explorer, release package, signing identity, or operator-managed
   monitoring service exists.
 - Passing local or hosted tests is not a production-readiness claim.
@@ -153,13 +163,16 @@ enablement candidate.
    consensus privilege.
 3. Establish separate monitored hosts and credentials for seed nodes,
    explorer, faucet, monitoring, and administration; keep public RPC off.
-4. Implement and test a separately deployed faucet, release packaging/signing,
-   approved bootstrap manifest, deployment assets, and a public TESTNET
-   distributed validation exercise.
+4. Operationally validate and separately deploy the existing faucet after its
+   custody and environment prerequisites are accepted. Complete release
+   packaging/signing, review the bootstrap manifest and deployment assets,
+   and execute an authorized public TESTNET distributed validation exercise.
 5. Run the complete clean validation matrix and hosted Unix CI from the final
-   immutable enablement candidate, then make the separately reviewed
-   `deployment_final=true` followed by `enabled=true` changes without changing
-   the exact genesis vectors.
+   immutable enablement candidate. The internal TESTNET parameters already
+   have `deployment_final=true` while `enabled=false`. Any future enablement
+   change requires separate review and activation authority without changing
+   the exact genesis vectors. Internal finalization alone authorizes no
+   deployment or public launch; MAINNET remains disabled.
 
 ## Remaining operational requirements
 
