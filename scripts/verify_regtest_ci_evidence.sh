@@ -28,6 +28,25 @@ for result_file in "${result_files[@]}"; do
         exit 1
     fi
     run_directory=$(dirname "${result_file}")
+    for evidence in header-phase-peer.log header-before.txt header-held-1.txt header-held-2.txt header-held-3.txt header-after.txt header-restart.txt header-controls.txt; do
+        [[ -s "${run_directory}/${evidence}" ]]
+    done
+    for marker in source_connection_closed=true canonical_fixture=passed target_verack=true target_getheaders=genesis_locator helper_headers_queued=1 target_getdata=exact_block body_withheld=true release_observed=true helper_block_queued=1 body_flush_pump=passed target_confirmation_observed=true exit=0; do
+        grep -Fxq "${marker}" "${run_directory}/header-phase-peer.log"
+    done
+    # Preserve protocol order, not merely an unordered set of success markers.
+    previous=0
+    for marker in target_getheaders=genesis_locator helper_headers_queued=1 target_getdata=exact_block body_withheld=true release_observed=true helper_block_queued=1 body_flush_pump=passed target_confirmation_observed=true; do
+        line=$(grep -Fnx "${marker}" "${run_directory}/header-phase-peer.log" | cut -d: -f1)
+        [[ "${line}" =~ ^[0-9]+$ && "${line}" -gt "${previous}" ]]
+        previous=${line}
+    done
+    for observation in 1 2 3; do
+        cmp "${run_directory}/header-before.txt" "${run_directory}/header-held-${observation}.txt"
+    done
+    for marker in held_state=unchanged released_body=validated restart_persistence=passed; do
+        grep -Fxq "${marker}" "${run_directory}/header-controls.txt"
+    done
     for evidence in invalid-block-peer.log invalid-block-before.txt invalid-block-after.txt invalid-block-counters.txt; do
         if [[ ! -s "${run_directory}/${evidence}" ]]; then
             echo "missing invalid-block evidence: ${evidence}" >&2

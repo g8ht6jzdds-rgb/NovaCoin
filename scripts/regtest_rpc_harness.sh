@@ -9,7 +9,9 @@ daemon=${1:?usage: regtest_rpc_harness.sh /path/to/novacoind /path/to/nova-explo
 explorer=${2:?usage: regtest_rpc_harness.sh /path/to/novacoind /path/to/nova-explorer}
 invalid_block_peer=${3:?usage: regtest_rpc_harness.sh daemon explorer invalid-block-peer}
 invalid_transaction_peer=${4:?usage: regtest_rpc_harness.sh daemon explorer invalid-block-peer invalid-transaction-peer}
+header_phase_peer=${5:?usage: regtest_rpc_harness.sh daemon explorer invalid-block-peer invalid-transaction-peer header-phase-peer}
 [[ -x "${invalid_transaction_peer}" ]]
+[[ -x "${header_phase_peer}" ]]
 if [[ ! -x "${daemon}" ]]; then
     echo "novacoind is not executable: ${daemon}" >&2
     exit 2
@@ -91,6 +93,12 @@ mempool_size() {
     local response
     response=$(rpc_raw "$1" getmempoolinfo 2>/dev/null || true)
     sed -n 's/.*"size":\([0-9][0-9]*\).*/\1/p' <<<"${response}"
+}
+
+stable_state() {
+    local response
+    response=$(rpc "$1" getnodehealth)
+    sed -n 's/.*"height":\([0-9]*\),"bestblockhash":"\([0-9a-f]*\)","chainwork":"\([0-9a-f]*\)","mempool_bytes":\([0-9]*\),"peers":[0-9]*,"mempool":\([0-9]*\).*/\1 \2 \3 \4 \5/p' <<<"${response}"
 }
 
 wait_height() {
@@ -198,6 +206,89 @@ wait_height 29640 0
 # not fabricated blocks or direct store edits.
 rpc 29643 generateregtestblock >/dev/null
 wait_height 29642 1
+
+# A header is not a validated block. Feed Charlie only Alpha's first header,
+# observe its exact body request, then hold the body behind an explicit gate.
+header_persistent_state() {
+    local state wallet
+    state=$(stable_state "$1")
+    wallet=$(rpc "$1" listunspent)
+    [[ -n "${state}" ]]
+    printf '%s %s\n' "${state}" "${wallet}"
+}
+header_state() {
+    local persistent counters
+    persistent=$(header_persistent_state "$1")
+    counters=$(rpc "$1" getnodemetrics | sed -n 's/.*"blocks_accepted":\([0-9]*\),"blocks_rejected":\([0-9]*\),"transactions_accepted":\([0-9]*\),"transactions_rejected":\([0-9]*\).*/\1 \2 \3 \4/p')
+    [[ "${counters}" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]]
+    printf '%s %s\n' "${persistent}" "${counters}"
+}
+wait_header_marker() {
+    local marker=$1
+    for _ in $(seq 1 240); do
+        if [[ -s "${header_phase_root}/${marker}" ]]; then
+            kill -0 "${header_peer_pid}"
+            return 0
+        fi
+        kill -0 "${header_peer_pid}"
+        sleep 0.05
+    done
+    echo "header peer phase timed out: ${marker}" >&2
+    return 1
+}
+declare -A header_before=()
+for port in 29641 29640; do
+    wait_height "${port}" 0
+    wait_mempool "${port}" 0
+    header_before[${port}]=$(header_state "${port}")
+    printf '%s %s\n' "${port}" "${header_before[${port}]}" >>"${work_root}/header-before.txt"
+done
+header_hash=$(rpc 29643 getblockchaininfo | sed -n 's/.*"bestblockhash":"\([0-9a-f]*\)".*/\1/p')
+[[ "${header_hash}" =~ ^[0-9a-f]{64}$ ]]
+header_phase_root="${work_root}/header-phase"
+mkdir "${header_phase_root}"
+"${header_phase_peer}" 29644 29638 "${header_hash}" "${header_phase_root}" \
+    >"${work_root}/header-phase-peer.log" 2>&1 &
+header_peer_pid=$!
+pids+=("${header_peer_pid}")
+wait_header_marker listening.txt
+rpc 29641 connectpeer '{"host":"127.0.0.1","port":29638}' >/dev/null
+wait_header_marker requested.txt
+for observation in 1 2 3; do
+    for port in 29641 29640; do
+        held=$(header_state "${port}")
+        printf '%s %s\n' "${port}" "${held}" >>"${work_root}/header-held-${observation}.txt"
+        [[ "${held}" == "${header_before[${port}]}" ]]
+    done
+    # Charlie retains its Delta link plus helper; Delta retains only Charlie.
+    [[ "$(rpc 29641 getpeerinfo)" == *'"count":2'* ]]
+    [[ "$(rpc 29640 getpeerinfo)" == *'"count":1'* ]]
+    [[ ! -e "${header_phase_root}/flushed.txt" ]]
+    kill -0 "${header_peer_pid}"
+    sleep 0.1
+done
+printf 'release=true\n' >"${header_phase_root}/release.txt"
+wait_header_marker flushed.txt
+source_state=$(stable_state 29643)
+for port in 29641 29640; do
+    wait_height "${port}" 1
+    state=$(stable_state "${port}")
+    [[ "${state}" == "${source_state}" ]]
+    printf '%s %s\n' "${port}" "${state}" >>"${work_root}/header-after.txt"
+done
+printf 'done=true\n' >"${header_phase_root}/done.txt"
+wait "${header_peer_pid}"
+printf 'exit=0\n' >>"${work_root}/header-phase-peer.log"
+header_restart_expected=$(header_persistent_state 29641)
+charlie_pid=${pids[2]}
+kill -TERM "${charlie_pid}"
+wait "${charlie_pid}"
+start_node charlie 29646 29641 29647
+wait_height 29641 1
+[[ "$(header_persistent_state 29641)" == "${header_restart_expected}" ]]
+printf '%s\n' "${header_restart_expected}" >"${work_root}/header-restart.txt"
+printf 'held_state=unchanged\nreleased_body=validated\nrestart_persistence=passed\n' >"${work_root}/header-controls.txt"
+
 rpc 29643 generateregtestblock >/dev/null
 wait_height 29642 2
 bravo_address=$(address 29642)
@@ -213,11 +304,6 @@ wait_mempool 29642 0
 # A canonical block with invalid PoW must reach the ordinary validator. A
 # disconnect alone would also pass for a framing error, so require the node's
 # specific rejection counter to advance and all active-chain state to stay put.
-stable_state() {
-    local response
-    response=$(rpc "$1" getnodehealth)
-    sed -n 's/.*"height":\([0-9]*\),"bestblockhash":"\([0-9a-f]*\)","chainwork":"\([0-9a-f]*\)","mempool_bytes":\([0-9]*\),"peers":[0-9]*,"mempool":\([0-9]*\).*/\1 \2 \3 \4 \5/p' <<<"${response}"
-}
 rejected_blocks() {
     rpc "$1" getnodemetrics | sed -n 's/.*"blocks_rejected":\([0-9]*\).*/\1/p'
 }
