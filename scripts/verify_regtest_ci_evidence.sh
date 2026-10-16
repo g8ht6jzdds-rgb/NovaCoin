@@ -38,6 +38,25 @@ for result_file in "${result_files[@]}"; do
     grep -Fxq 'pow=invalid' "${run_directory}/invalid-block-peer.log"
     grep -Fxq 'exit=0' "${run_directory}/invalid-block-peer.log"
     cmp "${run_directory}/invalid-block-before.txt" "${run_directory}/invalid-block-after.txt"
+    for evidence in invalid-transaction.hex valid-transaction.hex invalid-transaction-prepare.log invalid-transaction-peer.log invalid-transaction-before.txt invalid-transaction-after.txt invalid-transaction-counters.txt invalid-transaction-controls.txt valid-transaction-peer.log; do
+        [[ -s "${run_directory}/${evidence}" ]]
+    done
+    for marker in canonical_roundtrip=passed signature_authorization=passed preflight=kInputValueTooLow peer_closed_after_submission=true exit=0; do
+        grep -Fxq "${marker}" "${run_directory}/invalid-transaction-peer.log"
+    done
+    cmp "${run_directory}/invalid-transaction-before.txt" "${run_directory}/invalid-transaction-after.txt"
+    for marker in valid_propagation=passed valid_confirmation=passed restart_persistence=passed; do
+        grep -Fxq "${marker}" "${run_directory}/invalid-transaction-controls.txt"
+    done
+    grep -Fxq 'preflight=kNone' "${run_directory}/valid-transaction-peer.log"
+    grep -Fxq 'valid_control_flushed=true' "${run_directory}/valid-transaction-peer.log"
+    rejected_before=$(sed -n 's/^rejected_before=//p' "${run_directory}/invalid-transaction-counters.txt")
+    rejected_after=$(sed -n 's/^rejected_after=//p' "${run_directory}/invalid-transaction-counters.txt")
+    accepted_before=$(sed -n 's/^accepted_before=//p' "${run_directory}/invalid-transaction-counters.txt")
+    accepted_after=$(sed -n 's/^accepted_after=//p' "${run_directory}/invalid-transaction-counters.txt")
+    [[ "${rejected_before}" =~ ^[0-9]+$ && "${rejected_after}" =~ ^[0-9]+$ ]]
+    [[ "${accepted_before}" =~ ^[0-9]+$ && "${accepted_after}" == "${accepted_before}" ]]
+    [[ "${rejected_after}" -eq $((rejected_before + 1)) ]]
 done
 
 echo "verified retained Unix multi-process regtest evidence"
