@@ -46,6 +46,12 @@ add_test(NAME nova.testnet_release_record
 set_tests_properties(nova.testnet_release_record PROPERTIES LABELS "unit;testnet;release-record")
 
 if(UNIX)
+    find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME nova.regtest_static_bootstrap
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test_static_bootstrap.py
+                $<TARGET_FILE:novacoind> ${CMAKE_BINARY_DIR}/regtest-artifacts)
+    set_tests_properties(nova.regtest_static_bootstrap PROPERTIES
+        LABELS "integration;regtest;bootstrap" TIMEOUT 180)
     add_executable(nova_regtest_header_phase_peer regtest_header_phase_peer.cpp)
     nova_apply_project_options(nova_regtest_header_phase_peer)
     target_link_libraries(nova_regtest_header_phase_peer PRIVATE nova_net nova_consensus)

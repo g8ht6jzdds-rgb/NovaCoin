@@ -79,3 +79,17 @@ for result_file in "${result_files[@]}"; do
 done
 
 echo "verified retained Unix multi-process regtest evidence"
+
+grep -Eq 'nova\.regtest_static_bootstrap.*Passed' "${ctest_log}"
+mapfile -t bootstrap_results < <(find "${artifact_directory}" -type f -name bootstrap-result.txt -print)
+[[ ${#bootstrap_results[@]} -gt 0 ]]
+for result in "${bootstrap_results[@]}"; do
+    grep -Fxq 'result=passed' "${result}"
+    directory=$(dirname "${result}")
+    python3 "$(dirname "${BASH_SOURCE[0]}")/test_static_bootstrap.py" --verify "${directory}"
+    (cd "${directory}" && sha256sum --strict --check SHA256SUMS)
+    for case in network genesis magic late-genesis; do
+        grep -Fxq 'invalid static bootstrap configuration' "${directory}/rejected-${case}.txt"
+    done
+done
+echo "verified retained static-bootstrap process evidence"

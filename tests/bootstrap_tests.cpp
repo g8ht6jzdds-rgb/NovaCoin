@@ -84,11 +84,40 @@ TEST_F(BootstrapConfigTest, RejectsCanonicalHeaderOnlyConfigurationForOtherNetwo
         nova::node::BootstrapConfigError::kNonCanonical);
 }
 
-TEST_F(BootstrapConfigTest, RejectsWrongNetworkGenesisAndMagic)
+TEST_F(BootstrapConfigTest, RejectsWrongNetwork)
 {
     Write("version=1\nnetwork=testnet\nmagic=dab5bffa\ngenesis="
           "c974d11a5276ca7eb69b1ec0a8062fb47b49c02f5ac726532483d090ac53eb79\nseed=seed.example:"
           "18444\n");
+    EXPECT_EQ(
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::RegtestNetworkParams()).error,
+        nova::node::BootstrapConfigError::kNetworkMismatch);
+}
+
+TEST_F(BootstrapConfigTest, RejectsWrongGenesisWithCorrectNetworkAndMagic)
+{
+    Write("version=1\nnetwork=regtest\nmagic=dab5bffa\ngenesis="
+          "d974d11a5276ca7eb69b1ec0a8062fb47b49c02f5ac726532483d090ac53eb79\n"
+          "seed=127.0.0.1:18444\n");
+    EXPECT_EQ(
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::RegtestNetworkParams()).error,
+        nova::node::BootstrapConfigError::kNetworkMismatch);
+}
+
+TEST_F(BootstrapConfigTest, RejectsWrongMagicWithCorrectNetworkAndGenesis)
+{
+    Write("version=1\nnetwork=regtest\nmagic=dab5bff0\ngenesis="
+          "c974d11a5276ca7eb69b1ec0a8062fb47b49c02f5ac726532483d090ac53eb79\n"
+          "seed=127.0.0.1:18444\n");
+    EXPECT_EQ(
+        nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::RegtestNetworkParams()).error,
+        nova::node::BootstrapConfigError::kNetworkMismatch);
+}
+
+TEST_F(BootstrapConfigTest, RejectsLateWrongGenesisAfterValidSeed)
+{
+    Write("version=1\nnetwork=regtest\nmagic=dab5bffa\nseed=127.0.0.1:18444\ngenesis="
+          "d974d11a5276ca7eb69b1ec0a8062fb47b49c02f5ac726532483d090ac53eb79\n");
     EXPECT_EQ(
         nova::node::LoadStaticBootstrapConfig(path_, nova::consensus::RegtestNetworkParams()).error,
         nova::node::BootstrapConfigError::kNetworkMismatch);
