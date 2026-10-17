@@ -45,9 +45,8 @@ harness_result="failed"
 cleanup() {
     local pid
     for pid in "${pids[@]}"; do
-        if kill -0 "${pid}" 2>/dev/null; then
-            kill "${pid}" 2>/dev/null || true
-            wait "${pid}" 2>/dev/null || true
+        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+            stop_owned_node "${pid}" || true
         fi
     done
     if [[ -n "${artifact_root}" ]]; then
@@ -57,6 +56,29 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+
+stop_owned_node() {
+    local pid=$1 index
+    kill -TERM "${pid}"
+    for _ in $(seq 1 100); do
+        kill -0 "${pid}" 2>/dev/null || break
+        sleep 0.05
+    done
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -KILL "${pid}" 2>/dev/null || true
+    fi
+    local status=0
+    wait "${pid}" || status=$?
+    for index in "${!pids[@]}"; do
+        if [[ "${pids[${index}]}" == "${pid}" ]]; then pids[${index}]=""; fi
+    done
+    return "${status}"
+}
+
+reorg_phase() {
+    NOVACOIN_RPC_PASSWORD="${rpc_password}" python3 -B \
+        "$(dirname "${BASH_SOURCE[0]}")/test_reorg_persistence.py" "$1" "${work_root}"
+}
 
 rpc_raw() {
     local port=$1
@@ -281,8 +303,7 @@ wait "${header_peer_pid}"
 printf 'exit=0\n' >>"${work_root}/header-phase-peer.log"
 header_restart_expected=$(header_persistent_state 29641)
 charlie_pid=${pids[2]}
-kill -TERM "${charlie_pid}"
-wait "${charlie_pid}"
+stop_owned_node "${charlie_pid}"
 start_node charlie 29646 29641 29647
 wait_height 29641 1
 [[ "$(header_persistent_state 29641)" == "${header_restart_expected}" ]]
@@ -426,47 +447,20 @@ printf 'valid_propagation=passed\nvalid_confirmation=passed\n' >"${work_root}/in
 start_explorer 29643 29639
 wait_explorer_height 29639 4
 
-# Restart alpha from its journal and encrypted wallet; its active tip must be
-# restored before it reconnects to bravo.
+# Restart alpha from its journal and encrypted wallet, then reconnect to bravo.
+# The final reorg phases below separately prove recovery with no live peers.
 alpha_pid=${pids[0]}
-kill "${alpha_pid}"
-wait "${alpha_pid}" || true
+stop_owned_node "${alpha_pid}"
 start_node alpha 29644 29643 29645
 wait_height 29643 4
 [[ "$(rpc 29643 listunspent)" == "${control_wallet}" ]]
 [[ "$(rpc_raw 29643 getutxo "${utxo_params}")" == *'"error"'* ]]
 printf 'restart_persistence=passed\n' >>"${work_root}/invalid-transaction-controls.txt"
 
-# The second partition already shares the parent. Sever all live sockets.
-# Each partition now mines a competing branch from height 4.
-wait_height 29641 4
-wait_height 29640 4
-for port in 29643 29642 29641 29640; do
-    rpc "${port}" disconnectpeers >/dev/null
-done
-sleep 1
-# Re-form only the winning partition's internal link after severing all prior
-# sockets; alpha remains isolated on the competing branch.
-rpc 29641 connectpeer '{"host":"127.0.0.1","port":29647}' >/dev/null
-wait_height 29640 4
-
-# The transaction is confirmed only on alpha's lower-work side branch.
-bravo_address=$(address 29642)
-rpc 29643 sendtoaddress "{\"address\":\"${bravo_address}\",\"amount\":100000000}" >/dev/null
-wait_mempool 29643 1
-rpc 29643 generateregtestblock >/dev/null
-wait_height 29643 5
-wait_mempool 29643 0
-rpc 29641 generateregtestblock >/dev/null
-rpc 29641 generateregtestblock >/dev/null
-wait_height 29640 6
-
-# Reconnect the branches. Greater verified chainwork on charlie's branch must
-# win; alpha disconnects its payment block and restores that transaction.
-rpc 29643 connectpeer '{"host":"127.0.0.1","port":29646}' >/dev/null
-wait_height 29643 6
-wait_mempool 29643 1
-wait_explorer_height 29639 6
+# Exact winning-work/hash, resurrected transaction and UTXO controls. The helper
+# only drives existing loopback RPC; all validation remains in the daemon.
+reorg_phase fork
+wait_explorer_height 29639 7
 
 # Negative control: malformed raw transaction input remains rejected by RPC
 # and cannot alter a process's mempool.
@@ -475,14 +469,20 @@ invalid=$(rpc_raw 29643 sendwallettransaction '{"hex":"00"}')
 [[ "${invalid}" == *'"error"'* ]]
 [[ "$(mempool_size 29643)" == "${before}" ]]
 
-# SIGTERM must take the daemon through its ordinary shutdown path: listeners
-# close and the encrypted wallet is atomically persisted before a zero exit.
-# Restarting from the same data directory must recover the active chain.
+# Two isolated SIGTERM/restart controls: restore confirmed reorg state, append a
+# new block, then restore that exact new state before Bravo's catch-up control.
 alpha_pid=${last_started_pid}
-kill -TERM "${alpha_pid}"
-wait "${alpha_pid}"
+stop_owned_node "${alpha_pid}"
+printf 'exit=0\n' >"${work_root}/reorg-stop-first.txt"
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/test_reorg_persistence.py" --closed "${work_root}"
 start_node alpha 29644 29643
-wait_height 29643 6
+reorg_phase restart-first
+stop_owned_node "${last_started_pid}"
+printf 'exit=0\n' >"${work_root}/reorg-stop-second.txt"
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/test_reorg_persistence.py" --closed "${work_root}"
+start_node alpha 29644 29643
+reorg_phase restart-second
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/test_reorg_persistence.py" --verify "${work_root}"
 
 harness_result="passed"
 echo "RPC-driven multi-process regtest harness passed"
