@@ -1,6 +1,7 @@
 #pragma once
 
 #include "net/transport.hpp"
+#include "node/peer_discovery.hpp"
 #include "node/regtest_node.hpp"
 #include "node/sync.hpp"
 
@@ -27,6 +28,7 @@ class PeerService final
     [[nodiscard]] net::TransportResult Pump(std::uint64_t now) noexcept;
     [[nodiscard]] std::size_t peer_count() const noexcept;
     [[nodiscard]] net::PeerManager& peer_manager() noexcept;
+    [[nodiscard]] bool EnableDiscovery(std::uint16_t listening_port) noexcept;
     // Local node actions are explicitly relayed through the same framed P2P
     // transport used for remote messages; this never bypasses node validation.
     void RelayBlock(const primitives::Block& block) noexcept;
@@ -43,6 +45,7 @@ class PeerService final
     RegtestNode& node_;
     std::unique_ptr<net::TcpTransport> transport_;
     Synchronizer synchronizer_;
+    std::unique_ptr<PeerDiscovery> discovery_;
 };
 
 } // namespace nova::node

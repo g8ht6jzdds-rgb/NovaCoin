@@ -200,6 +200,11 @@ struct Peer final {
     Connection connection;
 };
 
+struct PeerStatus final {
+    ConnectionDirection direction{ConnectionDirection::kInbound};
+    bool established{};
+};
+
 struct PeerManagerParams final {
     ConnectionParams connection;
     std::uint32_t max_inbound_peers{};
@@ -233,6 +238,9 @@ class PeerManager final
     // one closes, so peer limits cannot be exhausted by stale entries.
     void Disconnect(std::uint64_t peer_id) noexcept;
     [[nodiscard]] std::size_t peer_count() const noexcept;
+
+    [[nodiscard]] std::optional<PeerStatus> Status(std::uint64_t peer_id) const noexcept;
+    [[nodiscard]] std::size_t outbound_count() const noexcept;
 
   private:
     [[nodiscard]] std::optional<std::uint64_t> Add(ConnectionDirection direction,

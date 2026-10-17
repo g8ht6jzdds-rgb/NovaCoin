@@ -93,3 +93,11 @@ for result in "${bootstrap_results[@]}"; do
     done
 done
 echo "verified retained static-bootstrap process evidence"
+
+grep -Eq 'nova\.regtest_peer_discovery.*Passed' "${ctest_log}"
+mapfile -t discovery_runs < <(find "${artifact_directory}" -maxdepth 1 -type d -name 'discovery.*' -print)
+[[ ${#discovery_runs[@]} -gt 0 ]]
+for directory in "${discovery_runs[@]}"; do
+    python3 -B "$(dirname "${BASH_SOURCE[0]}")/test_peer_discovery.py" --verify "${directory}"
+done
+echo "verified retained REGTEST discovery evidence"

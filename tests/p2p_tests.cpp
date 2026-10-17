@@ -134,12 +134,47 @@ TEST(PeerManager, EnforcesHandshakeQueueAndConnectionLimits)
     EXPECT_EQ(manager.peer_count(), 0U);
 }
 
+TEST(P2PMessages, GetAddrRequiresEmptyPayloadAndAddrRejectsNoncanonicalCounts)
+{
+    const auto params = TestProtocolParams();
+    EXPECT_TRUE(
+        nova::net::DeserializeMessage(nova::net::Command::kGetAddr, {}, params).has_value());
+    const std::array<std::uint8_t, 1U> trailing{0U};
+    EXPECT_FALSE(
+        nova::net::DeserializeMessage(nova::net::Command::kGetAddr, trailing, params).has_value());
+    const std::array<std::uint8_t, 3U> noncanonical{0xFDU, 1U, 0U};
+    EXPECT_FALSE(
+        nova::net::DeserializeMessage(nova::net::Command::kAddr, noncanonical, params).has_value());
+    nova::net::PeerManager manager{{TestConnectionParams(), 1U, 1U}};
+    const auto peer = manager.AddInbound(0U);
+    ASSERT_TRUE(peer.has_value());
+    const auto message =
+        nova::net::SerializeMessage({nova::net::Command::kGetAddr, std::monostate{}}, params);
+    ASSERT_TRUE(message.has_value());
+    EXPECT_EQ(manager.Receive(*peer, *message, 1U).error, nova::net::P2PError::kHandshakeViolation);
+    EXPECT_FALSE(manager.Status(*peer).has_value());
+}
+
 TEST(TcpTransport, RejectsUnsafeBufferAndAcceptLimitsBeforeOpeningSockets)
 {
     const nova::net::PeerManagerParams peers{TestConnectionParams(), 1U, 1U};
     EXPECT_EQ(nova::net::TcpTransport::Create({peers, 0U, 1024U, 1U}), nullptr);
     EXPECT_EQ(nova::net::TcpTransport::Create({peers, 1024U, 0U, 1U}), nullptr);
     EXPECT_EQ(nova::net::TcpTransport::Create({peers, 1024U, 1024U, 0U}), nullptr);
+}
+
+TEST(TcpTransport, NumericDialRejectsHostnameAndExhaustedCapacity)
+{
+    auto transport =
+        nova::net::TcpTransport::Create({{TestConnectionParams(), 1U, 1U}, 1024U, 1024U, 1U});
+    ASSERT_NE(transport, nullptr);
+    EXPECT_FALSE(transport->DialNumeric({"localhost", 18444U}, 0U).has_value());
+    EXPECT_EQ(transport->peer_count(), 0U);
+    auto full =
+        nova::net::TcpTransport::Create({{TestConnectionParams(), 1U, 0U}, 1024U, 1024U, 1U});
+    ASSERT_NE(full, nullptr);
+    EXPECT_FALSE(full->DialNumeric({"127.0.0.1", 18444U}, 0U).has_value());
+    EXPECT_EQ(full->peer_count(), 0U);
 }
 
 } // namespace

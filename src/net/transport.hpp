@@ -42,6 +42,13 @@ struct TransportResult final {
     std::size_t disconnected{};
 };
 
+struct TransportPeer final {
+    std::uint64_t id{};
+    PeerStatus status;
+    std::optional<TcpEndpoint> outbound_target;
+    std::optional<std::array<std::uint8_t, 4U>> source_ipv4;
+};
+
 // Owns all native sockets through RAII. It only forwards canonical messages
 // emitted by PeerManager; consensus state remains in the caller's handler.
 class TcpTransport final
@@ -60,6 +67,11 @@ class TcpTransport final
     [[nodiscard]] TransportError Listen(const TcpEndpoint& endpoint) noexcept;
     [[nodiscard]] std::optional<std::uint64_t> Dial(const TcpEndpoint& endpoint,
                                                     std::uint64_t now) noexcept;
+    // Discovery only: numeric resolution, pre-socket capacity check, short
+    // establishment deadline. Explicit/manual Dial retains its old semantics.
+    [[nodiscard]] std::optional<std::uint64_t> DialNumeric(const TcpEndpoint& endpoint,
+                                                           std::uint64_t now) noexcept;
+    [[nodiscard]] std::optional<std::vector<TransportPeer>> Peers() const noexcept;
     [[nodiscard]] TransportError Queue(std::uint64_t peer_id,
                                        const FramedMessage& message) noexcept;
     void Broadcast(const FramedMessage& message,
@@ -78,6 +90,8 @@ class TcpTransport final
     explicit TcpTransport(std::unique_ptr<Impl> implementation) noexcept;
 
     std::unique_ptr<Impl> implementation_;
+    [[nodiscard]] std::optional<std::uint64_t> DialImpl(const TcpEndpoint& endpoint,
+                                                        std::uint64_t now, bool numeric) noexcept;
 };
 
 } // namespace nova::net
