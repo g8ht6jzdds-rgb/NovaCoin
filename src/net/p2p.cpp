@@ -706,6 +706,23 @@ std::size_t PeerManager::peer_count() const noexcept
     return peers_.size();
 }
 
+std::optional<PeerStatus> PeerManager::Status(const std::uint64_t peer_id) const noexcept
+{
+    const auto found = peers_.find(peer_id);
+    return found == peers_.end()
+               ? std::nullopt
+               : std::optional<PeerStatus>{
+                     {found->second.direction, found->second.connection.established()}};
+}
+
+std::size_t PeerManager::outbound_count() const noexcept
+{
+    return static_cast<std::size_t>(
+        std::count_if(peers_.begin(), peers_.end(), [](const auto& item) {
+            return item.second.direction == ConnectionDirection::kOutbound;
+        }));
+}
+
 std::optional<std::uint64_t> PeerManager::Add(const ConnectionDirection direction,
                                               const std::uint64_t now) noexcept
 {

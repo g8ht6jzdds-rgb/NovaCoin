@@ -30,6 +30,9 @@ target_link_libraries(fuzz_address_parser PRIVATE nova_explorer)
 nova_add_fuzzer(fuzz_compact_target compact_target_fuzz.cpp)
 target_link_libraries(fuzz_compact_target PRIVATE nova_consensus)
 
+nova_add_fuzzer(fuzz_peer_discovery peer_discovery_fuzz.cpp)
+target_link_libraries(fuzz_peer_discovery PRIVATE nova_node)
+
 add_custom_target(nova_fuzzers DEPENDS
     fuzz_deserializer
     fuzz_transaction_deserializer
@@ -37,4 +40,5 @@ add_custom_target(nova_fuzzers DEPENDS
     fuzz_network_message
     fuzz_script_signature
     fuzz_address_parser
-    fuzz_compact_target)
+    fuzz_compact_target
+    fuzz_peer_discovery)

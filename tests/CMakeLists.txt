@@ -12,6 +12,7 @@ add_executable(nova_unit_tests
     chainstate_tests.cpp
     mempool_tests.cpp
     p2p_tests.cpp
+    peer_discovery_tests.cpp
     wallet_tests.cpp
     address_tests.cpp
     rpc_tests.cpp
@@ -47,6 +48,11 @@ set_tests_properties(nova.testnet_release_record PROPERTIES LABELS "unit;testnet
 
 if(UNIX)
     find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME nova.regtest_peer_discovery
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_peer_discovery.py
+                $<TARGET_FILE:novacoind> ${CMAKE_BINARY_DIR}/regtest-artifacts)
+    set_tests_properties(nova.regtest_peer_discovery PROPERTIES
+        LABELS "integration;regtest;discovery" TIMEOUT 180)
     add_test(NAME nova.regtest_static_bootstrap
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test_static_bootstrap.py
                 $<TARGET_FILE:novacoind> ${CMAKE_BINARY_DIR}/regtest-artifacts)

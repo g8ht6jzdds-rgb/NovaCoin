@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <openssl/rand.h>
 #include <utility>
 
 namespace nova::node
@@ -16,6 +17,14 @@ namespace
                              std::chrono::system_clock::now().time_since_epoch())
                              .count();
     return seconds <= 0 ? 0U : static_cast<std::uint64_t>(seconds);
+}
+
+[[nodiscard]] std::uint64_t DiscoverySeconds() noexcept
+{
+    const auto value = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    return value <= 0 ? 0U : static_cast<std::uint64_t>(value);
 }
 
 [[nodiscard]] chain::BlockValidationParams
@@ -95,12 +104,66 @@ std::optional<std::uint64_t> PeerService::Dial(const net::TcpEndpoint& endpoint,
 
 net::TransportResult PeerService::Pump(const std::uint64_t now) noexcept
 {
+    if (discovery_ != nullptr) {
+        try {
+            const auto peers = transport_->Peers();
+            if (peers.has_value()) {
+                discovery_->Update(*peers, DiscoverySeconds());
+            } else {
+                discovery_.reset();
+            }
+        } catch (...) {
+            discovery_.reset(); // fail closed for discovery only
+        }
+    }
     const auto result = transport_->Pump(
         now, [this](const std::uint64_t peer_id, const net::FramedMessage& message) {
             Handle(peer_id, message);
         });
     node_.RecordTransportResult(result);
+    if (discovery_ != nullptr) {
+        try {
+            const auto tick = DiscoverySeconds();
+            const auto peers = transport_->Peers();
+            if (!peers.has_value()) {
+                discovery_.reset();
+                return result;
+            }
+            discovery_->Update(*peers, tick);
+            for (const auto peer : discovery_->Requests(tick)) {
+                if (transport_->Queue(peer, {net::Command::kGetAddr, std::monostate{}}) !=
+                    net::TransportError::kNone) {
+                    discovery_->RequestFailed(peer);
+                }
+            }
+            std::uint64_t random{};
+            const auto entropy = RAND_bytes(reinterpret_cast<unsigned char*>(&random),
+                                            static_cast<int>(sizeof(random))) == 1
+                                     ? std::optional<std::uint64_t>{random}
+                                     : std::nullopt;
+            const auto endpoint = discovery_->Next(tick, entropy);
+            if (endpoint.has_value()) {
+                discovery_->Attempt(*endpoint, transport_->DialNumeric(endpoint->Numeric(), now),
+                                    tick);
+            }
+        } catch (...) {
+            discovery_.reset();
+        }
+    }
     return result;
+}
+
+bool PeerService::EnableDiscovery(const std::uint16_t listening_port) noexcept
+{
+    if (node_.network_params().id != consensus::NetworkId::kRegtest || listening_port == 0U) {
+        return false;
+    }
+    try {
+        discovery_ = std::make_unique<PeerDiscovery>(listening_port);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::size_t PeerService::peer_count() const noexcept
@@ -137,7 +200,38 @@ void PeerService::QueueRequests(const std::uint64_t peer_id, const SyncResult& r
 
 void PeerService::Handle(const std::uint64_t peer_id, const net::FramedMessage& message) noexcept
 {
+    if (discovery_ != nullptr &&
+        (message.command == net::Command::kAddr || message.command == net::Command::kGetAddr)) {
+        try {
+            const auto tick = DiscoverySeconds();
+            if (message.command == net::Command::kGetAddr) {
+                const auto reply = discovery_->Reply(peer_id, tick);
+                if (reply.has_value()) {
+                    static_cast<void>(transport_->Queue(peer_id, {net::Command::kAddr, *reply}));
+                }
+            } else if (const auto* addresses = std::get_if<net::AddressMessage>(&message.message)) {
+                discovery_->Receive(peer_id, *addresses, tick);
+            }
+        } catch (...) {
+            discovery_.reset();
+        }
+        return;
+    }
     if (message.command == net::Command::kVerack) {
+        // Refresh once at handshake, not per addr/getaddr. Replayed address
+        // traffic must hit cheap source quotas before any full topology scan.
+        if (discovery_ != nullptr) {
+            try {
+                const auto peers = transport_->Peers();
+                if (peers.has_value()) {
+                    discovery_->Update(*peers, DiscoverySeconds());
+                } else {
+                    discovery_.reset();
+                }
+            } catch (...) {
+                discovery_.reset();
+            }
+        }
         QueueRequests(peer_id, synchronizer_.Start());
         return;
     }

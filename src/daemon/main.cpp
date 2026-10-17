@@ -119,6 +119,7 @@ int main(const int argc, char* argv[])
     std::vector<nova::net::TcpEndpoint> peers;
     std::optional<std::filesystem::path> bootstrap_config;
     bool enable_dns_seeds{};
+    bool peer_discovery{};
     std::optional<nova::consensus::NetworkId> network;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option{argv[index]};
@@ -144,6 +145,14 @@ int main(const int argc, char* argv[])
                 return 2;
             }
             network = nova::consensus::NetworkId::kMainnet;
+            continue;
+        }
+        if (option == "--peer-discovery") {
+            if (peer_discovery) {
+                std::cerr << "duplicate --peer-discovery option\n";
+                return 2;
+            }
+            peer_discovery = true;
             continue;
         }
         if (option == "--enable-dns-seeds") {
@@ -192,7 +201,8 @@ int main(const int argc, char* argv[])
         std::cerr
             << "usage: novacoind --regtest|--testnet|--mainnet --name <name> --datadir <path> "
                "--p2pport <port> --rpcport <port> --logfile <path> [--p2pbind loopback|wildcard] "
-               "[--connect host:port] [--bootstrap static-bootstrap.conf] [--enable-dns-seeds]\n";
+               "[--connect host:port] [--bootstrap static-bootstrap.conf] [--enable-dns-seeds] "
+               "[--peer-discovery]\n";
         return 2;
     }
     const auto selection = nova::node::SelectNetwork(*network);
@@ -203,6 +213,11 @@ int main(const int argc, char* argv[])
         return 1;
     }
     const auto p2p_bind = p2p_bind_address.value_or("127.0.0.1");
+    if (peer_discovery &&
+        (*network != nova::consensus::NetworkId::kRegtest || p2p_bind != "127.0.0.1")) {
+        std::cerr << "peer discovery requires REGTEST IPv4 loopback\n";
+        return 2;
+    }
     if (IsWildcardP2pBindAddress(p2p_bind) && *network != nova::consensus::NetworkId::kTestnet) {
         std::cerr << "public P2P binding is permitted only for TESTNET\n";
         return 2;
@@ -299,6 +314,7 @@ int main(const int argc, char* argv[])
                                                  *rpc_port, start_time, passphrase, *network});
     auto peer_service = node == nullptr ? nullptr : nova::node::PeerService::Create(*node);
     if (node == nullptr || peer_service == nullptr ||
+        (peer_discovery && !peer_service->EnableDiscovery(*p2p_port)) ||
         peer_service->Listen({p2p_bind, *p2p_port}) != nova::net::TransportError::kNone) {
         std::cerr << nova::node::NetworkName(*network) << " node P2P initialization failed\n";
         return 1;

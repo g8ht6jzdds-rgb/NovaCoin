@@ -51,9 +51,9 @@ def reserve_ports(count):
 
 
 class Sentinel:
-    def __init__(self):
+    def __init__(self, host="127.0.0.1"):
         self.listener = socket.socket()
-        self.listener.bind(("127.0.0.1", 0))
+        self.listener.bind((host, 0))
         self.listener.listen(16)
         self.listener.settimeout(0.05)
         self.port = self.listener.getsockname()[1]
@@ -159,7 +159,7 @@ class Harness:
         self.events = []
         self.poll_deadline = None
 
-    def start(self, name, p2p, rpc, bootstrap=None):
+    def start(self, name, p2p, rpc, bootstrap=None, discovery=False):
         root = self.runtime / name
         root.mkdir(exist_ok=True)
         data = root / "data"
@@ -169,6 +169,8 @@ class Harness:
                 "--logfile", str(root / "node.log")]
         if bootstrap is not None:
             args += ["--bootstrap", str(bootstrap)]
+        if discovery:
+            args += ["--peer-discovery"]
         require("--connect" not in args and "--enable-dns-seeds" not in args,
                 "unexpected alternate bootstrap route")
         env = os.environ.copy()

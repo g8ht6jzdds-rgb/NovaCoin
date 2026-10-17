@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -27,6 +28,14 @@ namespace nova::net
 {
 namespace
 {
+
+[[nodiscard]] std::uint64_t SteadySeconds() noexcept
+{
+    const auto value = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    return value <= 0 ? 0U : static_cast<std::uint64_t>(value);
+}
 
 #ifdef _WIN32
 using NativeSocket = SOCKET;
@@ -118,7 +127,8 @@ class Socket final
 #endif
 }
 
-[[nodiscard]] std::optional<Socket> ConnectSocket(const TcpEndpoint& endpoint) noexcept
+[[nodiscard]] std::optional<Socket> ConnectSocket(const TcpEndpoint& endpoint,
+                                                  const bool numeric) noexcept
 {
     if (endpoint.host.empty() || endpoint.host.size() > 255U || endpoint.port == 0U) {
         return std::nullopt;
@@ -128,6 +138,7 @@ class Socket final
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;
+        hints.ai_flags = numeric ? AI_NUMERICHOST | AI_NUMERICSERV : 0;
         addrinfo* results = nullptr;
         const auto port = std::to_string(endpoint.port);
         if (getaddrinfo(endpoint.host.c_str(), port.c_str(), &hints, &results) != 0) {
@@ -206,6 +217,8 @@ struct TcpTransport::Impl final {
         Socket socket;
         std::vector<std::uint8_t> pending_send;
         std::size_t sent_offset{};
+        std::optional<TcpEndpoint> target;
+        std::optional<std::uint64_t> discovery_started;
     };
 
     explicit Impl(TcpTransportParams input) noexcept
@@ -273,10 +286,27 @@ TransportError TcpTransport::Listen(const TcpEndpoint& endpoint) noexcept
 std::optional<std::uint64_t> TcpTransport::Dial(const TcpEndpoint& endpoint,
                                                 const std::uint64_t now) noexcept
 {
+    return DialImpl(endpoint, now, false);
+}
+
+std::optional<std::uint64_t> TcpTransport::DialNumeric(const TcpEndpoint& endpoint,
+                                                       const std::uint64_t now) noexcept
+{
+    return DialImpl(endpoint, now, true);
+}
+
+std::optional<std::uint64_t> TcpTransport::DialImpl(const TcpEndpoint& endpoint,
+                                                    const std::uint64_t now,
+                                                    const bool numeric) noexcept
+{
     if (implementation_ == nullptr) {
         return std::nullopt;
     }
-    auto socket = ConnectSocket(endpoint);
+    if (numeric && implementation_->peers.outbound_count() >=
+                       implementation_->parameters.peers.max_outbound_peers) {
+        return std::nullopt;
+    }
+    auto socket = ConnectSocket(endpoint, numeric);
     if (!socket.has_value()) {
         return std::nullopt;
     }
@@ -285,8 +315,47 @@ std::optional<std::uint64_t> TcpTransport::Dial(const TcpEndpoint& endpoint,
         return std::nullopt;
     }
     try {
-        implementation_->sockets.emplace(*peer, Impl::PeerSocket{std::move(*socket), {}, 0U});
+        implementation_->sockets.emplace(
+            *peer, Impl::PeerSocket{std::move(*socket),
+                                    {},
+                                    0U,
+                                    endpoint,
+                                    numeric ? std::optional<std::uint64_t>{SteadySeconds()}
+                                            : std::nullopt});
         return peer;
+    } catch (...) {
+        implementation_->peers.Disconnect(*peer);
+        return std::nullopt;
+    }
+}
+
+std::optional<std::vector<TransportPeer>> TcpTransport::Peers() const noexcept
+{
+    if (implementation_ == nullptr) {
+        return std::nullopt;
+    }
+    try {
+        std::vector<TransportPeer> result;
+        for (const auto& [id, socket] : implementation_->sockets) {
+            const auto status = implementation_->peers.Status(id);
+            if (!status.has_value()) {
+                continue;
+            }
+            std::optional<std::array<std::uint8_t, 4U>> ip;
+            sockaddr_storage remote{};
+            auto size = static_cast<NativeSocketLength>(sizeof(remote));
+            if (getpeername(socket.socket.get(), reinterpret_cast<sockaddr*>(&remote), &size) ==
+                    0 &&
+                remote.ss_family == AF_INET) {
+                const auto* address = reinterpret_cast<const sockaddr_in*>(&remote);
+                std::array<std::uint8_t, 4U> bytes{};
+                std::copy_n(reinterpret_cast<const std::uint8_t*>(&address->sin_addr), 4U,
+                            bytes.begin());
+                ip = bytes;
+            }
+            result.push_back({id, *status, socket.target, ip});
+        }
+        return result;
     } catch (...) {
         return std::nullopt;
     }
@@ -341,7 +410,8 @@ TransportResult TcpTransport::Pump(const std::uint64_t now, const MessageHandler
             if (!peer.has_value()) {
                 continue;
             }
-            implementation_->sockets.emplace(*peer, Impl::PeerSocket{std::move(accepted), {}, 0U});
+            implementation_->sockets.emplace(
+                *peer, Impl::PeerSocket{std::move(accepted), {}, 0U, std::nullopt, std::nullopt});
         }
 
         std::size_t dispatched{};
@@ -351,6 +421,17 @@ TransportResult TcpTransport::Pump(const std::uint64_t now, const MessageHandler
             const auto peer_id = iterator->first;
             auto& socket = iterator->second;
             bool remove = false;
+            const auto status = implementation_->peers.Status(peer_id);
+            const auto steady_now = SteadySeconds();
+            if (socket.discovery_started.has_value() && status.has_value() &&
+                !status->established &&
+                (steady_now < *socket.discovery_started ||
+                 steady_now - *socket.discovery_started >= 5U)) {
+                implementation_->peers.Disconnect(peer_id);
+                iterator = implementation_->sockets.erase(iterator);
+                ++disconnected;
+                continue;
+            }
             const auto received =
                 recv(socket.socket.get(), reinterpret_cast<char*>(read_buffer.data()),
                      static_cast<NativeSocketIoSize>(read_buffer.size()), 0);
@@ -409,6 +490,18 @@ TransportResult TcpTransport::Pump(const std::uint64_t now, const MessageHandler
             }
         }
         implementation_->peers.Tick(now);
+        // Tick may expire protocol state; release corresponding native sockets
+        // in the same pump rather than keeping stale outbound capacity alive.
+        for (auto item = implementation_->sockets.begin();
+             item != implementation_->sockets.end();) {
+            if (!implementation_->peers.Status(item->first).has_value()) {
+                implementation_->close_requested.erase(item->first);
+                item = implementation_->sockets.erase(item);
+                ++disconnected;
+            } else {
+                ++item;
+            }
+        }
         return {TransportError::kNone, dispatched, disconnected};
     } catch (...) {
         return {TransportError::kAllocationFailure, 0U, 0U};
