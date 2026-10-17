@@ -31,7 +31,8 @@ class SyncProgress : public testing::Test
                   network.difficulty,
                   network.protocol_version,
                   2U,
-                  2'000U};
+                  2'000U,
+                  4'096U};
         const auto target =
             nova::consensus::TargetFromCompact(network.genesis_block.header.bits, network.pow)
                 .target.value();
@@ -164,7 +165,7 @@ TEST_F(SyncProgress, DeduplicatesRepeatedBodyRequestsWithinEachResponse)
     const auto second = Make(Hash(first), 2U);
     EXPECT_EQ(Requests(Headers(sync, {first, first, second, first, second})),
               (std::vector<Hash256>{Hash(first), Hash(second)}));
-    EXPECT_EQ(sync.header_count(), 3U);
+    EXPECT_EQ(sync.header_count(), 2U);
 }
 
 TEST_F(SyncProgress, InvalidSuffixRollsBackPrefixAndBestTipThenAllowsRetry)
@@ -202,7 +203,7 @@ TEST_F(SyncProgress, PreservesExistingPendingPrefixAfterBadPowAndUnknownParent)
     }
     ASSERT_FALSE(nova::consensus::CheckProofOfWork(Hash(bad), target));
     EXPECT_EQ(Headers(sync, {first, bad}).error, SyncError::kBadProofOfWork);
-    EXPECT_EQ(sync.header_count(), 2U);
+    EXPECT_EQ(sync.header_count(), 1U);
     EXPECT_EQ(sync.best_header_tip(), Hash(first));
     bad.header.previous_block_id = Hash(second);
     EXPECT_EQ(Headers(sync, {first, bad}).error, SyncError::kUnknownHeaderParent);
@@ -216,7 +217,142 @@ TEST_F(SyncProgress, RejectsOversizedResponseWithoutChangingProgress)
     nova::node::Synchronizer sync{params, *state};
     const auto first = Make(state->active_tip(), 1U);
     EXPECT_EQ(Headers(sync, {first, first}).error, SyncError::kInvalidParameters);
-    EXPECT_EQ(sync.header_count(), 1U);
+    EXPECT_EQ(sync.header_count(), 0U);
     EXPECT_EQ(state->active_height(), 0U);
+}
+TEST_F(SyncProgress, SaturationRollsBackWholeBatchPreservingPendingWork)
+{
+    params.max_pending_headers = 2U;
+    nova::node::Synchronizer sync{params, *state};
+    const auto first = Make(state->active_tip(), 1U);
+    const auto second = Make(Hash(first), 2U);
+    const auto third = Make(Hash(second), 3U);
+    EXPECT_EQ(Requests(Headers(sync, {first})), std::vector<Hash256>{Hash(first)});
+    const auto best = sync.best_header_tip();
+    for (unsigned int retry = 0U; retry < 4U; ++retry) {
+        const auto result = Headers(sync, {second, third});
+        EXPECT_EQ(result.error, SyncError::kPendingHeaderLimit);
+        EXPECT_TRUE(result.requests.empty());
+        EXPECT_EQ(sync.header_count(), 1U);
+        EXPECT_EQ(sync.best_header_tip(), best);
+    }
+    EXPECT_EQ(Requests(Headers(sync, {first, second})),
+              (std::vector<Hash256>{Hash(first), Hash(second)}));
+    EXPECT_EQ(sync.header_count(), 2U);
+    EXPECT_EQ(Locator(sync), network.genesis_hash);
+    EXPECT_EQ(Requests(Headers(sync, {second, first, second})),
+              (std::vector<Hash256>{Hash(second), Hash(first)}));
+    EXPECT_EQ(Headers(sync, {third}).error, SyncError::kPendingHeaderLimit);
+    Accept(first); // actual authoritative delivery, outside Synchronizer
+    EXPECT_EQ(Requests(Headers(sync, {second, third})),
+              (std::vector<Hash256>{Hash(second), Hash(third)}));
+    EXPECT_EQ(sync.header_count(), 2U);
+    EXPECT_EQ(Locator(sync), Hash(first));
+    EXPECT_EQ(sync.best_header_tip(), Hash(third));
+}
+
+TEST_F(SyncProgress, ValidatedChainBeyondQuotaUsesNoPendingSlots)
+{
+    params.max_pending_headers = 1U;
+    auto tip = state->active_tip();
+    for (std::uint32_t height = 1U; height <= 8U; ++height) {
+        const auto block = Make(tip, height);
+        Accept(block);
+        tip = Hash(block);
+    }
+    nova::node::Synchronizer sync{params, *state};
+    EXPECT_EQ(sync.header_count(), 0U);
+    EXPECT_EQ(Locator(sync), tip);
+    const auto ninth = Make(tip, 9U);
+    EXPECT_EQ(Requests(Headers(sync, {ninth})), std::vector<Hash256>{Hash(ninth)});
+    Accept(ninth);
+    const auto tenth = Make(Hash(ninth), 10U);
+    EXPECT_EQ(Requests(Headers(sync, {ninth, tenth})), std::vector<Hash256>{Hash(tenth)});
+    EXPECT_EQ(sync.header_count(), 1U);
+    EXPECT_EQ(state->active_height(), 9U);
+    const auto metadata = state->GetHeaderMetadata(Hash(ninth));
+    ASSERT_TRUE(metadata.has_value());
+    const auto copied = state->GetBlockIndex(Hash(ninth));
+    ASSERT_TRUE(copied.has_value());
+    EXPECT_EQ(metadata->chain_work, copied->chain_work);
+    EXPECT_EQ(metadata->bits, ninth.header.bits);
+    EXPECT_FALSE(state->GetHeaderMetadata(Hash(tenth)).has_value());
+}
+
+TEST_F(SyncProgress, InvalidBodiesCannotReclaimCapacity)
+{
+    params.max_pending_headers = 1U;
+    nova::node::Synchronizer sync{params, *state};
+    const auto first = Make(state->active_tip(), 1U);
+    const auto second = Make(Hash(first), 2U);
+    EXPECT_EQ(Requests(Headers(sync, {first})), std::vector<Hash256>{Hash(first)});
+    auto invalid = first;
+    invalid.transactions.clear();
+    EXPECT_NE(state->AcceptBlock(invalid).error, nova::chain::ChainError::kNone);
+    EXPECT_EQ(Headers(sync, {second}).error, SyncError::kPendingHeaderLimit);
+    EXPECT_EQ(sync.header_count(), 1U);
+    EXPECT_EQ(Requests(Headers(sync, {first})), std::vector<Hash256>{Hash(first)});
+}
+
+TEST_F(SyncProgress, RejectsInvalidResourceConfiguration)
+{
+    for (const auto cap : {0U, 65'537U, std::numeric_limits<std::uint32_t>::max()}) {
+        params.max_pending_headers = cap;
+        nova::node::Synchronizer sync{params, *state};
+        EXPECT_EQ(sync.Start().error, SyncError::kInvalidParameters);
+        EXPECT_EQ(sync.header_count(), 0U);
+    }
+}
+
+TEST_F(SyncProgress, RetargetWalkSpansValidatedAndPendingMetadata)
+{
+    const auto first = Make(state->active_tip(), 1U);
+    const auto second = Make(Hash(first), 2U);
+    Accept(first);
+    Accept(second);
+    params.max_pending_headers = 4U;
+    params.difficulty = {600U, 4U, 2400U, true, false};
+    nova::node::Synchronizer sync{params, *state};
+    const auto third = Make(Hash(second), 3U);
+    auto fourth = Make(Hash(third), 4U);
+    // Three 600s intervals from the anchor to the parent: 3/4 powLimit.
+    fourth.header.bits = 0x205F'FFFFU;
+    const auto target = nova::consensus::TargetFromCompact(fourth.header.bits, network.pow);
+    ASSERT_TRUE(target.target.has_value());
+    bool mined{};
+    for (std::uint32_t nonce = 0U; nonce < 4096U; ++nonce) {
+        fourth.header.nonce = nonce;
+        if (nova::consensus::CheckProofOfWork(Hash(fourth), *target.target)) {
+            mined = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(mined);
+    EXPECT_EQ(Requests(Headers(sync, {third, fourth})),
+              (std::vector<Hash256>{Hash(third), Hash(fourth)}));
+    EXPECT_EQ(sync.header_count(), 2U);
+    EXPECT_EQ(state->active_tip(), Hash(second));
+    EXPECT_EQ(Locator(sync), Hash(second));
+    // Reclaim the pending ancestor through actual ChainState acceptance, then
+    // recover pre-delay difficulty across a pending/validated ancestry split.
+    Accept(third);
+    auto fifth = Make(Hash(fourth), 5U, 601U);
+    fifth.header.time = fourth.header.time + 1201U;
+    fifth.header = nova::consensus::MineRegtestBlock(fifth.header, 4096U).value().header;
+    auto sixth = Make(Hash(fifth), 6U, 601U);
+    sixth.header.bits = fourth.header.bits;
+    mined = false;
+    for (std::uint32_t nonce = 0U; nonce < 4096U; ++nonce) {
+        sixth.header.nonce = nonce;
+        if (nova::consensus::CheckProofOfWork(Hash(sixth), *target.target)) {
+            mined = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(mined);
+    EXPECT_EQ(Requests(Headers(sync, {fourth, fifth, sixth})),
+              (std::vector<Hash256>{Hash(fourth), Hash(fifth), Hash(sixth)}));
+    EXPECT_EQ(sync.header_count(), 3U);
+    EXPECT_EQ(state->active_tip(), Hash(third));
 }
 } // namespace

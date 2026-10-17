@@ -48,6 +48,12 @@ add_test(NAME nova.testnet_release_record
 set_tests_properties(nova.testnet_release_record PROPERTIES LABELS "unit;testnet;release-record")
 
 if(UNIX)
+    add_executable(nova_pending_header_loopback_tests pending_header_loopback_tests.cpp)
+    nova_apply_project_options(nova_pending_header_loopback_tests)
+    target_link_libraries(nova_pending_header_loopback_tests PRIVATE GTest::gtest_main nova_node)
+    add_test(NAME nova.pending_header_loopback COMMAND nova_pending_header_loopback_tests)
+    set_tests_properties(nova.pending_header_loopback PROPERTIES
+        LABELS "integration;regtest;p2p;headers" TIMEOUT 50)
     find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
     add_test(NAME nova.reorg_evidence_verifier
         COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_reorg_evidence.py)

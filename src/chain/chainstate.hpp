@@ -108,6 +108,19 @@ class Chain final
     std::uint32_t height_{};
 };
 
+// Fixed-size, read-only export for node-local synchronization. No block payload,
+// UTXO undo data or allocation; absence means no usable validated index.
+struct HeaderMetadata final {
+    crypto::Hash256 hash;
+    crypto::Hash256 previous_hash;
+    std::uint32_t height{};
+    std::uint32_t time{};
+    std::uint32_t bits{};
+    consensus::Target256 target;
+    consensus::Target256 work;
+    ChainWork chain_work;
+};
+
 struct ChainAnchor final {
     crypto::Hash256 hash;
     crypto::Hash256 previous_hash;
@@ -188,6 +201,8 @@ class ChainState final
     [[nodiscard]] std::size_t known_block_count() const noexcept;
     [[nodiscard]] std::optional<BlockIndex>
     GetBlockIndex(const crypto::Hash256& hash) const noexcept;
+    [[nodiscard]] std::optional<HeaderMetadata>
+    GetHeaderMetadata(const crypto::Hash256& hash) const noexcept;
     // Returns copied active-chain entries ordered by height for non-consensus
     // consumers.  Callers cannot use this read-only export to mutate state.
     [[nodiscard]] std::optional<std::vector<BlockIndex>> GetActiveBlockIndexes() const noexcept;

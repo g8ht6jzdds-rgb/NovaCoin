@@ -84,7 +84,7 @@ std::unique_ptr<PeerService> PeerService::Create(RegtestNode& node) noexcept
         return std::unique_ptr<PeerService>{
             new PeerService{node, std::move(transport),
                             Synchronizer{{ValidationParams(network), network.difficulty,
-                                          network.protocol_version, 2U, 2'000U},
+                                          network.protocol_version, 2U, 2'000U, 4'096U},
                                          node.chain_state()}}};
     } catch (...) {
         return nullptr;
