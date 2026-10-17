@@ -21,6 +21,9 @@ IDENTITY = (
     "genesis=c974d11a5276ca7eb69b1ec0a8062fb47b49c02f5ac726532483d090ac53eb79\n"
 )
 PASSWORD = "bootstrap-test-rpc-password"
+READ_RPC_SECONDS = 2.0
+MUTATING_RPC_SECONDS = 10.0
+READ_METHODS = frozenset({"getnodehealth", "getpeerinfo", "getmempoolinfo"})
 
 
 def require(condition, message):
@@ -154,6 +157,7 @@ class Harness:
         self.children = []
         self.outputs = []
         self.events = []
+        self.poll_deadline = None
 
     def start(self, name, p2p, rpc, bootstrap=None):
         root = self.runtime / name
@@ -184,31 +188,73 @@ class Harness:
     def rpc(self, port, method, params=None):
         self.check_logs()
         require(method != "connectpeer", "manual connection forbidden")
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.5)
+        read_only = method in READ_METHODS
+        require(read_only or self.poll_deadline is None,
+                "mutating RPC must not run inside a retrying poll")
+        budget = READ_RPC_SECONDS if read_only else MUTATING_RPC_SECONDS
+        started = time.monotonic()
+        if self.poll_deadline is not None:
+            budget = min(budget, self.poll_deadline - started)
+        require(budget > 0, "RPC stage deadline exhausted")
+        deadline = started + budget
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=budget)
+        outcome = "failed"
+
+        def remaining():
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise TimeoutError("RPC response budget exhausted")
+            transport.settimeout(seconds)
+
         try:
             auth = base64.b64encode(f"novacoin:{PASSWORD}".encode()).decode()
+            connection.connect()
+            # HTTP Connection: close transfers ownership to the response's
+            # file object; retain the socket reference to cap its body read.
+            transport = connection.sock
+            remaining()
             connection.request("POST", "/rpc", json.dumps({"jsonrpc": "2.0", "id": 1,
                                "method": method, "params": params or {}}),
                                {"Authorization": "Basic " + auth,
                                 "Content-Type": "application/json"})
+            remaining()
             response = connection.getresponse()
+            remaining()
             raw = response.read(65537)
+            if time.monotonic() > deadline:
+                raise TimeoutError("RPC response budget exhausted")
             require(len(raw) <= 65536 and response.status == 200, "invalid RPC response")
             result = json.loads(raw)
             require("error" not in result, f"RPC {method} rejected")
+            outcome = "passed"
             return result["result"]
+        except TimeoutError:
+            outcome = "timeout"
+            # Do not retry: a timed-out mutation may already have executed.
+            raise
         finally:
             connection.close()
+            if outcome != "passed":
+                self.events.append({"rpc_failure": {"method": method,
+                                    "budget_seconds": budget,
+                                    "elapsed_seconds": time.monotonic() - started,
+                                    "outcome": outcome}})
 
     def until(self, action, description, seconds=30):
         deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            try:
-                if action():
-                    return
-            except (OSError, http.client.HTTPException):
-                pass
-            time.sleep(0.05)
+        require(self.poll_deadline is None, "nested polling is forbidden")
+        self.poll_deadline = deadline
+        try:
+            while time.monotonic() < deadline:
+                try:
+                    completed = action()
+                    if completed and time.monotonic() <= deadline:
+                        return
+                except (OSError, http.client.HTTPException):
+                    pass
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        finally:
+            self.poll_deadline = None
         raise RuntimeError("deadline: " + description)
 
     def state(self, port):
