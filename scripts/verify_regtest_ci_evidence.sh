@@ -28,6 +28,7 @@ for result_file in "${result_files[@]}"; do
         exit 1
     fi
     run_directory=$(dirname "${result_file}")
+    python3 -B "$(dirname "${BASH_SOURCE[0]}")/test_reorg_persistence.py" --verify "${run_directory}"
     for evidence in header-phase-peer.log header-before.txt header-held-1.txt header-held-2.txt header-held-3.txt header-after.txt header-restart.txt header-controls.txt; do
         [[ -s "${run_directory}/${evidence}" ]]
     done

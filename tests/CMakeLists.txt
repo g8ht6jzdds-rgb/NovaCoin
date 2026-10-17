@@ -48,6 +48,10 @@ set_tests_properties(nova.testnet_release_record PROPERTIES LABELS "unit;testnet
 
 if(UNIX)
     find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME nova.reorg_evidence_verifier
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_reorg_evidence.py)
+    set_tests_properties(nova.reorg_evidence_verifier PROPERTIES
+        LABELS "unit;regtest;evidence" TIMEOUT 5)
     add_test(NAME nova.regtest_peer_discovery
         COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_peer_discovery.py
                 $<TARGET_FILE:novacoind> ${CMAKE_BINARY_DIR}/regtest-artifacts)
