@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -460,6 +461,20 @@ std::uint32_t ChainState::active_height() const noexcept
 std::size_t ChainState::known_block_count() const noexcept
 {
     return indexes_.size();
+}
+
+std::optional<HeaderMetadata>
+ChainState::GetHeaderMetadata(const crypto::Hash256& hash) const noexcept
+{
+    static_assert(std::is_nothrow_copy_constructible_v<HeaderMetadata>);
+    const auto found = indexes_.find(hash);
+    if (found == indexes_.end() || !IsUsableStatus(found->second.status)) {
+        return std::nullopt;
+    }
+    const auto& index = found->second;
+    return HeaderMetadata{index.hash,           index.previous_hash, index.height,
+                          index.time,           index.expected_bits, index.target,
+                          index.per_block_work, index.chain_work};
 }
 
 std::optional<BlockIndex> ChainState::GetBlockIndex(const crypto::Hash256& hash) const noexcept

@@ -105,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/${{ matrix.preset }}/fuzz-logs
-          for target in fuzz_deserializer fuzz_transaction_deserializer fuzz_block_deserializer fuzz_network_message fuzz_script_signature fuzz_address_parser fuzz_compact_target fuzz_peer_discovery; do
+          for target in fuzz_deserializer fuzz_transaction_deserializer fuzz_block_deserializer fuzz_network_message fuzz_script_signature fuzz_address_parser fuzz_compact_target fuzz_peer_discovery fuzz_sync_admission; do
             corpus=()
             if [[ "$target" == fuzz_peer_discovery ]]; then
               mkdir -p build/${{ matrix.preset }}/discovery-corpus

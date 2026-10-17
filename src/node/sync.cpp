@@ -65,46 +65,39 @@ Synchronizer::Synchronizer(SyncParams parameters, chain::ChainState& chain) noex
 
 SyncError Synchronizer::RefreshValidatedHeaders() noexcept
 {
-    const auto tip = chain_.active_tip();
-    if (validated_tip_ == tip) {
-        return SyncError::kNone;
+    if (parameters_.max_pending_headers == 0U || parameters_.max_pending_headers > 65'536U ||
+        parameters_.max_headers_per_response == 0U ||
+        parameters_.max_headers_per_response > 2'000U) {
+        return SyncError::kInvalidParameters;
     }
-    try {
-        // Merge only the missing validated suffix. Do not discard header-only
-        // branches or outstanding bodies learned from other peers.
-        std::vector<HeaderIndex> missing;
-        auto cursor = tip;
-        while (!headers_.contains(cursor)) {
-            const auto index = chain_.GetBlockIndex(cursor);
-            if (!index.has_value()) {
-                return SyncError::kChainStateUnavailable;
-            }
-            missing.push_back({index->hash, index->previous_hash, index->height, index->time,
-                               index->expected_bits, index->target, index->per_block_work,
-                               index->chain_work});
-            if (index->height == 0U) {
-                break;
-            }
-            cursor = index->previous_hash;
-        }
-        for (auto index = missing.rbegin(); index != missing.rend(); ++index) {
-            headers_.emplace(index->hash, *index);
-        }
-        const auto active = headers_.find(tip);
-        if (active == headers_.end()) {
-            return SyncError::kChainStateUnavailable;
-        }
-        const auto best = headers_.find(best_header_tip_);
-        if (best == headers_.end() || best->second.chain_work < active->second.chain_work ||
-            (best->second.chain_work == active->second.chain_work &&
-             HashLess{}(tip, best_header_tip_))) {
-            best_header_tip_ = tip;
-        }
-        validated_tip_ = tip;
-        return SyncError::kNone;
-    } catch (...) {
-        return SyncError::kAllocationFailure;
+    const auto active = chain_.GetHeaderMetadata(chain_.active_tip());
+    if (!active.has_value()) {
+        return SyncError::kChainStateUnavailable;
     }
+    auto best = *active;
+    // Scan only the bounded pending map. Local mining and the actual
+    // PeerService ReceiveBlock path both update the same authoritative index.
+    for (auto item = headers_.begin(); item != headers_.end();) {
+        if (chain_.GetHeaderMetadata(item->first).has_value()) {
+            item = headers_.erase(item);
+        } else {
+            const auto& index = item->second;
+            if (best.chain_work < index.chain_work ||
+                (best.chain_work == index.chain_work && HashLess{}(index.hash, best.hash))) {
+                best = index;
+            }
+            ++item;
+        }
+    }
+    best_header_tip_ = best.hash;
+    return SyncError::kNone;
+}
+
+std::optional<HeaderIndex> Synchronizer::FindHeader(const crypto::Hash256& hash) const noexcept
+{
+    const auto pending = headers_.find(hash);
+    return pending != headers_.end() ? std::optional<HeaderIndex>{pending->second}
+                                     : chain_.GetHeaderMetadata(hash);
 }
 
 SyncResult Synchronizer::Start() noexcept
@@ -187,7 +180,7 @@ SyncResult Synchronizer::AcceptHeaders(const net::HeadersMessage& headers) noexc
         batch.added.reserve(headers.headers.size());
         std::vector<net::InventoryVector> requests;
         const auto request_missing = [this, &requests](const crypto::Hash256& hash) {
-            if (!chain_.GetBlockIndex(hash).has_value() &&
+            if (!chain_.GetHeaderMetadata(hash).has_value() &&
                 std::none_of(requests.begin(), requests.end(),
                              [&hash](const auto& request) { return request.hash == hash; })) {
                 requests.push_back({parameters_.block_inventory_type, hash});
@@ -197,19 +190,22 @@ SyncResult Synchronizer::AcceptHeaders(const net::HeadersMessage& headers) noexc
             const auto hash = primitives::ComputeBlockHash(header);
             if (!hash.has_value())
                 return {SyncError::kWorkFailure, {}, {}};
+            if (chain_.GetHeaderMetadata(*hash).has_value()) {
+                continue;
+            }
             if (headers_.contains(*hash)) {
                 // Previously validated header: overlap is idempotent, but its
                 // missing body must be requested again after disconnect/loss.
                 request_missing(*hash);
                 continue;
             }
-            const auto parent = headers_.find(header.previous_block_id);
-            if (parent == headers_.end())
+            const auto parent = FindHeader(header.previous_block_id);
+            if (!parent.has_value())
                 return {SyncError::kUnknownHeaderParent, {}, {}};
-            if (parent->second.height == std::numeric_limits<std::uint32_t>::max()) {
+            if (parent->height == std::numeric_limits<std::uint32_t>::max()) {
                 return {SyncError::kWorkOverflow, {}, {}};
             }
-            const auto expected_bits = ExpectedBits(parent->second, header.time);
+            const auto expected_bits = ExpectedBits(*parent, header.time);
             if (!expected_bits.has_value() || header.bits != *expected_bits) {
                 return {SyncError::kInvalidTarget, {}, {}};
             }
@@ -222,17 +218,20 @@ SyncResult Synchronizer::AcceptHeaders(const net::HeadersMessage& headers) noexc
             const auto work = consensus::CalculateWork(*target.target);
             if (!work.has_value())
                 return {SyncError::kWorkFailure, {}, {}};
-            auto chain_work = parent->second.chain_work;
+            auto chain_work = parent->chain_work;
             if (!chain_work.Add(*work))
                 return {SyncError::kWorkOverflow, {}, {}};
-            const HeaderIndex index{*hash,       parent->second.hash, parent->second.height + 1U,
-                                    header.time, header.bits,         *target.target,
+            if (headers_.size() >= parameters_.max_pending_headers) {
+                return {SyncError::kPendingHeaderLimit, {}, {}};
+            }
+            const HeaderIndex index{*hash,       parent->hash, parent->height + 1U,
+                                    header.time, header.bits,  *target.target,
                                     *work,       chain_work};
             batch.added.push_back(*hash);
             headers_.emplace(*hash, index);
-            const auto best = headers_.find(best_header_tip_);
-            if (best == headers_.end() || best->second.chain_work < chain_work ||
-                (best->second.chain_work == chain_work && HashLess{}(*hash, best_header_tip_)))
+            const auto best = FindHeader(best_header_tip_);
+            if (!best.has_value() || best->chain_work < chain_work ||
+                (best->chain_work == chain_work && HashLess{}(*hash, best_header_tip_)))
                 best_header_tip_ = *hash;
             request_missing(*hash);
         }
@@ -266,37 +265,37 @@ Synchronizer::ExpectedBits(const HeaderIndex& parent,
             return pow_limit;
         if (!difficulty.allow_min_difficulty_blocks)
             return parent.bits;
-        const HeaderIndex* current = &parent;
-        while (current->height % difficulty.retarget_interval != 0U && current->bits == pow_limit) {
-            const auto previous = headers_.find(current->previous_hash);
-            if (previous == headers_.end())
-                break;
+        auto current = parent;
+        while (current.height % difficulty.retarget_interval != 0U && current.bits == pow_limit) {
+            const auto previous = FindHeader(current.previous_hash);
+            if (!previous.has_value())
+                return std::nullopt;
             const auto is_delayed =
-                current->time > previous->second.time &&
-                current->time - previous->second.time > difficulty.target_spacing_seconds * 2U;
+                current.time > previous->time &&
+                current.time - previous->time > difficulty.target_spacing_seconds * 2U;
             if (!is_delayed)
                 break;
-            current = &previous->second;
+            current = *previous;
         }
-        return current->bits;
+        return current.bits;
     }
     if (child_height < difficulty.retarget_interval)
         return std::nullopt;
     const auto first_height = child_height - difficulty.retarget_interval;
-    const HeaderIndex* first = &parent;
-    while (first->height > first_height) {
-        const auto previous = headers_.find(first->previous_hash);
-        if (previous == headers_.end())
+    auto first = parent;
+    while (first.height > first_height) {
+        const auto previous = FindHeader(first.previous_hash);
+        if (!previous.has_value())
             return std::nullopt;
-        first = &previous->second;
+        first = *previous;
     }
-    if (first->height != first_height)
+    if (first.height != first_height)
         return std::nullopt;
     const auto old_target =
         consensus::TargetFromCompact(parent.bits, parameters_.validation.pow_parameters);
     if (!old_target.target.has_value())
         return std::nullopt;
-    const auto elapsed = parent.time > first->time ? parent.time - first->time : 0U;
+    const auto elapsed = parent.time > first.time ? parent.time - first.time : 0U;
     const auto actual = std::clamp(elapsed, difficulty.target_timespan_seconds / 4U,
                                    difficulty.target_timespan_seconds * 4U);
     const auto scaled = ScaleTarget(*old_target.target, actual, difficulty.target_timespan_seconds);

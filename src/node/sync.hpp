@@ -18,6 +18,7 @@ struct SyncParams final {
     std::int32_t protocol_version{};
     std::uint32_t block_inventory_type{};
     std::uint32_t max_headers_per_response{};
+    std::uint32_t max_pending_headers{};
 };
 
 enum class SyncError : std::uint8_t {
@@ -33,6 +34,7 @@ enum class SyncError : std::uint8_t {
     kBlockRejected,
     kAllocationFailure,
     kChainStateUnavailable,
+    kPendingHeaderLimit,
 };
 
 struct SyncResult final {
@@ -41,16 +43,7 @@ struct SyncResult final {
     std::vector<net::FramedMessage> requests;
 };
 
-struct HeaderIndex final {
-    crypto::Hash256 hash;
-    crypto::Hash256 previous_hash;
-    std::uint32_t height{};
-    std::uint32_t time{};
-    std::uint32_t bits{};
-    consensus::Target256 target;
-    consensus::Target256 work;
-    chain::ChainWork chain_work;
-};
+using HeaderIndex = chain::HeaderMetadata;
 
 class Synchronizer final
 {
@@ -60,6 +53,7 @@ class Synchronizer final
     [[nodiscard]] SyncResult Start() noexcept;
     [[nodiscard]] SyncResult Handle(const net::FramedMessage& message) noexcept;
     [[nodiscard]] const crypto::Hash256& best_header_tip() const noexcept;
+    // Pending-only metadata, including validated entries until next refresh.
     [[nodiscard]] std::size_t header_count() const noexcept;
 
   private:
@@ -70,6 +64,7 @@ class Synchronizer final
 
     [[nodiscard]] SyncResult AcceptHeaders(const net::HeadersMessage& headers) noexcept;
     [[nodiscard]] SyncError RefreshValidatedHeaders() noexcept;
+    [[nodiscard]] std::optional<HeaderIndex> FindHeader(const crypto::Hash256& hash) const noexcept;
     [[nodiscard]] SyncResult AcceptBlock(const primitives::Block& block) noexcept;
     [[nodiscard]] std::optional<std::uint32_t>
     ExpectedBits(const HeaderIndex& parent, std::uint32_t candidate_time) const noexcept;
@@ -78,7 +73,6 @@ class Synchronizer final
     chain::ChainState& chain_;
     std::map<crypto::Hash256, HeaderIndex, HashLess> headers_;
     crypto::Hash256 best_header_tip_;
-    std::optional<crypto::Hash256> validated_tip_;
 };
 
 } // namespace nova::node

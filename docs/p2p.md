@@ -125,8 +125,8 @@ passing these tests is not public-network operational readiness.
 
 ## Reconnect synchronization progress
 
-The synchronizer merges missing headers from the already validated selected
-ChainState when its active tip changes. Reconnect locators describe that selected
+The synchronizer reconciles its pending headers with the already validated
+ChainState through lightweight metadata. Reconnect locators describe the selected
 body tip, not a stale losing branch or a header-only tip. This is node-local
 progress bookkeeping: it neither selects consensus validity nor changes work,
 difficulty, genesis or wire rules. Existing header-only branches are retained.
@@ -141,3 +141,28 @@ body requests from a partially installed batch. No block bypasses the ordinary
 validator/journal path. Existing message/queue limits still apply; this does not
 claim durable in-flight requests, a global header-storage bound, multi-page sync
 completion, public anti-DoS certification or TESTNET/MAINNET activation.
+
+## Pending-header admission budget
+
+The node-local synchronizer retains only headers whose bodies are not yet
+validated by ChainState. Runtime configuration explicitly allows 4,096 pending
+headers, separately from the unchanged 2,000-header response limit. A zero
+budget, more than 65,536 pending slots, or an unsafe response limit fails closed.
+These are resource policies, not consensus constants or a chain-height cap.
+Validated header ancestry is read through an allocation-free metadata lookup;
+blocks, transactions and journal data are not copied into this cache.
+
+Each new header consumes one slot. A batch that exceeds capacity is rejected
+transactionally, including its new prefix, without evicting earlier work. Known
+overlaps can still request missing bodies while full. Ordinary validated-body
+delivery, local mining and reorganization make matching pending entries
+reclaimable at the next sync refresh; descendants retain metadata access through
+ChainState. Restart locators continue to use the selected validated body tip.
+All difficulty, target, PoW, work and ordinary block-validation rules remain.
+
+Withholding peers can pin this finite budget. This slice does not implement
+source fairness, scheduled retry, durable in-flight accounting, cancellation,
+multi-page completion or a bound on total ChainState/UTXO memory. A rejected
+batch must be explicitly offered again after capacity recovers. Queue acceptance
+is not a delivery acknowledgement. Passing REGTEST quota tests is not public
+network anti-DoS certification, launch authority or independent security review.
