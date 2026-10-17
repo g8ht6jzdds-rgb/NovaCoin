@@ -32,6 +32,7 @@ enum class SyncError : std::uint8_t {
     kWorkOverflow,
     kBlockRejected,
     kAllocationFailure,
+    kChainStateUnavailable,
 };
 
 struct SyncResult final {
@@ -68,6 +69,7 @@ class Synchronizer final
     };
 
     [[nodiscard]] SyncResult AcceptHeaders(const net::HeadersMessage& headers) noexcept;
+    [[nodiscard]] SyncError RefreshValidatedHeaders() noexcept;
     [[nodiscard]] SyncResult AcceptBlock(const primitives::Block& block) noexcept;
     [[nodiscard]] std::optional<std::uint32_t>
     ExpectedBits(const HeaderIndex& parent, std::uint32_t candidate_time) const noexcept;
@@ -76,6 +78,7 @@ class Synchronizer final
     chain::ChainState& chain_;
     std::map<crypto::Hash256, HeaderIndex, HashLess> headers_;
     crypto::Hash256 best_header_tip_;
+    std::optional<crypto::Hash256> validated_tip_;
 };
 
 } // namespace nova::node
