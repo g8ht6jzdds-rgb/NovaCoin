@@ -122,3 +122,22 @@ handshake and clock rollback release pending state without immediately retrying
 an endpoint. Blocks/transactions still use the ordinary validator. REGTEST
 tests exercise introducer removal and a real direct third-node connection;
 passing these tests is not public-network operational readiness.
+
+## Reconnect synchronization progress
+
+The synchronizer merges missing headers from the already validated selected
+ChainState when its active tip changes. Reconnect locators describe that selected
+body tip, not a stale losing branch or a header-only tip. This is node-local
+progress bookkeeping: it neither selects consensus validity nor changes work,
+difficulty, genesis or wire rules. Existing header-only branches are retained.
+
+An overlapping header already validated by this synchronizer is idempotent;
+its missing body is requested again, at most once per bounded response. Bodies
+already in ChainState (including side branches) are not requested again. New
+headers retain all existing parent, difficulty, canonical-target, PoW and work-
+overflow checks. An invalid suffix or allocation failure rolls back the batch's
+new header bookkeeping and best-header update, so retries cannot silently lose
+body requests from a partially installed batch. No block bypasses the ordinary
+validator/journal path. Existing message/queue limits still apply; this does not
+claim durable in-flight requests, a global header-storage bound, multi-page sync
+completion, public anti-DoS certification or TESTNET/MAINNET activation.

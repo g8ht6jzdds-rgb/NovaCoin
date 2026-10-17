@@ -86,6 +86,7 @@ class Exercise:
     def __init__(self):
         self.events = []
         self.deadline = None
+        self.checkpoints = {}
 
     def rpc(self, port, method, params=None, absent=False):
         require(port in PORTS, 'non-loopback harness port')
@@ -238,13 +239,25 @@ class Exercise:
         before = self.snapshot(inputs, outputs)
         require(before == expected, 'restart changed confirmed state')
         if second:
-            # Bravo has remained isolated since the common parent. It is the
-            # positive catch-up control; Charlie/Delta retain their own link.
+            # Charlie/Delta are live at the older winning tip, while Bravo has
+            # remained isolated since the common parent. Reconnect both paths.
+            self.checkpoints['before_reconnect'] = {str(port): self.tip(port) for port in PORTS}
+            self.rpc(a, 'connectpeer', {'host': '127.0.0.1', 'port': 29646})
             self.rpc(PORTS[1], 'connectpeer', {'host': '127.0.0.1', 'port': 29644})
-            self.until(lambda: all(self.tip(port) == before['chain'] for port in PORTS[:2]),
+
+            def synchronized():
+                tips = {str(port): self.tip(port) for port in PORTS}
+                self.checkpoints['last_tips'] = tips
+                return all(tip == before['chain'] for tip in tips.values())
+
+            self.until(synchronized,
                        'post-restart exact propagation')
+            require(all(self.rpc(port, 'getmempoolinfo') == {'size': 0, 'bytes': 0}
+                        for port in PORTS), 'unexpected post-reconnect mempool')
             return {'before': before, 'isolated_peers': 0,
-                    'catchup_nodes': {str(port): self.tip(port) for port in PORTS[:2]}}
+                    'catchup_nodes': {str(port): self.tip(port) for port in PORTS[:2]},
+                    'all_nodes': {str(port): self.tip(port) for port in PORTS},
+                    'before_reconnect': self.checkpoints['before_reconnect']}
         self.rpc(a, 'generateregtestblock')
         after = self.snapshot(inputs, outputs)
         extends(after['chain'], before['chain'], 8)
@@ -298,6 +311,12 @@ def verify(root):
     require(second['before'] == first['after'] and second['isolated_peers'] == 0 and
             second['catchup_nodes'] == {str(port): second['before']['chain'] for port in PORTS[:2]},
             'second restart/propagation mismatch')
+    require(second['all_nodes'] == {str(port): second['before']['chain'] for port in PORTS} and
+            second['before_reconnect'] == {str(PORTS[0]): first['after']['chain'],
+                                           str(PORTS[1]): parent,
+                                           str(PORTS[2]): fork['confirmed']['chain'],
+                                           str(PORTS[3]): fork['confirmed']['chain']},
+            'four-node live reconnect proof missing')
 
 
 def main():
@@ -330,6 +349,7 @@ def main():
         record.update(result='passed', observations=observations)
     finally:
         record['events'] = exercise.events
+        record['checkpoints'] = exercise.checkpoints
         (root / ('reorg-' + phase + '.json')).write_bytes((json.dumps(record, indent=2) + '\n').encode())
 
 

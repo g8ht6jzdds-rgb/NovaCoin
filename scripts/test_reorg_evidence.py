@@ -38,7 +38,10 @@ class EvidenceTests(unittest.TestCase):
         first = {'before': snapshot(7), 'after': snapshot(8), 'inputs': inputs,
                  'outputs': outputs, 'isolated_peers': 0}
         second = {'before': snapshot(8), 'isolated_peers': 0,
-                  'catchup_nodes': {str(p): tip(8) for p in PORTS[:2]}}
+                  'catchup_nodes': {str(p): tip(8) for p in PORTS[:2]},
+                  'all_nodes': {str(p): tip(8) for p in PORTS},
+                  'before_reconnect': {str(PORTS[0]): tip(8), str(PORTS[1]): tip(4),
+                                       str(PORTS[2]): tip(7), str(PORTS[3]): tip(7)}}
         for name, observations in zip(('fork', 'restart-first', 'restart-second'), (fork, first, second)):
             value = {'phase': name, 'result': 'passed', 'observations': observations,
                      'events': [{'port': PORTS[0], 'method': 'getnodehealth', 'outcome': 'passed',
@@ -71,6 +74,12 @@ class EvidenceTests(unittest.TestCase):
             saved = missing.read_bytes()
             missing.unlink()
             with self.assertRaises(OSError):
+                verify(root)
+            missing.write_bytes(saved)
+            value = json.loads(saved)
+            value['observations']['all_nodes'][str(PORTS[2])]['height'] = 7
+            missing.write_text(json.dumps(value), encoding='ascii')
+            with self.assertRaises(RuntimeError):
                 verify(root)
             missing.write_bytes(saved)
             (root / 'reorg-listeners.json').write_text('[true,false]', encoding='ascii')
