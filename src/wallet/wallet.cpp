@@ -1,5 +1,7 @@
 #include "wallet/wallet.hpp"
 
+#include "chain/chainstate.hpp"
+
 #include "chain/validation.hpp"
 #include "primitives/serialization.hpp"
 
@@ -720,6 +722,29 @@ bool Wallet::ObserveTransaction(const primitives::Transaction& transaction,
                 key, WalletUTXO{key, output, height, is_coinbase, confirmed, false});
         }
         coins_.swap(updated_coins);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool Wallet::RebuildConfirmedState(const std::span<const chain::BlockIndex> active) noexcept
+{
+    try {
+        // Roll back observation on allocation/decoding failure; the chain and
+        // its authoritative UTXO state are never modified by this consumer.
+        auto original = coins_;
+        ClearConfirmedState();
+        for (const auto& index : active) {
+            if (index.block.has_value()) {
+                for (const auto& transaction : index.block->transactions) {
+                    if (!ObserveTransaction(transaction, index.height, true)) {
+                        coins_.swap(original);
+                        return false;
+                    }
+                }
+            }
+        }
         return true;
     } catch (...) {
         return false;
