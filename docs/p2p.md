@@ -166,3 +166,21 @@ multi-page completion or a bound on total ChainState/UTXO memory. A rejected
 batch must be explicitly offered again after capacity recovers. Queue acceptance
 is not a delivery acknowledgement. Passing REGTEST quota tests is not public
 network anti-DoS certification, launch authority or independent security review.
+
+## Failed synchronization enqueue recovery
+
+Only synchronization-generated block `getdata` enqueue failures enter a volatile
+node-local recovery outbox: 4,096 unique hashes service-wide, 2,000 per frame,
+one retry frame per Pump and per monotonic second, three retries after initial
+failure, and 30-second expiry. The original peer owns each entry. Repeated
+advertisements neither reset its budget nor immediately retry it. Existing
+pending-header and transport limits still apply. Fixed-size entry fields and
+bounded map/vector counts bound outbox storage; allocation failure fails closed.
+
+Validated bodies suppress retries. Disconnection, expiry, exhausted attempts,
+overflow, clock rollback or unavailable peer snapshots discard recovery entries
+with saturating local counters, not pending headers. A later explicit header
+reoffer can request again. Counters are local diagnostics, not new RPC methods.
+Queue success removes an entry but proves admission only, never delivery.
+Post-enqueue loss, withholding, source reassignment/fairness, inv requests,
+getheaders failure and serving-side response loss are outside this policy.

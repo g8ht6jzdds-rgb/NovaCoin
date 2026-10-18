@@ -55,6 +55,7 @@ class Synchronizer final
     [[nodiscard]] const crypto::Hash256& best_header_tip() const noexcept;
     // Pending-only metadata, including validated entries until next refresh.
     [[nodiscard]] std::size_t header_count() const noexcept;
+    [[nodiscard]] bool MissingBody(const crypto::Hash256& hash) const noexcept;
 
   private:
     struct HashLess final {

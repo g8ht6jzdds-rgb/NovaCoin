@@ -143,6 +143,11 @@ std::size_t Synchronizer::header_count() const noexcept
     return headers_.size();
 }
 
+bool Synchronizer::MissingBody(const crypto::Hash256& hash) const noexcept
+{
+    return headers_.contains(hash) && !chain_.GetHeaderMetadata(hash).has_value();
+}
+
 bool Synchronizer::HashLess::operator()(const crypto::Hash256& left,
                                         const crypto::Hash256& right) const noexcept
 {

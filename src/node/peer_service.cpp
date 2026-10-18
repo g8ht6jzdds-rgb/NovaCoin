@@ -104,6 +104,7 @@ std::optional<std::uint64_t> PeerService::Dial(const net::TcpEndpoint& endpoint,
 
 net::TransportResult PeerService::Pump(const std::uint64_t now) noexcept
 {
+    recovery_now_ = clock_override_ == nullptr ? DiscoverySeconds() : *clock_override_;
     if (discovery_ != nullptr) {
         try {
             const auto peers = transport_->Peers();
@@ -121,6 +122,13 @@ net::TransportResult PeerService::Pump(const std::uint64_t now) noexcept
             Handle(peer_id, message);
         });
     node_.RecordTransportResult(result);
+    if (recovery_.size() != 0U) {
+        const auto recovery_peers = transport_->Peers();
+        if (recovery_peers.has_value())
+            recovery_.Tick(recovery_now_, *recovery_peers, *this);
+        else
+            recovery_.SnapshotUnavailable();
+    }
     if (discovery_ != nullptr) {
         try {
             const auto tick = DiscoverySeconds();
@@ -185,16 +193,40 @@ void PeerService::RelayTransaction(const primitives::Transaction& transaction) n
 void PeerService::DisconnectPeers() noexcept
 {
     transport_->DisconnectAllPeers();
+    recovery_.Tick(recovery_now_, {}, *this);
 }
 void PeerService::Close() noexcept
 {
     transport_->Close();
+    recovery_.Tick(recovery_now_, {}, *this);
+}
+
+const BodyRequestRecovery::Counters& PeerService::recovery_counters() const noexcept
+{
+    return recovery_.counters();
+}
+
+bool PeerService::Missing(const crypto::Hash256& hash) const noexcept
+{
+    return synchronizer_.MissingBody(hash);
+}
+
+net::TransportError PeerService::QueueBody(const std::uint64_t peer,
+                                           const net::FramedMessage& message) noexcept
+{
+    return queue_hook_ == nullptr ? transport_->Queue(peer, message)
+                                  : queue_hook_(queue_context_, peer, message);
 }
 
 void PeerService::QueueRequests(const std::uint64_t peer_id, const SyncResult& result) noexcept
 {
     for (const auto& request : result.requests) {
-        static_cast<void>(transport_->Queue(peer_id, request));
+        if (request.command == net::Command::kGetData) {
+            if (const auto* inventory = std::get_if<net::InventoryMessage>(&request.message))
+                recovery_.Submit(peer_id, *inventory, recovery_now_, *this);
+        } else {
+            static_cast<void>(transport_->Queue(peer_id, request));
+        }
     }
 }
 
