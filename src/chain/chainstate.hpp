@@ -213,6 +213,8 @@ class ChainState final
                const crypto::Hash256& active_tip, std::uint32_t active_height) noexcept;
 
   private:
+    friend class NetworkChainInitializer;
+
     [[nodiscard]] std::optional<BlockValidationContext>
     BuildContext(const BlockIndex& parent, std::uint32_t candidate_time) const;
     [[nodiscard]] std::optional<std::uint32_t>

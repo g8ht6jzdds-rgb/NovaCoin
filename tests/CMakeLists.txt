@@ -10,6 +10,7 @@ add_executable(nova_unit_tests
     pow_tests.cpp
     validation_tests.cpp
     chainstate_tests.cpp
+    network_chainstate_tests.cpp
     mempool_tests.cpp
     p2p_tests.cpp
     peer_discovery_tests.cpp

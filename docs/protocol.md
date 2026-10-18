@@ -501,6 +501,32 @@ complete coinbase serialization, Merkle root, and genesis hash are immutable
 parameters in the tagged internal candidate. TESTNET remains disabled pending
 its separate enablement decision.
 
+### TESTNET initial UTXO state (D1–D7 design disposition)
+
+The immutable TESTNET genesis outputs are materialized atomically at height zero
+with `is_coinbase=true` when constructing a fresh unpublished network chain state,
+before replay of child blocks. The current maturity policy remains zero; ordinary
+signature/value checks apply to a first post-genesis spend. This is not a holder
+exemption or a change to the maturity of other coinbases.
+
+Initialization is once per fresh state, never a missing-outpoint repair on live
+state (including spent-to-empty state). Restart reconstructs initial state and
+replays children; a spent genesis output must therefore remain spent. Genesis
+is an anchor, not an ordinary WAL child or disconnectable seed; ordinary child
+undo restores its Coin only when reversing a spend. The exact genesis payload
+is retained for read-only consumers and confirmed wallet observation, not as an
+alternative authority for validity. No normal-block rule is relaxed for genesis.
+
+REGTEST retains its existing empty initial UTXOs/metadata-only anchor; MAINNET
+remains unavailable. Both TESTNET and MAINNET remain disabled. Frozen genesis,
+network identifiers and monetary commitments are unchanged. This is a consensus-
+sensitive initialization correction, not an activation or migration decision.
+Existing TESTNET data is not certified compatible by a matching network marker
+or tip. No automatic reset/migration, genesis-in-child-journal skipping, or source
+data rewrite is authorized; any inventory, reindex/upgrade or legacy acceptance
+requires a separately authorized coherent-copy plan. The offline inspector and
+REGTEST-hardcoded explorer RPC correction remain separate work.
+
 ## 18. Regtest integration harness
 
 The REGTEST integration harness runs isolated local node runtimes with

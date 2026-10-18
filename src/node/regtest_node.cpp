@@ -1,5 +1,6 @@
 #include "node/regtest_node.hpp"
 
+#include "chain/network_chainstate.hpp"
 #include "consensus/monetary.hpp"
 #include "node/network_selection.hpp"
 #include "storage/network_identity.hpp"
@@ -16,38 +17,6 @@ namespace nova::node
 {
 namespace
 {
-
-[[nodiscard]] chain::BlockValidationParams
-ValidationParams(const consensus::NetworkParams& network) noexcept
-{
-    return {network.block_limits,
-            network.pow,
-            network.monetary,
-            0U,
-            500'000'000U,
-            std::numeric_limits<std::uint32_t>::max(),
-            1U,
-            600U};
-}
-
-[[nodiscard]] std::optional<chain::ChainAnchor>
-GenesisAnchor(const consensus::NetworkParams& network) noexcept
-{
-    const auto target =
-        consensus::TargetFromCompact(network.genesis_block.header.bits, network.pow);
-    const auto work =
-        target.target.has_value() ? consensus::CalculateWork(*target.target) : std::nullopt;
-    if (!target.target.has_value() || !work.has_value()) {
-        return std::nullopt;
-    }
-    return chain::ChainAnchor{network.genesis_hash,
-                              crypto::Hash256{},
-                              0U,
-                              network.genesis_block.header.time,
-                              *target.target,
-                              *work,
-                              chain::ChainWork::FromPerBlockWork(*work)};
-}
 
 [[nodiscard]] std::vector<std::uint8_t> P2pkhScript(const crypto::Hash160& hash)
 {
@@ -106,7 +75,6 @@ std::unique_ptr<RegtestNode> RegtestNode::Create(RegtestNodeConfig config) noexc
             return nullptr;
         }
         auto journal = storage::BlockJournal::Open(config.data_directory, network.block_limits);
-        const auto anchor = GenesisAnchor(network);
         const wallet::WalletParams wallet_parameters{network.block_limits.transaction_limits, 1, 1U,
                                                      true};
         const auto wallet_path = config.data_directory / "wallet.dat";
@@ -119,17 +87,14 @@ std::unique_ptr<RegtestNode> RegtestNode::Create(RegtestNodeConfig config) noexc
                                                                     config.wallet_passphrase)
                                     : wallet::Wallet::Create(wallet_parameters);
         auto mempool = chain::Mempool::Create(
-            chain::MempoolParams{ValidationParams(network), 1'000U, 10'000'000U, 0});
-        if (!journal.has_value() || !anchor.has_value() || wallet == nullptr ||
-            mempool == nullptr) {
+            chain::MempoolParams{chain::NetworkValidationParams(network), 1'000U, 10'000'000U, 0});
+        if (!journal.has_value() || wallet == nullptr || mempool == nullptr) {
             return nullptr;
         }
         auto validation_time_source = std::make_shared<chain::SystemValidationTimeSource>();
-        auto utxos = std::make_unique<chain::UTXOSet>();
-        auto chain = chain::ChainState::Create(
-            {ValidationParams(network), network.difficulty, 11U, validation_time_source}, *anchor,
-            *utxos);
-        if (chain == nullptr) {
+        auto initialized =
+            chain::NetworkChainInitializer::Create(config.network, validation_time_source);
+        if (!initialized.has_value()) {
             return nullptr;
         }
         std::error_code filesystem_error;
@@ -141,9 +106,16 @@ std::unique_ptr<RegtestNode> RegtestNode::Create(RegtestNodeConfig config) noexc
         if (!log.is_open()) {
             return nullptr;
         }
-        auto node = std::unique_ptr<RegtestNode>{new RegtestNode{
-            std::move(config), std::move(*journal), std::move(utxos), std::move(chain),
-            std::move(mempool), std::move(wallet), std::move(validation_time_source), network}};
+        auto node = std::unique_ptr<RegtestNode>{
+            new RegtestNode{std::move(config), std::move(*journal), std::move(initialized->utxos),
+                            std::move(initialized->chain), std::move(mempool), std::move(wallet),
+                            std::move(validation_time_source), network}};
+        if (network.id == consensus::NetworkId::kTestnet) {
+            const auto active = node->chain_->GetActiveBlockIndexes();
+            if (!active.has_value() || !node->wallet_->RebuildConfirmedState(*active)) {
+                return nullptr;
+            }
+        }
         if (!node->PersistWallet()) {
             return nullptr;
         }
@@ -352,18 +324,12 @@ RegtestNodeError RegtestNode::AcceptBlock(const primitives::Block& block,
         Log("inactive block accepted");
         return RegtestNodeError::kNone;
     }
-    wallet_->ClearConfirmedState();
     const auto active = chain_->GetActiveBlockIndexes();
     if (!active.has_value()) {
         return RegtestNodeError::kChainInitializationFailure;
     }
-    for (const auto& index : *active) {
-        if (!index.block.has_value()) {
-            continue;
-        }
-        for (const auto& transaction : index.block->transactions) {
-            (void)wallet_->ObserveTransaction(transaction, index.height, true);
-        }
+    if (!wallet_->RebuildConfirmedState(*active)) {
+        return RegtestNodeError::kWalletFailure;
     }
     for (const auto& index : *active) {
         if (index.block.has_value()) {

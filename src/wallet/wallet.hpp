@@ -13,6 +13,11 @@
 #include <span>
 #include <vector>
 
+namespace nova::chain
+{
+struct BlockIndex;
+}
+
 namespace nova::wallet
 {
 
@@ -151,6 +156,8 @@ class Wallet final
     // Rebuilds wallet-local confirmed state from the active chain. Keys remain
     // intact; unconfirmed observations may be applied again by the caller.
     void ClearConfirmedState() noexcept;
+    // Read-only chain payloads drive observation, never consensus validity.
+    [[nodiscard]] bool RebuildConfirmedState(std::span<const chain::BlockIndex> active) noexcept;
     [[nodiscard]] TransactionBuildResult
     CreateTransaction(std::span<const Recipient> recipients) const noexcept;
     [[nodiscard]] TransactionSignResult
