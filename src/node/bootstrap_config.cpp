@@ -1,5 +1,7 @@
 #include "node/bootstrap_config.hpp"
 
+#include "node/bootstrap_reader.hpp"
+
 #include "node/network_selection.hpp"
 
 #include <algorithm>
@@ -7,7 +9,6 @@
 #include <cctype>
 #include <charconv>
 #include <fstream>
-#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -16,7 +17,6 @@ namespace nova::node
 namespace
 {
 
-constexpr std::size_t kMaximumBootstrapFileSize = 16U * 1024U;
 constexpr std::size_t kMaximumBootstrapSeeds = 16U;
 constexpr std::size_t kMaximumDnsSeeds = 4U;
 constexpr std::size_t kMaximumHostLength = 253U;
@@ -110,6 +110,32 @@ constexpr std::size_t kMaximumHostLength = 253U;
 
 } // namespace
 
+detail::BootstrapText detail::ReadBootstrapText(std::istream& input) noexcept
+{
+    BootstrapText result;
+    try {
+        input.read(result.bytes.data(), static_cast<std::streamsize>(result.bytes.size()));
+        if (input.bad() || (input.fail() && !input.eof())) {
+            return result;
+        }
+        result.size = static_cast<std::size_t>(input.gcount());
+        result.error = result.size > kMaximumBootstrapFileSize ? BootstrapConfigError::kOversized
+                                                               : BootstrapConfigError::kNone;
+    } catch (const std::bad_alloc&) {
+        result.error = BootstrapConfigError::kAllocationFailure;
+    } catch (...) {
+        // A stream with exceptions enabled may throw on an ordinary short EOF
+        // read. The file loader uses default masks; preserve EOF for this seam.
+        if (!input.bad() && input.eof()) {
+            result.size = static_cast<std::size_t>(input.gcount());
+            result.error = result.size > kMaximumBootstrapFileSize
+                               ? BootstrapConfigError::kOversized
+                               : BootstrapConfigError::kNone;
+        }
+    }
+    return result;
+}
+
 BootstrapConfigResult LoadCompiledBootstrapConfig(const consensus::NetworkParams& network) noexcept
 {
     if (consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
@@ -141,13 +167,13 @@ BootstrapConfigResult LoadStaticBootstrapConfig(const std::filesystem::path& pat
         if (!input.is_open()) {
             return {BootstrapConfigError::kReadFailure, {}, {}};
         }
-        const std::string text{std::istreambuf_iterator<char>{input},
-                               std::istreambuf_iterator<char>{}};
-        if (text.empty() || text.size() > kMaximumBootstrapFileSize) {
-            return {text.size() > kMaximumBootstrapFileSize ? BootstrapConfigError::kOversized
-                                                            : BootstrapConfigError::kNonCanonical,
-                    {},
-                    {}};
+        const auto loaded = detail::ReadBootstrapText(input);
+        if (loaded.error != BootstrapConfigError::kNone) {
+            return {loaded.error, {}, {}};
+        }
+        const std::string_view text{loaded.bytes.data(), loaded.size};
+        if (text.empty()) {
+            return {BootstrapConfigError::kNonCanonical, {}, {}};
         }
         if (text.back() != '\n' || text.find('\r') != std::string::npos ||
             text.find("\n\n") != std::string::npos) {

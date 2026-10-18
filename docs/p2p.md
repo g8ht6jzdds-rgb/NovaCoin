@@ -1,5 +1,21 @@
 # NovaCoin v0 P2P transport
 
+## Static bootstrap ingestion policy
+
+The existing canonical bootstrap format remains limited to 16 KiB. The file
+loader requests at most 16 KiB plus one sentinel byte into fixed-size storage,
+rejects oversize before parsing, and never returns a partially accepted endpoint
+list. It does not rely on file-size metadata. Empty input is noncanonical;
+non-EOF read failures fail closed. An internal stream seam verifies bounded
+consumption, including exceptional reads; this is not a production RPC.
+
+No new regular-file restriction is imposed: existing filesystem/symlink and
+special-file behavior is preserved. Operators should use reviewed ordinary
+local files. A bounded byte read is not a wall-clock deadline: opening or reading
+a FIFO/device, slow filesystem or concurrently modified file can still block or
+observe changing bytes. This change does not provide atomic file snapshots or
+special-file timeout guarantees. Network/genesis checks remain mandatory.
+
 P2P transport is not a consensus authority.  A peer is hostile until every
 received byte has passed framing and message parsing.  `nova_net` never calls
 `ChainState`, `ConnectBlock`, `AcceptBlock`, or a wallet.  It emits a parsed,
