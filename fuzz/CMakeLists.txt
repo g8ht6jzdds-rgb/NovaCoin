@@ -36,6 +36,9 @@ target_link_libraries(fuzz_peer_discovery PRIVATE nova_node)
 nova_add_fuzzer(fuzz_sync_admission sync_admission_fuzz.cpp)
 target_link_libraries(fuzz_sync_admission PRIVATE nova_node)
 
+nova_add_fuzzer(fuzz_body_request_recovery body_request_recovery_fuzz.cpp)
+target_link_libraries(fuzz_body_request_recovery PRIVATE nova_node)
+
 add_custom_target(nova_fuzzers DEPENDS
     fuzz_deserializer
     fuzz_transaction_deserializer
@@ -45,4 +48,5 @@ add_custom_target(nova_fuzzers DEPENDS
     fuzz_address_parser
     fuzz_compact_target
     fuzz_peer_discovery
-    fuzz_sync_admission)
+    fuzz_sync_admission
+    fuzz_body_request_recovery)
