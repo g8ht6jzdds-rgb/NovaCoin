@@ -95,7 +95,7 @@ class Sentinel:
 
 def verify_evidence(directory):
     names = {"events.json", "bootstrap-result.txt", "canonical-regtest.conf"}
-    for case in ("network", "genesis", "magic", "late-genesis"):
+    for case in ("network", "genesis", "magic", "late-genesis", "oversize"):
         names.update({f"rejected-{case}.conf", f"rejected-{case}.txt"})
     require({path.name for path in directory.iterdir()} == names | {"SHA256SUMS"},
             "incomplete or unexpected evidence files")
@@ -123,7 +123,7 @@ def verify_evidence(directory):
             calibration[0]["accepted"] == 1, "missing calibrated observer")
     rejected = [event for event in events if "case" in event]
     require([event["case"] for event in rejected] ==
-            ["network", "genesis", "magic", "late-genesis"], "missing rejection case")
+            ["network", "genesis", "magic", "late-genesis", "oversize"], "missing rejection case")
     for event in rejected:
         require(event["exit"] == 2 and event["observer"]["ready"] and
                 event["observer"]["accepted"] == 0 and
@@ -141,7 +141,7 @@ def verify_evidence(directory):
     require(events[-1] == {"owned_children": "reaped", "listeners": "absent"},
             "missing shutdown proof")
     launches = [event["launch"] for event in events if "launch" in event]
-    require(len(launches) == 7, "unexpected process topology")
+    require(len(launches) == 8, "unexpected process topology")
     for args in launches:
         require("--regtest" in args and "--connect" not in args and
                 "--enable-dns-seeds" not in args, "alternate bootstrap route")
@@ -310,7 +310,7 @@ class Harness:
         baseline = self.state(source_rpc)
         baseline_pool = self.rpc(source_rpc, "getmempoolinfo")
 
-        for case in ("network", "genesis", "magic", "late-genesis"):
+        for case in ("network", "genesis", "magic", "late-genesis", "oversize"):
             observer = Sentinel()
             try:
                 identity = IDENTITY
@@ -318,7 +318,7 @@ class Harness:
                     identity = identity.replace("network=regtest", "network=testnet")
                 elif case == "magic":
                     identity = identity.replace("magic=dab5bffa", "magic=dab5bff0")
-                else:
+                elif case != "oversize":
                     identity = identity.replace("genesis=c", "genesis=d")
                 seed = f"seed=127.0.0.1:{observer.port}\n"
                 if case == "late-genesis":
@@ -326,6 +326,9 @@ class Harness:
                     identity = prefix + seed + "genesis=" + genesis
                 else:
                     identity += seed
+                if case == "oversize":
+                    # A valid prefix must not be partially applied.
+                    identity += "x" * (16385 - len(identity))
                 config = self.evidence / f"rejected-{case}.conf"
                 write(config, identity)
                 p2p, rpc = reserve_ports(2)
