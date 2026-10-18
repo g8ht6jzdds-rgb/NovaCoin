@@ -8,9 +8,11 @@ class Sink final : public nova::node::BodyRequestRecovery::Sink
 {
   public:
     bool missing{true}, fail{true};
-    bool Missing(const nova::crypto::Hash256&) const noexcept override
+    nova::node::BodyRequestRecovery::BodyState
+    State(const nova::crypto::Hash256&) const noexcept override
     {
-        return missing;
+        return missing ? nova::node::BodyRequestRecovery::BodyState::kPending
+                       : nova::node::BodyRequestRecovery::BodyState::kValidated;
     }
     nova::net::TransportError QueueBody(std::uint64_t,
                                         const nova::net::FramedMessage& frame) noexcept override

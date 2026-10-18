@@ -206,9 +206,12 @@ const BodyRequestRecovery::Counters& PeerService::recovery_counters() const noex
     return recovery_.counters();
 }
 
-bool PeerService::Missing(const crypto::Hash256& hash) const noexcept
+BodyRequestRecovery::BodyState PeerService::State(const crypto::Hash256& hash) const noexcept
 {
-    return synchronizer_.MissingBody(hash);
+    if (node_.chain_state().GetHeaderMetadata(hash).has_value())
+        return BodyRequestRecovery::BodyState::kValidated;
+    return synchronizer_.MissingBody(hash) ? BodyRequestRecovery::BodyState::kPending
+                                           : BodyRequestRecovery::BodyState::kStale;
 }
 
 net::TransportError PeerService::QueueBody(const std::uint64_t peer,

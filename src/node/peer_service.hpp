@@ -40,7 +40,8 @@ class PeerService final : private BodyRequestRecovery::Sink
 
   private:
     friend class PeerServiceTestAccess;
-    [[nodiscard]] bool Missing(const crypto::Hash256& hash) const noexcept override;
+    [[nodiscard]] BodyRequestRecovery::BodyState
+    State(const crypto::Hash256& hash) const noexcept override;
     [[nodiscard]] net::TransportError
     QueueBody(std::uint64_t peer, const net::FramedMessage& message) noexcept override;
     PeerService(RegtestNode& node, std::unique_ptr<net::TcpTransport> transport,

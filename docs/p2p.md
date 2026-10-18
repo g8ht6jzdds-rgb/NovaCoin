@@ -181,6 +181,36 @@ Validated bodies suppress retries. Disconnection, expiry, exhausted attempts,
 overflow, clock rollback or unavailable peer snapshots discard recovery entries
 with saturating local counters, not pending headers. A later explicit header
 reoffer can request again. Counters are local diagnostics, not new RPC methods.
-Queue success removes an entry but proves admission only, never delivery.
-Post-enqueue loss, withholding, source reassignment/fairness, inv requests,
-getheaders failure and serving-side response loss are outside this policy.
+Queue success leaves the failed phase but proves admission only, never delivery;
+the admitted lifecycle below extends tracking until validation or cancellation.
+Withholding cures, source reassignment/fairness, inv requests, getheaders failure
+and serving-side response loss remain outside this policy.
+
+## Admitted synchronization body lifecycle
+
+The same 4,096-hash tracker now covers failed enqueues AND admitted requests;
+there is no second unbounded in-flight queue. Reserve tracking transactionally
+before enqueue. A batch which cannot be tracked is not queued; count rejected
+hashes, preserve earlier tracking and all pending headers, and allow later
+explicit reoffer. Allocation failure cannot create an admitted untracked prefix.
+
+Admission is NOT receipt or completion. Only authoritative usable validated-body
+metadata completes a hash. A missing pending entry without that evidence is a
+stale cancellation. At a 10-second monotonic body deadline, allow up to two
+additional admitted requests to the original live peer. Give the final admission
+its 10-second response window before exhaustion. Every lifecycle also expires
+after 60 seconds from first observation. Preserve original request order.
+
+Failed-enqueue retries still share the one retry frame/Pump/monotonic-second
+budget, three failed-phase retry attempts and 30 seconds from the first failed
+enqueue. Neither admission nor a later resend resets those failure budgets.
+Repeated advertisements cannot refresh age, change a live entry's peer or grow
+parallel tracking. Deadline resend enqueue failures enter the same failure phase.
+
+Validated bodies suppress redundant requests. Disconnects, unavailable snapshots,
+clock rollback, stale work, allocation failure and exhaustion have separate local
+diagnostics; none deletes pending synchronization headers or infers delivery.
+After cancellation only a new explicit valid header offer can establish a new
+request, even from another peer; the offer is not proof of body possession.
+No automatic redial, blind reassignment, fairness or withholding cure is provided.
+Late and duplicate blocks retain the ordinary validator/duplicate behavior.
