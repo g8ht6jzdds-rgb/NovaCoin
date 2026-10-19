@@ -1,8 +1,11 @@
 #include "inspection/chain_report.hpp"
+#include "storage/network_identity.hpp"
 
+#include <charconv>
 #include <limits>
 #include <map>
 #include <memory>
+#include <sstream>
 
 namespace nova::inspection
 {
@@ -52,6 +55,97 @@ bool CheckedAdd(std::int64_t& total, const std::int64_t delta) noexcept
         return false;
     total += delta;
     return true;
+}
+
+std::optional<InspectionContext> ParseMetadata(const std::span<const std::uint8_t> metadata,
+                                               const std::span<const std::uint8_t> identity,
+                                               const std::span<const std::uint8_t> journal,
+                                               const std::string_view binary_hash,
+                                               const std::string_view source_revision,
+                                               const std::string_view source_tree) noexcept
+{
+    try {
+        if (metadata.size() > 2048U || identity.size() != 45U ||
+            journal.size() > 64U * 1024U * 1024U || !IsHex(binary_hash, 64U) ||
+            !IsHex(source_revision, 40U) || !IsHex(source_tree, 40U))
+            return std::nullopt;
+        const std::string text(metadata.begin(), metadata.end());
+        if (text.empty() || text.back() != '\n' || text.find('\r') != std::string::npos ||
+            text.find('\0') != std::string::npos)
+            return std::nullopt;
+        std::istringstream input{text};
+        std::array<std::string, 10U> lines;
+        for (auto& line : lines)
+            if (!std::getline(input, line))
+                return std::nullopt;
+        if (input.peek() != EOF || lines[0] != "nova-snapshot-v1" ||
+            lines[9] != "capture=stopped-immutable-copy")
+            return std::nullopt;
+        constexpr std::array<std::string_view, 8U> names{"network=",
+                                                         "as_of=",
+                                                         "tip=",
+                                                         "height=",
+                                                         "work=",
+                                                         "identity_sha256=",
+                                                         "journal_sha256=",
+                                                         "provenance_sha256="};
+        std::array<std::string_view, 8U> values;
+        for (std::size_t i = 0U; i < names.size(); ++i) {
+            if (!lines[i + 1U].starts_with(names[i]))
+                return std::nullopt;
+            values[i] = std::string_view{lines[i + 1U]}.substr(names[i].size());
+        }
+        InspectionContext context;
+        if (values[0] == "testnet")
+            context.network = consensus::NetworkId::kTestnet;
+        else if (values[0] != "regtest")
+            return std::nullopt;
+        const auto number = [](const std::string_view value, std::uint32_t& result) {
+            if (value.empty() || (value.size() > 1U && value.front() == '0'))
+                return false;
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
+            return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size();
+        };
+        if (!number(values[1], context.as_of) || !number(values[3], context.expected_height) ||
+            !IsHex(values[2], 64U) || !IsHex(values[4], 128U) || !IsHex(values[7], 64U))
+            return std::nullopt;
+        const auto tip = crypto::Hash256::FromHex(values[2]);
+        if (!tip.has_value())
+            return std::nullopt;
+        chain::ChainWork::Bytes work{};
+        for (std::size_t i = 0U; i < work.size(); ++i) {
+            const auto pair = values[4].substr(2U * i, 2U);
+            unsigned value = 0U;
+            const auto parsed = std::from_chars(pair.data(), pair.data() + 2U, value, 16);
+            if (parsed.ec != std::errc{} || parsed.ptr != pair.data() + 2U)
+                return std::nullopt;
+            work[i] = static_cast<std::uint8_t>(value);
+        }
+        const auto id_hash = crypto::Hash256::Sha256(identity),
+                   journal_hash = crypto::Hash256::Sha256(journal),
+                   metadata_hash = crypto::Hash256::Sha256(metadata);
+        if (!id_hash.has_value() || !journal_hash.has_value() || !metadata_hash.has_value())
+            return std::nullopt;
+        context.expected_work = chain::ChainWork{work};
+        context.expected_tip = *tip;
+        context.source_revision = source_revision;
+        context.source_tree = source_tree;
+        context.provenance_hash = values[7];
+        context.identity_hash = Hex(id_hash->bytes());
+        context.journal_hash = Hex(journal_hash->bytes());
+        context.metadata_hash = Hex(metadata_hash->bytes());
+        context.binary_hash = binary_hash;
+        context.identity_bytes = identity.size();
+        context.metadata_bytes = metadata.size();
+        if (values[5] != context.identity_hash || values[6] != context.journal_hash ||
+            storage::ValidateNetworkIdentity(identity,
+                                             consensus::GetNetworkParams(context.network)) !=
+                storage::NetworkIdentityError::kNone)
+            return std::nullopt;
+        return context;
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 InspectionResult InspectJournal(std::istream& journal, const InspectionContext& context,

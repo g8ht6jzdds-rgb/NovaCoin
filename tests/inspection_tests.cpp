@@ -289,6 +289,48 @@ TEST(OfflineInspection, ActualRegtestHalvingAndFreshReplayAgree)
     EXPECT_NE(a.report.find("\"utxo_count\":\"151\""), std::string::npos);
 }
 
+TEST(OfflineInspection, MetadataParserIsBoundedAndCanonical)
+{
+    const auto context = Context();
+    const auto& network = consensus::RegtestNetworkParams();
+    primitives::BinaryWriter identity;
+    for (const auto byte : std::array<std::uint8_t, 4U>{'N', 'V', 'I', 'D'})
+        ASSERT_TRUE(identity.WriteU8(byte));
+    ASSERT_TRUE(identity.WriteU32(1U));
+    ASSERT_TRUE(identity.WriteU8(static_cast<std::uint8_t>(network.id)));
+    ASSERT_TRUE(identity.WriteU32(network.network_magic));
+    ASSERT_TRUE(identity.WriteHash256(network.genesis_hash));
+    const auto ih = crypto::Hash256::Sha256(identity.bytes()), jh = crypto::Hash256::Sha256({});
+    ASSERT_TRUE(ih.has_value());
+    ASSERT_TRUE(jh.has_value());
+    const std::string metadata =
+        "nova-snapshot-v1\nnetwork=regtest\nas_of=1704160000\ntip=" +
+        inspection::Hex(context.expected_tip.bytes()) +
+        "\nheight=0\nwork=" + inspection::Hex(context.expected_work.bytes()) +
+        "\nidentity_sha256=" + inspection::Hex(ih->bytes()) +
+        "\njournal_sha256=" + inspection::Hex(jh->bytes()) +
+        "\nprovenance_sha256=" + std::string(64U, 'a') + "\ncapture=stopped-immutable-copy\n";
+    const auto parse = [&](const std::string& text) {
+        return inspection::ParseMetadata(
+            std::span{reinterpret_cast<const std::uint8_t*>(text.data()), text.size()},
+            identity.bytes(), {}, context.binary_hash, context.source_revision,
+            context.source_tree);
+    };
+    ASSERT_TRUE(parse(metadata).has_value());
+    auto upper_tip = metadata;
+    upper_tip[upper_tip.find("tip=") + 4U] = 'A';
+    EXPECT_FALSE(parse(upper_tip).has_value());
+    auto upper_work = metadata;
+    upper_work[upper_work.find("work=") + 5U] = 'A';
+    EXPECT_FALSE(parse(upper_work).has_value());
+    auto leading_zero = metadata;
+    leading_zero.insert(leading_zero.find("height=") + 7U, "0");
+    EXPECT_FALSE(parse(leading_zero).has_value());
+    EXPECT_FALSE(parse(metadata + "extra\n").has_value());
+    EXPECT_FALSE(parse(metadata.substr(0U, metadata.size() - 1U)).has_value());
+    EXPECT_FALSE(parse(std::string(2049U, 'x')).has_value());
+}
+
 TEST(OfflineInspection, InvalidPowParentTimeAndInitializationFailureRefuseReport)
 {
     const auto& network = consensus::RegtestNetworkParams();

@@ -38,6 +38,10 @@ struct InspectionResult final {
 
 [[nodiscard]] std::string Hex(std::span<const std::uint8_t> bytes);
 [[nodiscard]] bool CheckedAdd(std::int64_t& total, std::int64_t delta) noexcept;
+[[nodiscard]] std::optional<InspectionContext>
+ParseMetadata(std::span<const std::uint8_t> metadata, std::span<const std::uint8_t> identity,
+              std::span<const std::uint8_t> journal, std::string_view binary_hash,
+              std::string_view source_revision, std::string_view source_tree) noexcept;
 // Caller supplies immutable bytes and externally captured expectations/time.
 // This function has no filesystem, wallet, network, repair or activation path.
 [[nodiscard]] InspectionResult InspectJournal(std::istream& journal,

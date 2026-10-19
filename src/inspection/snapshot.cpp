@@ -98,13 +98,15 @@ bool Frozen(const int descriptor)
     constexpr int required = F_SEAL_SEAL | F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK;
     if (seals >= 0 && (seals & required) == required)
         return true;
-    struct statvfs vfs{};
+    struct statvfs vfs {
+    };
     return fstatvfs(descriptor, &vfs) == 0 && (vfs.f_flag & ST_RDONLY) != 0U;
 }
 
 std::optional<std::vector<std::uint8_t>> ReadFrozen(const int descriptor, const std::size_t maximum)
 {
-    struct stat before{};
+    struct stat before {
+    };
     if (fstat(descriptor, &before) != 0 || !S_ISREG(before.st_mode) || before.st_size < 0 ||
         static_cast<std::uint64_t>(before.st_size) > maximum || before.st_nlink > 1U ||
         !Frozen(descriptor))
@@ -129,7 +131,8 @@ std::optional<std::vector<std::uint8_t>> ReadFrozen(const int descriptor, const 
         bytes.insert(bytes.end(), buffer.begin(),
                      buffer.begin() + static_cast<std::ptrdiff_t>(size));
     }
-    struct stat after{};
+    struct stat after {
+    };
     if (fstat(descriptor, &after) != 0 || !SameIdentity(before, after) ||
         before.st_size != after.st_size ||
         bytes.size() != static_cast<std::uint64_t>(before.st_size) || !Frozen(descriptor))
@@ -143,73 +146,6 @@ std::string Digest(const std::span<const std::uint8_t> bytes)
     if (!hash.has_value())
         return {};
     return Hex(hash->bytes());
-}
-
-std::optional<InspectionContext> Context(const std::vector<std::uint8_t>& metadata,
-                                         const std::vector<std::uint8_t>& identity,
-                                         const std::vector<std::uint8_t>& journal,
-                                         const std::string& binary_hash)
-{
-    const std::string text(metadata.begin(), metadata.end());
-    if (text.empty() || text.back() != '\n' || text.find('\r') != std::string::npos ||
-        text.find('\0') != std::string::npos)
-        return std::nullopt;
-    std::istringstream input{text};
-    std::array<std::string, 10U> lines;
-    for (auto& line : lines)
-        if (!std::getline(input, line))
-            return std::nullopt;
-    if (input.peek() != EOF || lines[0] != "nova-snapshot-v1" ||
-        lines[9] != "capture=stopped-immutable-copy")
-        return std::nullopt;
-    constexpr std::array<std::string_view, 8U> names{"network=",
-                                                     "as_of=",
-                                                     "tip=",
-                                                     "height=",
-                                                     "work=",
-                                                     "identity_sha256=",
-                                                     "journal_sha256=",
-                                                     "provenance_sha256="};
-    std::array<std::string_view, 8U> values;
-    for (std::size_t i = 0U; i < names.size(); ++i) {
-        if (!lines[i + 1U].starts_with(names[i]))
-            return std::nullopt;
-        values[i] = std::string_view{lines[i + 1U]}.substr(names[i].size());
-    }
-    InspectionContext context;
-    if (values[0] == "testnet")
-        context.network = consensus::NetworkId::kTestnet;
-    else if (values[0] != "regtest")
-        return std::nullopt;
-    const auto tip = crypto::Hash256::FromHex(values[2]);
-    if (!Number(values[1], context.as_of) || !Number(values[3], context.expected_height) ||
-        !tip.has_value() || values[4].size() != 128U)
-        return std::nullopt;
-    chain::ChainWork::Bytes work{};
-    for (std::size_t i = 0U; i < work.size(); ++i) {
-        const auto pair = values[4].substr(2U * i, 2U);
-        unsigned value = 0U;
-        const auto parsed = std::from_chars(pair.data(), pair.data() + 2U, value, 16);
-        if (parsed.ec != std::errc{} || parsed.ptr != pair.data() + 2U)
-            return std::nullopt;
-        work[i] = static_cast<std::uint8_t>(value);
-    }
-    context.expected_work = chain::ChainWork{work};
-    context.expected_tip = *tip;
-    context.source_revision = NOVA_INSPECT_SOURCE_REVISION;
-    context.source_tree = NOVA_INSPECT_SOURCE_TREE;
-    context.provenance_hash = values[7];
-    context.identity_hash = Digest(identity);
-    context.journal_hash = Digest(journal);
-    context.metadata_hash = Digest(metadata);
-    context.binary_hash = binary_hash;
-    context.identity_bytes = identity.size();
-    context.metadata_bytes = metadata.size();
-    if (values[5] != context.identity_hash || values[6] != context.journal_hash ||
-        storage::ValidateNetworkIdentity(identity, consensus::GetNetworkParams(context.network)) !=
-            storage::NetworkIdentityError::kNone)
-        return std::nullopt;
-    return context;
 }
 
 bool DirectoryInventory(const int descriptor)
@@ -235,12 +171,14 @@ bool IndependentOutput(const int output, const int source)
 {
     if (source < 0)
         return true; // sealed memfds cannot alias disk directories
-    struct stat source_stat{};
+    struct stat source_stat {
+    };
     if (fstat(source, &source_stat) != 0)
         return false;
     Descriptor ancestor{dup(output)};
     for (std::size_t i = 0U; i < 1024U; ++i) {
-        struct stat current{}, parent_stat{};
+        struct stat current {
+        }, parent_stat{};
         if (fstat(ancestor.get(), &current) != 0 || SameIdentity(source_stat, current))
             return false;
         Descriptor parent{
@@ -277,7 +215,9 @@ int RunSnapshotInspection(const int argc, char** argv) noexcept
 #else
         constexpr rlim_t address_limit = 2ULL * gib;
 #endif
-        const struct rlimit address{address_limit, address_limit}, cpu{120U, 120U};
+        const struct rlimit address {
+            address_limit, address_limit
+        }, cpu{120U, 120U};
         if (setrlimit(RLIMIT_AS, &address) != 0 || setrlimit(RLIMIT_CPU, &cpu) != 0)
             return 2;
         static_cast<void>(alarm(120U));
@@ -318,7 +258,8 @@ int RunSnapshotInspection(const int argc, char** argv) noexcept
         // Hash our executable through a read-only descriptor. It is build
         // provenance, not an input snapshot; no frozen-filesystem requirement.
         Descriptor executable{open("/proc/self/exe", O_RDONLY | O_CLOEXEC)};
-        struct stat executable_stat{};
+        struct stat executable_stat {
+        };
         if (fstat(executable.get(), &executable_stat) != 0 || executable_stat.st_size <= 0 ||
             executable_stat.st_size > 128 * 1024 * 1024)
             return 2;
@@ -331,7 +272,8 @@ int RunSnapshotInspection(const int argc, char** argv) noexcept
                 return 2;
             position += static_cast<std::size_t>(got);
         }
-        const auto context = Context(*metadata, *identity, *journal, Digest(binary));
+        const auto context = ParseMetadata(*metadata, *identity, *journal, Digest(binary),
+                                           NOVA_INSPECT_SOURCE_REVISION, NOVA_INSPECT_SOURCE_TREE);
         if (!context.has_value()) {
             std::cerr << "INCOMPLETE metadata_identity_or_build_context\n";
             return 2;
