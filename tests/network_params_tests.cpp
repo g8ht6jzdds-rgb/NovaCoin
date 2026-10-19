@@ -55,6 +55,34 @@ TEST(NetworkParams, CommitsDistinctRegtestAndTestnetFixtures)
     EXPECT_NE(regtest.genesis_hash, testnet.genesis_hash);
 }
 
+TEST(NetworkParams, AllNetworkIdentitiesPortsPrefixesAndGenesisRemainDistinct)
+{
+    const auto networks = {&RegtestNetworkParams(), &TestnetNetworkParams(),
+                           &MainnetNetworkParams()};
+    for (const auto* a : networks) {
+        for (const auto* b : networks) {
+            if (a->id == b->id)
+                continue;
+            EXPECT_NE(a->network_magic, b->network_magic);
+            EXPECT_NE(a->default_p2p_port, b->default_p2p_port);
+            EXPECT_NE(a->default_p2p_port, b->default_rpc_port);
+            EXPECT_NE(a->default_rpc_port, b->default_p2p_port);
+            EXPECT_NE(a->default_rpc_port, b->default_rpc_port);
+            EXPECT_NE(a->address_prefixes.p2pkh, b->address_prefixes.p2pkh);
+            EXPECT_NE(a->address_prefixes.private_key, b->address_prefixes.private_key);
+            EXPECT_NE(a->genesis_hash, b->genesis_hash);
+        }
+    }
+    EXPECT_EQ(TestnetNetworkParams().network_magic, 0xDAB5'BFFBU);
+    EXPECT_EQ(TestnetNetworkParams().default_p2p_port, 28'333U);
+    EXPECT_EQ(TestnetNetworkParams().default_rpc_port, 28'332U);
+    EXPECT_EQ(TestnetNetworkParams().address_prefixes.p2pkh, 112U);
+    EXPECT_EQ(TestnetNetworkParams().address_prefixes.private_key, 240U);
+    EXPECT_FALSE(TestnetNetworkParams().enabled);
+    EXPECT_FALSE(MainnetNetworkParams().enabled);
+    EXPECT_FALSE(MainnetNetworkParams().deployment_final);
+}
+
 TEST(NetworkParams, MatchesExactRegtestGenesisHashAndMerkleRoot)
 {
     const auto& parameters = RegtestNetworkParams();

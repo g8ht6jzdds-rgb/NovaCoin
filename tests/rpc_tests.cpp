@@ -4,9 +4,11 @@
 #include "rpc/rpc.hpp"
 #include "wallet/address.hpp"
 
+#include "chain/network_chainstate.hpp"
 #include "consensus/monetary.hpp"
 #include "consensus/pow.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -451,6 +453,81 @@ TEST(ExplorerRpcSnapshotIntegration, AcceptsOnlyAuthenticatedCopiedSnapshots)
     EXPECT_EQ(index.Rebuild(*snapshot).error, nova::explorer::ExplorerError::kNone);
     ASSERT_TRUE(index.Summary().has_value());
     EXPECT_EQ(index.Summary()->height, 0U);
+}
+
+TEST(ExplorerRpcSnapshotIntegration, ExportsSelectedGenesisAndRejectsOtherNetworkWithoutMutation)
+{
+    for (const auto* network :
+         {&nova::consensus::RegtestNetworkParams(), &nova::consensus::TestnetNetworkParams()}) {
+        auto state = nova::chain::NetworkChainInitializer::Create(
+            network->id, std::make_shared<nova::chain::FixedValidationTimeSource>(1'704'160'000U));
+        ASSERT_TRUE(state.has_value());
+        const auto validation = nova::chain::NetworkValidationParams(*network);
+        auto mempool = Mempool::Create(MempoolParams{validation, 16U, 100'000U, 0});
+        auto wallet = nova::wallet::Wallet::Create(
+            nova::wallet::WalletParams{network->block_limits.transaction_limits, 1, 1U});
+        auto peers = MakePeerManager();
+        ASSERT_NE(mempool, nullptr);
+        ASSERT_NE(wallet, nullptr);
+        nova::rpc::RpcDependencies dependencies{*state->chain,
+                                                *state->utxos,
+                                                *mempool,
+                                                peers,
+                                                *wallet,
+                                                {1U, 1'704'160'000U},
+                                                1'704'160'000U,
+                                                {},
+                                                {},
+                                                {},
+                                                {},
+                                                {},
+                                                {}};
+        auto service = nova::rpc::RpcService::Create(
+            {"127.0.0.1", "user", "pass", {256U, 8'192U, 4'096U}, network->id},
+            std::move(dependencies));
+        ASSERT_NE(service, nullptr);
+        auto server = nova::rpc::LoopbackHttpServer::Create(
+            {"127.0.0.1", 0U, 4U, 256U, 8'192U, 30U}, *service);
+        ASSERT_NE(server, nullptr);
+        const auto source = nova::explorer::AuthenticatedRpcSnapshotSource::Create(
+            {"127.0.0.1", server->port(), "user", "pass", 1U * 1024U * 1024U, network});
+        const auto* other = network->id == nova::consensus::NetworkId::kTestnet
+                                ? &nova::consensus::RegtestNetworkParams()
+                                : &nova::consensus::TestnetNetworkParams();
+        const auto wrong = nova::explorer::AuthenticatedRpcSnapshotSource::Create(
+            {"127.0.0.1", server->port(), "user", "pass", 1U * 1024U * 1024U, other});
+        ASSERT_NE(source, nullptr);
+        ASSERT_NE(wrong, nullptr);
+        const auto tip = state->chain->active_tip();
+        const auto count = state->utxos->size();
+        std::atomic<bool> running{true};
+        std::thread pump{[&server, &running]() {
+            while (running.load()) {
+                static_cast<void>(server->Pump(1U));
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+        }};
+        const auto snapshot = source->ReadSnapshot();
+        const auto rejected = wrong->ReadSnapshot();
+        running.store(false);
+        pump.join();
+        ASSERT_TRUE(snapshot.has_value());
+        ASSERT_EQ(snapshot->active_blocks.size(), 1U);
+        EXPECT_EQ(snapshot->network, network->id);
+        EXPECT_EQ(snapshot->active_blocks.front().hash, network->genesis_hash);
+        nova::primitives::BinaryWriter actual, expected;
+        ASSERT_TRUE(snapshot->active_blocks.front().block.Serialize(actual, network->block_limits));
+        ASSERT_TRUE(network->genesis_block.Serialize(expected, network->block_limits));
+        EXPECT_TRUE(std::ranges::equal(actual.bytes(), expected.bytes()));
+        EXPECT_FALSE(rejected.has_value());
+        nova::explorer::ExplorerIndex index;
+        EXPECT_EQ(index.Rebuild(*snapshot).error, nova::explorer::ExplorerError::kNone);
+        EXPECT_EQ(state->chain->active_tip(), tip);
+        EXPECT_EQ(state->utxos->size(), count);
+        EXPECT_EQ(mempool->size(), 0U);
+    }
+    EXPECT_FALSE(nova::consensus::TestnetNetworkParams().enabled);
+    EXPECT_FALSE(nova::consensus::MainnetNetworkParams().enabled);
 }
 
 } // namespace

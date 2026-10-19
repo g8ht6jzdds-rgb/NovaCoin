@@ -401,10 +401,10 @@ HeaderFromBytes(const std::span<const std::uint8_t> bytes) noexcept
 }
 
 [[nodiscard]] std::optional<std::string>
-ExplorerSnapshotHex(const chain::ChainState& chain) noexcept
+ExplorerSnapshotHex(const chain::ChainState& chain,
+                    const consensus::NetworkParams& network) noexcept
 {
     const auto active = chain.GetActiveBlockIndexes();
-    const auto& network = consensus::RegtestNetworkParams();
     if (!active.has_value() || active->empty()) {
         return std::nullopt;
     }
@@ -596,7 +596,8 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             if (config_.network == consensus::NetworkId::kMainnet) {
                 return {200U, ErrorResponse(id, kRegtestOnly, "snapshot network unavailable")};
             }
-            const auto snapshot = ExplorerSnapshotHex(dependencies_.chain_state);
+            const auto snapshot = ExplorerSnapshotHex(dependencies_.chain_state,
+                                                      consensus::GetNetworkParams(config_.network));
             if (!snapshot.has_value()) {
                 return {200U, ErrorResponse(id, kNodeFailure, "snapshot generation failed")};
             }

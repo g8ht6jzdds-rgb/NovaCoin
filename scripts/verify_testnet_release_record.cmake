@@ -38,7 +38,10 @@ set(NOVA_GENESIS_REVIEW "${NOVA_SOURCE_ROOT}/docs/testnet-genesis-review.md")
 set(NOVA_NETWORKS_DOCUMENT "${NOVA_SOURCE_ROOT}/docs/networks.md")
 
 nova_require_text("${NOVA_PARAMETER_SOURCE}"
-    "NetworkId::kTestnet, false, true, 1, 1, 0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U},")
+    "constexpr NetworkIdentity kTestnetIdentity{0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U}};")
+nova_require_text("${NOVA_PARAMETER_SOURCE}"
+    "NetworkId::kTestnet, false, true, 1, 1, kTestnetIdentity.magic, kTestnetIdentity.p2p,")
+nova_require_text("${NOVA_PARAMETER_SOURCE}" "kTestnetIdentity.rpc, kTestnetIdentity.prefixes,")
 nova_require_text("${NOVA_PARAMETER_SOURCE}" "2U, Hash({0x78U, 0x25U, 0x77U")
 nova_require_text("${NOVA_MONETARY_SOURCE}" "MAX_MONEY = 31'000'000LL * COIN")
 nova_require_text("${NOVA_MONETARY_SOURCE}" "TESTNET_CREATOR_ALLOCATION = 10'000'000LL * COIN")

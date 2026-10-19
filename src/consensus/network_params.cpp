@@ -15,6 +15,35 @@ namespace
 
 constexpr primitives::TransactionLimits kTransactionLimits{MAX_MONEY, 100'000U, 128U, 128U, 256U};
 constexpr primitives::BlockLimits kBlockLimits{kTransactionLimits, 1'000'000U, 256U, 100U};
+// Compile-time identity checks use the same constants consumed by the tables.
+// They do not finalize MAINNET, enable a daemon or alter any frozen value.
+struct NetworkIdentity final {
+    std::uint32_t magic;
+    std::uint16_t p2p;
+    std::uint16_t rpc;
+    AddressPrefixes prefixes;
+};
+constexpr NetworkIdentity kRegtestIdentity{0xDAB5'BFFAU, 18'444U, 18'443U, {111U, 239U}};
+constexpr NetworkIdentity kTestnetIdentity{0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U}};
+constexpr NetworkIdentity kMainnetIdentity{0xDAB5'BFFCU, 39'333U, 39'332U, {68U, 128U}};
+constexpr bool ValidIdentity(const NetworkIdentity& identity)
+{
+    return identity.magic != 0U && identity.p2p != 0U && identity.rpc != 0U &&
+           identity.p2p != identity.rpc;
+}
+constexpr bool DistinctIdentities(const NetworkIdentity& a, const NetworkIdentity& b)
+{
+    return a.magic != b.magic && a.p2p != b.p2p && a.p2p != b.rpc && a.rpc != b.p2p &&
+           a.rpc != b.rpc && a.prefixes.p2pkh != b.prefixes.p2pkh &&
+           a.prefixes.private_key != b.prefixes.private_key;
+}
+static_assert(DistinctIdentities(kRegtestIdentity, kTestnetIdentity));
+static_assert(ValidIdentity(kRegtestIdentity) && ValidIdentity(kTestnetIdentity) &&
+              ValidIdentity(kMainnetIdentity));
+static_assert(DistinctIdentities(kRegtestIdentity, kMainnetIdentity));
+static_assert(DistinctIdentities(kTestnetIdentity, kMainnetIdentity));
+static_assert(!DistinctIdentities(kTestnetIdentity, kTestnetIdentity));
+
 constexpr std::size_t kMaximumGenesisMessage = 64U;
 constexpr std::uint8_t kOpDup = 0x76U;
 constexpr std::uint8_t kOpHash160 = 0xA9U;
@@ -267,7 +296,8 @@ NetworkParamsError CheckNetworkParams(const NetworkParams& parameters) noexcept
 const NetworkParams& RegtestNetworkParams() noexcept
 {
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kRegtest, true, true, 1, 1, 0xDAB5'BFFAU, 18'444U, 18'443U, {111U, 239U},
+        NetworkId::kRegtest, true, true, 1, 1, kRegtestIdentity.magic, kRegtestIdentity.p2p,
+        kRegtestIdentity.rpc, kRegtestIdentity.prefixes,
         PowParameters{Target({0x7FU, 0xFFU, 0xFFU}), 0x207F'FFFFU},
         DifficultyParameters{600U, 1U, 600U, true, true},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 150U},
@@ -287,7 +317,8 @@ const NetworkParams& TestnetNetworkParams() noexcept
     // Finalization-review candidate only. TESTNET remains disabled until a
     // separate reviewed activation change sets enabled=true.
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kTestnet, false, true, 1, 1, 0xDAB5'BFFBU, 28'333U, 28'332U, {112U, 240U},
+        NetworkId::kTestnet, false, true, 1, 1, kTestnetIdentity.magic, kTestnetIdentity.p2p,
+        kTestnetIdentity.rpc, kTestnetIdentity.prefixes,
         PowParameters{Target({0x70U, 0xFFU, 0xFFU}), 0x2070'FFFFU},
         DifficultyParameters{600U, 2'016U, 1'209'600U, true, false},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 210'000U},
@@ -309,7 +340,8 @@ const NetworkParams& MainnetNetworkParams() noexcept
     // NOT FINAL — DO NOT DEPLOY.  This provisional fixture is compiled only
     // to keep the table structurally complete; it is not an activation commitment.
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kMainnet, false, false, 1, 1, 0xDAB5'BFFCU, 39'333U, 39'332U, {68U, 128U},
+        NetworkId::kMainnet, false, false, 1, 1, kMainnetIdentity.magic, kMainnetIdentity.p2p,
+        kMainnetIdentity.rpc, kMainnetIdentity.prefixes,
         PowParameters{Target({0x60U, 0xFFU, 0xFFU}), 0x2060'FFFFU},
         DifficultyParameters{600U, 2'016U, 1'209'600U, false, false},
         ChainParams{COIN, MAX_MONEY, INITIAL_SUBSIDY, 210'000U},

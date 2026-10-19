@@ -384,6 +384,9 @@ std::optional<ExplorerSnapshot> AuthenticatedRpcSnapshotSource::ReadSnapshot() c
             if (!height.has_value() || !block.has_value() || !hash.has_value()) {
                 return std::nullopt;
             }
+            if (index == 0U && (*height != 0U || *hash != config_.network->genesis_hash)) {
+                return std::nullopt;
+            }
             snapshot.active_blocks.push_back(ExplorerBlock{*height, *hash, *block});
         }
         return reader.RequireEnd() ? std::optional<ExplorerSnapshot>{std::move(snapshot)}

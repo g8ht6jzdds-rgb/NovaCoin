@@ -14,6 +14,16 @@ The implementation/deployment distinctions below were checked against
 verification entries retain their original revisions and do not assert that
 historical tests were rerun on this revision.
 
+### Engineering capability update — 2026-10-19
+
+At baseline `599cf77fc01150b2fce7348ded8448e8b5e7b837`, PR #23 materializes
+the exact frozen TESTNET genesis UTXOs atomically in fresh state; PR #24 adds
+the Linux-first offline journal/replay/complete-UTXO/supply report command.
+The exact-baseline build/test, ASan and UBSan jobs passed in workflow
+`39200346556`. These are disabled-network engineering/REGTEST and synthetic
+fixture results, not actual-chain inspection or public TESTNET acceptance.
+The historical entries below retain their original revisions and limitations.
+
 ## Candidate configuration
 
 | Item | Candidate value |
@@ -150,8 +160,12 @@ enablement candidate.
   limits, durable audit state, and emergency disablement. No public faucet
   exists. Actual encrypted wallet custody, funding, recovery, and deployed
   payout/abuse tests remain required before accepting the service.
-- No public explorer, release package, signing identity, or operator-managed
-  monitoring service exists.
+- No accepted public explorer, release package or operator-managed monitoring
+  deployment is established by this report. A release public-key identity has
+  been designated and verified in Issue #9 (fingerprint
+  `77F0948246E379FA7BF17F779C30AE406D9271F1`); accepted custody, recovery,
+  revocation and independent reproduction remain pending. Public-key identity
+  is not proof of exclusive key control or release readiness.
 - Passing local or hosted tests is not a production-readiness claim.
 
 ## Required work before deployment
@@ -179,8 +193,9 @@ enablement candidate.
 - Reaudit the retained signed A/B genesis-reproduction evidence and its stated
   control-boundary limitation before any activation decision; a signature alone
   is not an independent operational audit.
-- A complete chain UTXO inspection method and its independent evidence; wallet
-  `listunspent` observations are insufficient.
+- An authorized coherent actual-chain capture and independently reviewed UTXO/
+  supply report using the implemented offline inspection method. Synthetic
+  fixtures and wallet `listunspent` observations are insufficient.
 - Three independently operated live seed nodes and, if enabled, DNS ownership
   and removal controls.
 - A TESTNET-only faucet custody ceremony, documented dual-custodian emergency
