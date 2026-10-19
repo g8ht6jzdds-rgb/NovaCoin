@@ -4,6 +4,7 @@
 #include "primitives/serialization.hpp"
 #include "storage/network_identity.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <system_error>
@@ -85,14 +86,14 @@ TEST(NetworkIdentity, RejectsEveryOtherNetworkWithoutOpeningStorage)
         ASSERT_TRUE(writer.WriteU8(static_cast<std::uint8_t>(source->id)));
         ASSERT_TRUE(writer.WriteU32(source->network_magic));
         ASSERT_TRUE(writer.WriteHash256(source->genesis_hash));
-        const auto original = writer.bytes();
+        const std::vector<std::uint8_t> original{writer.bytes().begin(), writer.bytes().end()};
         for (const auto* target : networks) {
             EXPECT_EQ(nova::storage::ValidateNetworkIdentity(writer.bytes(), *target),
                       source->id == target->id
                           ? nova::storage::NetworkIdentityError::kNone
                           : nova::storage::NetworkIdentityError::kNetworkMismatch);
         }
-        EXPECT_EQ(writer.bytes(), original);
+        EXPECT_TRUE(std::ranges::equal(writer.bytes(), original));
     }
 }
 

@@ -8,6 +8,7 @@
 #include "consensus/monetary.hpp"
 #include "consensus/pow.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -517,7 +518,7 @@ TEST(ExplorerRpcSnapshotIntegration, ExportsSelectedGenesisAndRejectsOtherNetwor
         nova::primitives::BinaryWriter actual, expected;
         ASSERT_TRUE(snapshot->active_blocks.front().block.Serialize(actual, network->block_limits));
         ASSERT_TRUE(network->genesis_block.Serialize(expected, network->block_limits));
-        EXPECT_EQ(actual.bytes(), expected.bytes());
+        EXPECT_TRUE(std::ranges::equal(actual.bytes(), expected.bytes()));
         EXPECT_FALSE(rejected.has_value());
         nova::explorer::ExplorerIndex index;
         EXPECT_EQ(index.Rebuild(*snapshot).error, nova::explorer::ExplorerError::kNone);
