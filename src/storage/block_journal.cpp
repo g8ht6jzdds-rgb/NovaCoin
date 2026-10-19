@@ -156,7 +156,7 @@ using File = std::unique_ptr<std::FILE, decltype(&std::fclose)>;
     return SyncDirectory(path.parent_path());
 }
 
-[[nodiscard]] std::optional<std::uint32_t> ReadU32(std::ifstream& stream)
+[[nodiscard]] std::optional<std::uint32_t> ReadU32(std::istream& stream)
 {
     std::array<unsigned char, 4U> bytes{};
     stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -171,7 +171,7 @@ using File = std::unique_ptr<std::FILE, decltype(&std::fclose)>;
            (static_cast<std::uint32_t>(bytes[3U]) << 24U);
 }
 
-[[nodiscard]] std::optional<std::uint8_t> ReadU8(std::ifstream& stream)
+[[nodiscard]] std::optional<std::uint8_t> ReadU8(std::istream& stream)
 {
     char byte{};
     stream.read(&byte, 1);
@@ -301,17 +301,44 @@ BlockJournalLoadResult BlockJournal::Load() const noexcept
         if (!stream.is_open()) {
             return {BlockJournalError::kOpenFailure, {}};
         }
+        return ReadBlockJournal(stream, limits_);
+    } catch (const std::bad_alloc&) {
+        return {BlockJournalError::kAllocationFailure, {}};
+    } catch (...) {
+        return {BlockJournalError::kFilesystemFailure, {}};
+    }
+}
+
+BlockJournalLoadResult ReadBlockJournal(std::istream& stream, const primitives::BlockLimits limits,
+                                        const JournalReadBudget budget) noexcept
+{
+    try {
+        std::uint64_t consumed = 0U;
+        std::size_t records = 0U;
+        const auto reserve = [&](const std::uint64_t bytes) {
+            if (bytes > budget.bytes - consumed)
+                return false;
+            consumed += bytes;
+            return true;
+        };
         std::vector<primitives::Block> blocks;
         std::vector<std::pair<crypto::Hash256, primitives::Block>> prepared;
         while (true) {
+            if (stream.peek() != EOF && (!reserve(1U) || records++ >= budget.records)) {
+                return {BlockJournalError::kResourceLimit, {}};
+            }
             const auto tag = ReadU8(stream);
             if (!tag.has_value()) {
                 if (!stream.eof()) {
                     return {BlockJournalError::kFilesystemFailure, {}};
                 }
-                return {BlockJournalError::kNone, std::move(blocks), !prepared.empty()};
+                return {BlockJournalError::kNone, std::move(blocks), !prepared.empty(), consumed,
+                        records};
             }
             if (*tag == kPrepareRecord) {
+                if (!reserve(4U) || prepared.size() >= budget.pending) {
+                    return {BlockJournalError::kResourceLimit, {}};
+                }
                 const auto size = ReadU32(stream);
                 if (!size.has_value()) {
                     return {stream.eof() ? BlockJournalError::kNone
@@ -326,9 +353,11 @@ BlockJournalLoadResult BlockJournal::Load() const noexcept
                     }
                     return {BlockJournalError::kMalformedRecord, {}};
                 }
-                if (*size > limits_.max_serialized_size) {
+                if (*size > limits.max_serialized_size) {
                     return {BlockJournalError::kOversizedRecord, {}};
                 }
+                if (!reserve(*size))
+                    return {BlockJournalError::kResourceLimit, {}};
                 std::vector<std::uint8_t> encoded(*size);
                 stream.read(reinterpret_cast<char*>(encoded.data()),
                             static_cast<std::streamsize>(encoded.size()));
@@ -337,7 +366,7 @@ BlockJournalLoadResult BlockJournal::Load() const noexcept
                                          : BlockJournalError::kFilesystemFailure,
                             std::move(blocks), true};
                 }
-                const auto block = primitives::Block::Deserialize(encoded, limits_);
+                const auto block = primitives::Block::Deserialize(encoded, limits);
                 const auto hash =
                     block.has_value() ? primitives::ComputeBlockHash(block->header) : std::nullopt;
                 const auto duplicate =
@@ -351,6 +380,9 @@ BlockJournalLoadResult BlockJournal::Load() const noexcept
                 continue;
             }
             if (*tag == kCommitRecord) {
+                if (!reserve(crypto::Hash256::kSize) || blocks.size() >= budget.blocks) {
+                    return {BlockJournalError::kResourceLimit, {}};
+                }
                 std::array<std::uint8_t, crypto::Hash256::kSize> bytes{};
                 stream.read(reinterpret_cast<char*>(bytes.data()),
                             static_cast<std::streamsize>(bytes.size()));

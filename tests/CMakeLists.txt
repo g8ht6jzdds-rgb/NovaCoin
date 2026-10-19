@@ -11,6 +11,7 @@ add_executable(nova_unit_tests
     validation_tests.cpp
     chainstate_tests.cpp
     network_chainstate_tests.cpp
+    inspection_tests.cpp
     mempool_tests.cpp
     p2p_tests.cpp
     peer_discovery_tests.cpp
@@ -41,6 +42,7 @@ target_link_libraries(nova_unit_tests PRIVATE
     nova_node
     nova_explorer)
 target_link_libraries(nova_unit_tests PRIVATE nova_faucet)
+target_link_libraries(nova_unit_tests PRIVATE nova_inspection)
 
 add_test(NAME nova.unit COMMAND nova_unit_tests)
 set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")
@@ -50,6 +52,16 @@ add_test(NAME nova.testnet_release_record
 set_tests_properties(nova.testnet_release_record PROPERTIES LABELS "unit;testnet;release-record")
 
 if(UNIX)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(nova_inspection_fixture inspection_fixture.cpp)
+        nova_apply_project_options(nova_inspection_fixture)
+        target_link_libraries(nova_inspection_fixture PRIVATE nova_inspection)
+        find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+        add_test(NAME nova.offline_inspection_boundary
+            COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_offline_inspection.py
+                    $<TARGET_FILE:nova-chain-inspect> $<TARGET_FILE:nova_inspection_fixture>)
+        set_tests_properties(nova.offline_inspection_boundary PROPERTIES TIMEOUT 90 LABELS "unit;inspection;linux")
+    endif()
     add_executable(nova_pending_header_loopback_tests pending_header_loopback_tests.cpp)
     nova_apply_project_options(nova_pending_header_loopback_tests)
     target_link_libraries(nova_pending_header_loopback_tests PRIVATE GTest::gtest_main nova_node)

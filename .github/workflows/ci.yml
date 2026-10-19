@@ -105,12 +105,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build/${{ matrix.preset }}/fuzz-logs
-          for target in fuzz_deserializer fuzz_transaction_deserializer fuzz_block_deserializer fuzz_network_message fuzz_script_signature fuzz_address_parser fuzz_compact_target fuzz_peer_discovery fuzz_sync_admission fuzz_body_request_recovery; do
+          for target in fuzz_deserializer fuzz_transaction_deserializer fuzz_block_deserializer fuzz_network_message fuzz_script_signature fuzz_address_parser fuzz_compact_target fuzz_peer_discovery fuzz_sync_admission fuzz_body_request_recovery fuzz_offline_inspection; do
             corpus=()
             if [[ "$target" == fuzz_peer_discovery ]]; then
               mkdir -p build/${{ matrix.preset }}/discovery-corpus
               cp fuzz/corpus/peer_discovery/*.txt build/${{ matrix.preset }}/discovery-corpus/
               corpus=(build/${{ matrix.preset }}/discovery-corpus)
+            fi
+            if [[ "$target" == fuzz_offline_inspection ]]; then
+              mkdir -p build/${{ matrix.preset }}/inspection-corpus
+              cp fuzz/corpus/offline_inspection/*.txt build/${{ matrix.preset }}/inspection-corpus/
+              corpus=(build/${{ matrix.preset }}/inspection-corpus)
             fi
             ./build/${{ matrix.preset }}/fuzz/$target "${corpus[@]}" -runs=100 -max_len=4096 2>&1 | tee build/${{ matrix.preset }}/fuzz-logs/$target.log
           done
