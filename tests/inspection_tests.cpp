@@ -58,13 +58,15 @@ Block(const crypto::Hash256& parent, const std::uint32_t height, const std::uint
       const std::optional<primitives::Transaction>& spend = std::nullopt)
 {
     const auto& network = consensus::RegtestNetworkParams();
+    std::vector<std::uint8_t> height_script;
+    if (height <= 127U)
+        height_script = {1U, static_cast<std::uint8_t>(height)};
+    else
+        height_script = {2U, static_cast<std::uint8_t>(height & 255U),
+                         static_cast<std::uint8_t>(height >> 8U)};
+    height_script.push_back(static_cast<std::uint8_t>(marker));
     primitives::Transaction coinbase{
-        1,
-        {{{{}, 0xffff'ffffU},
-          {1U, static_cast<std::uint8_t>(height), static_cast<std::uint8_t>(marker)},
-          0U}},
-        {{reward, std::move(locking)}},
-        0U};
+        1, {{{{}, 0xffff'ffffU}, height_script, 0U}}, {{reward, std::move(locking)}}, 0U};
     primitives::Block block{{1,
                              parent,
                              {},
@@ -255,5 +257,75 @@ TEST(OfflineInspection, CheckedReportingArithmeticAndInvalidContext)
     std::array<std::uint8_t, 45U> marker{};
     EXPECT_NE(storage::ValidateNetworkIdentity(marker, consensus::RegtestNetworkParams()),
               storage::NetworkIdentityError::kNone);
+}
+
+TEST(OfflineInspection, ActualRegtestHalvingAndFreshReplayAgree)
+{
+    const auto& network = consensus::RegtestNetworkParams();
+    ASSERT_EQ(network.monetary.halving_interval, 150U);
+    auto parent = network.genesis_hash;
+    std::vector<primitives::Block> blocks;
+    std::int64_t expected = 0;
+    for (std::uint32_t height = 1U; height <= 151U; ++height) {
+        const auto subsidy = consensus::GetBlockSubsidy(height, network.monetary);
+        ASSERT_TRUE(subsidy.has_value());
+        const auto block = Block(parent, height, height, *subsidy);
+        ASSERT_TRUE(block.has_value());
+        const auto hash = primitives::ComputeBlockHash(block->header);
+        ASSERT_TRUE(hash.has_value());
+        parent = *hash;
+        blocks.push_back(*block);
+        ASSERT_TRUE(inspection::CheckedAdd(expected, *subsidy));
+    }
+    const auto context = Expected(blocks);
+    const auto bytes = Journal(blocks);
+    std::istringstream first{bytes}, second{bytes};
+    const auto a = inspection::InspectJournal(first, context);
+    const auto b = inspection::InspectJournal(second, context);
+    ASSERT_TRUE(a.error.empty()) << a.error;
+    EXPECT_EQ(a.report, b.report);
+    EXPECT_NE(a.report.find("\"utxo_value\":\"" + std::to_string(expected) + "\""),
+              std::string::npos);
+    EXPECT_NE(a.report.find("\"utxo_count\":\"151\""), std::string::npos);
+}
+
+TEST(OfflineInspection, InvalidPowParentTimeAndInitializationFailureRefuseReport)
+{
+    const auto& network = consensus::RegtestNetworkParams();
+    const auto good = Block(network.genesis_hash, 1U, 1U, consensus::INITIAL_SUBSIDY);
+    ASSERT_TRUE(good.has_value());
+    auto bad = *good;
+    const auto target = consensus::TargetFromCompact(bad.header.bits, network.pow);
+    ASSERT_TRUE(target.target.has_value());
+    bool invalid = false;
+    for (std::uint32_t nonce = 0U; nonce < 4096U; ++nonce) {
+        bad.header.nonce = nonce;
+        const auto hash = primitives::ComputeBlockHash(bad.header);
+        ASSERT_TRUE(hash.has_value());
+        if (!consensus::CheckProofOfWork(*hash, *target.target)) {
+            invalid = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(invalid);
+    std::istringstream invalid_pow{Journal({bad})};
+    EXPECT_FALSE(inspection::InspectJournal(invalid_pow, Expected({*good})).error.empty());
+    const auto unknown = Block({}, 1U, 1U, consensus::INITIAL_SUBSIDY);
+    ASSERT_TRUE(unknown.has_value());
+    std::istringstream unknown_parent{Journal({*unknown})};
+    EXPECT_FALSE(inspection::InspectJournal(unknown_parent, Context()).error.empty());
+    const auto future = Block(network.genesis_hash, 1U, 601U, consensus::INITIAL_SUBSIDY);
+    ASSERT_TRUE(future.has_value());
+    auto context = Expected({*future});
+    context.as_of = network.genesis_block.header.time;
+    std::istringstream future_time{Journal({*future})};
+    EXPECT_FALSE(inspection::InspectJournal(future_time, context).error.empty());
+    const auto testnet_context = Context(consensus::NetworkId::kTestnet);
+    chain::NetworkChainInitializer::SetFailurePointForTesting(
+        chain::NetworkChainInitializer::FailurePoint::kAfterSeed);
+    std::istringstream empty;
+    EXPECT_EQ(inspection::InspectJournal(empty, testnet_context).error, "initialization");
+    chain::NetworkChainInitializer::SetFailurePointForTesting(
+        chain::NetworkChainInitializer::FailurePoint::kNone);
 }
 } // namespace

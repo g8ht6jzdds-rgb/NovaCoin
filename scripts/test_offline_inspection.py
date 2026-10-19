@@ -115,6 +115,23 @@ raise SystemExit(subprocess.run([tool,'--snapshot',target,output]).returncode)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((output / "report.json").exists())
 
+    def test_sparse_oversize_is_refused_before_read_allocation(self):
+        identity = self.sealed(self.original["network.identity"])
+        journal = os.memfd_create("nova-oversize-fixture", os.MFD_ALLOW_SEALING)
+        self.descriptors.append(journal)
+        os.ftruncate(journal, 64 * 1024 * 1024 + 1)
+        fcntl.fcntl(journal, fcntl.F_ADD_SEALS, fcntl.F_SEAL_SEAL | fcntl.F_SEAL_WRITE |
+                    fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK)
+        metadata = self.sealed(self.original["snapshot.meta"])
+        output = self.root / "oversize-output"
+        output.mkdir()
+        fds = [identity, journal, metadata]
+        result = subprocess.run([INSPECTOR, "--sealed-fds", *map(str, fds), str(output)],
+                                pass_fds=fds, capture_output=True, timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"input_not_frozen_regular_bounded", result.stderr)
+        self.assertEqual(list(output.iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()
