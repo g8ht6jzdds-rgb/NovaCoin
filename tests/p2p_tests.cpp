@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "consensus/network_params.hpp"
 #include "net/p2p.hpp"
 #include "net/transport.hpp"
 
@@ -58,6 +59,30 @@ TEST(P2PFraming, RejectsPeerBelowConfiguredMinimumProtocolVersion)
 
     nova::net::MessageParser parser{TestProtocolParams()};
     EXPECT_EQ(parser.PushBytes(*serialized).error, nova::net::P2PError::kMalformedPayload);
+}
+
+TEST(P2PFraming, RejectsEveryOtherNetworkMagicBeforeDispatch)
+{
+    const auto networks = {&nova::consensus::RegtestNetworkParams(),
+                           &nova::consensus::TestnetNetworkParams(),
+                           &nova::consensus::MainnetNetworkParams()};
+    for (const auto* source : networks) {
+        auto source_params = TestProtocolParams();
+        source_params.network_magic = source->network_magic;
+        const auto bytes = nova::net::SerializeMessage(
+            {nova::net::Command::kPing, nova::net::NonceMessage{9U}}, source_params);
+        ASSERT_TRUE(bytes.has_value());
+        for (const auto* target : networks) {
+            auto target_params = TestProtocolParams();
+            target_params.network_magic = target->network_magic;
+            nova::net::MessageParser parser{target_params};
+            const auto result = parser.PushBytes(*bytes);
+            EXPECT_EQ(result.error, source->id == target->id
+                                        ? nova::net::P2PError::kNone
+                                        : nova::net::P2PError::kUnexpectedMagic);
+            EXPECT_EQ(result.messages.size(), source->id == target->id ? 1U : 0U);
+        }
+    }
 }
 
 TEST(P2PFraming, RejectsBadChecksumMagicAndDeclaredOversize)

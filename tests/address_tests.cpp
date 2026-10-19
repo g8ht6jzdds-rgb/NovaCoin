@@ -42,4 +42,21 @@ TEST(Address, RejectsWrongNetworkChecksumAndMalformedPresentation)
                                                   nova::consensus::TestnetNetworkParams()));
 }
 
+TEST(Address, RejectsEveryOtherNetworkForEveryEncodedAddress)
+{
+    nova::crypto::Hash160 hash{};
+    hash.fill(0x42U);
+    const auto networks = {&nova::consensus::RegtestNetworkParams(),
+                           &nova::consensus::TestnetNetworkParams(),
+                           &nova::consensus::MainnetNetworkParams()};
+    for (const auto* source : networks) {
+        const auto encoded = nova::wallet::EncodeP2pkhAddress(hash, *source);
+        ASSERT_TRUE(encoded.has_value());
+        for (const auto* target : networks) {
+            EXPECT_EQ(nova::wallet::DecodeP2pkhAddress(*encoded, *target).has_value(),
+                      source->id == target->id);
+        }
+    }
+}
+
 } // namespace

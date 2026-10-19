@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "consensus/network_params.hpp"
+#include "primitives/serialization.hpp"
 #include "storage/network_identity.hpp"
 
 #include <filesystem>
@@ -68,6 +69,31 @@ TEST_F(NetworkIdentityTest, RejectsTruncatedOrCorruptMarker)
     output.close();
     EXPECT_EQ(nova::storage::EnsureNetworkIdentity(root_, nova::consensus::RegtestNetworkParams()),
               nova::storage::NetworkIdentityError::kMalformedMarker);
+}
+
+TEST(NetworkIdentity, RejectsEveryOtherNetworkWithoutOpeningStorage)
+{
+    const auto networks = {&nova::consensus::RegtestNetworkParams(),
+                           &nova::consensus::TestnetNetworkParams(),
+                           &nova::consensus::MainnetNetworkParams()};
+    for (const auto* source : networks) {
+        nova::primitives::BinaryWriter writer;
+        for (const auto byte : {'N', 'V', 'I', 'D'}) {
+            ASSERT_TRUE(writer.WriteU8(static_cast<std::uint8_t>(byte)));
+        }
+        ASSERT_TRUE(writer.WriteU32(1U));
+        ASSERT_TRUE(writer.WriteU8(static_cast<std::uint8_t>(source->id)));
+        ASSERT_TRUE(writer.WriteU32(source->network_magic));
+        ASSERT_TRUE(writer.WriteHash256(source->genesis_hash));
+        const auto original = writer.bytes();
+        for (const auto* target : networks) {
+            EXPECT_EQ(nova::storage::ValidateNetworkIdentity(writer.bytes(), *target),
+                      source->id == target->id
+                          ? nova::storage::NetworkIdentityError::kNone
+                          : nova::storage::NetworkIdentityError::kNetworkMismatch);
+        }
+        EXPECT_EQ(writer.bytes(), original);
+    }
 }
 
 } // namespace

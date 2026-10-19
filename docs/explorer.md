@@ -88,3 +88,10 @@ rejected by a TESTNET explorer rather than silently treated as a Hash160. The
 TESTNET summary includes the exact visible notice `NOVA TESTNET — COINS HAVE
 NO VALUE`; public reverse-proxy/UI deployment remains an operations gate and
 must not proxy node RPC.
+
+The authenticated snapshot RPC serializes the selected immutable network's
+genesis and block limits, never REGTEST substitutes for TESTNET. The client
+requires the first decoded block to be height zero with the configured network's
+exact genesis hash. A different-network response fails closed before publication.
+These are read-only service consistency rules, not new consensus rules or
+authorization to start a disabled network.
