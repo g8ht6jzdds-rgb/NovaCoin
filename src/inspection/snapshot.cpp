@@ -289,11 +289,9 @@ int RunSnapshotInspection(const int argc, char** argv) noexcept
             ReadFrozen(files[2].get(), 2048U) != metadata ||
             (source.get() >= 0 && !DirectoryInventory(source.get())))
             return 2;
-        // A final report is created once, atomically, without overwriting any
-        // existing output. Only this process's exclusive temporary name is removed.
-        const auto temporary = ".nova-inspection-" + std::to_string(getpid());
-        Descriptor report{openat(output.get(), temporary.c_str(),
-                                 O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600)};
+        // Anonymous inode: publication is bound to the open descriptor, not a
+        // replaceable temporary pathname. No existing output is overwritten.
+        Descriptor report{openat(output.get(), ".", O_WRONLY | O_TMPFILE | O_CLOEXEC, 0600)};
         if (report.get() < 0)
             return 2;
         bool good = true;
@@ -308,9 +306,11 @@ int RunSnapshotInspection(const int argc, char** argv) noexcept
             position += static_cast<std::size_t>(got);
         }
         good = good && fsync(report.get()) == 0;
-        if (good)
-            good = linkat(output.get(), temporary.c_str(), output.get(), "report.json", 0) == 0;
-        static_cast<void>(unlinkat(output.get(), temporary.c_str(), 0));
+        if (good) {
+            const auto descriptor_path = "/proc/self/fd/" + std::to_string(report.get());
+            good = linkat(AT_FDCWD, descriptor_path.c_str(), output.get(), "report.json",
+                          AT_SYMLINK_FOLLOW) == 0;
+        }
         if (!good) {
             std::cerr << "INCOMPLETE output\n";
             return 2;

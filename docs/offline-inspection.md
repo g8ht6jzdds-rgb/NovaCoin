@@ -87,9 +87,11 @@ No volatile time/hostname enters canonical bytes. Identical inputs/context/tool
 produce identical reports; capture evidence must still be reviewed independently.
 
 Success exclusively creates a new output `report.json`, never overwriting an
-existing report. A bounded exclusive temporary file is fsynced before atomic
-no-replace link publication; only final report plus exit 0 is complete. Crashed
-temporary files are not reports. Post-publication directory sync is best effort,
+existing report. A bounded anonymous Linux O_TMPFILE inode is fsynced before atomic
+no-replace publication from its open descriptor through `/proc/self/fd`. No
+replaceable temporary pathname can substitute different bytes. Unsupported output
+filesystems fail closed; anonymous files disappear on failure/process death.
+Only final report plus exit 0 is complete. Post-publication directory sync is best effort,
 not a power-loss durability certification. No automatic upload/publication.
 
 ## Bounds and failure

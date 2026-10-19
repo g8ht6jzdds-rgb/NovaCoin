@@ -80,6 +80,8 @@ class InspectionBoundary(unittest.TestCase):
         again, _ = self.run_snapshot()
         self.assertNotEqual(again.returncode, 0)
         self.assertEqual(original, (output / "report.json").read_bytes())
+        self.assertEqual([p.name for p in output.iterdir()], ["report.json"])
+        self.assertEqual((output / "report.json").stat().st_mode & 0o777, 0o600)
         other = self.root / "other"
         other.mkdir()
         direct = subprocess.run([INSPECTOR, "--snapshot", str(self.source), str(other)],
