@@ -42,7 +42,11 @@ target_link_libraries(fuzz_body_request_recovery PRIVATE nova_node)
 nova_add_fuzzer(fuzz_bootstrap_reader bootstrap_reader_fuzz.cpp)
 target_link_libraries(fuzz_bootstrap_reader PRIVATE nova_node)
 
+nova_add_fuzzer(fuzz_offline_inspection offline_inspection_fuzz.cpp)
+target_link_libraries(fuzz_offline_inspection PRIVATE nova_inspection)
+
 add_custom_target(nova_fuzzers DEPENDS
+    fuzz_offline_inspection
     fuzz_deserializer
     fuzz_transaction_deserializer
     fuzz_block_deserializer

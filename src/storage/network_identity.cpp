@@ -152,20 +152,33 @@ NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_dir
         if (input.gcount() != static_cast<std::streamsize>(encoded.size()) || input.peek() != EOF) {
             return NetworkIdentityError::kMalformedMarker;
         }
-        if (!std::equal(kMarkerMagic.begin(), kMarkerMagic.end(), encoded.begin()) ||
-            ReadU32(encoded, 4U) != kMarkerVersion) {
-            return NetworkIdentityError::kMalformedMarker;
-        }
-        if (encoded[8U] != static_cast<std::uint8_t>(network.id) ||
-            ReadU32(encoded, 9U) != network.network_magic ||
-            !std::equal(network.genesis_hash.bytes().begin(), network.genesis_hash.bytes().end(),
-                        encoded.begin() + 13U)) {
-            return NetworkIdentityError::kNetworkMismatch;
-        }
-        return NetworkIdentityError::kNone;
+        return ValidateNetworkIdentity(encoded, network);
     } catch (...) {
         return NetworkIdentityError::kFilesystemFailure;
     }
+}
+
+NetworkIdentityError ValidateNetworkIdentity(const std::span<const std::uint8_t> bytes,
+                                             const consensus::NetworkParams& network) noexcept
+{
+    if (consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
+        return NetworkIdentityError::kInvalidParameters;
+    }
+    if (bytes.size() != kMarkerSize)
+        return NetworkIdentityError::kMalformedMarker;
+    std::array<std::uint8_t, kMarkerSize> encoded{};
+    std::copy(bytes.begin(), bytes.end(), encoded.begin());
+    if (!std::equal(kMarkerMagic.begin(), kMarkerMagic.end(), encoded.begin()) ||
+        ReadU32(encoded, 4U) != kMarkerVersion) {
+        return NetworkIdentityError::kMalformedMarker;
+    }
+    if (encoded[8U] != static_cast<std::uint8_t>(network.id) ||
+        ReadU32(encoded, 9U) != network.network_magic ||
+        !std::equal(network.genesis_hash.bytes().begin(), network.genesis_hash.bytes().end(),
+                    encoded.begin() + 13U)) {
+        return NetworkIdentityError::kNetworkMismatch;
+    }
+    return NetworkIdentityError::kNone;
 }
 
 } // namespace nova::storage

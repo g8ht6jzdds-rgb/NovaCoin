@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 
 namespace nova::storage
 {
@@ -20,6 +21,10 @@ enum class NetworkIdentityError : std::uint8_t {
     kNetworkMismatch,
     kWriteFailure,
 };
+
+[[nodiscard]] NetworkIdentityError
+ValidateNetworkIdentity(std::span<const std::uint8_t> encoded,
+                        const consensus::NetworkParams& network) noexcept;
 
 [[nodiscard]] NetworkIdentityError
 EnsureNetworkIdentity(const std::filesystem::path& data_directory,

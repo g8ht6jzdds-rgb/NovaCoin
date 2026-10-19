@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <istream>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -20,6 +22,7 @@ enum class BlockJournalError : std::uint8_t {
     kOversizedRecord,
     kMalformedRecord,
     kAllocationFailure,
+    kResourceLimit,
 };
 
 // A one-shot test seam for deterministic crash/recovery regression tests. It
@@ -39,7 +42,22 @@ struct BlockJournalLoadResult final {
     BlockJournalError error{BlockJournalError::kNone};
     std::vector<primitives::Block> blocks;
     bool recovery_required{};
+    std::uint64_t bytes_read{};
+    std::size_t record_count{};
 };
+
+struct JournalReadBudget final {
+    std::uint64_t bytes{std::numeric_limits<std::uint64_t>::max()};
+    std::size_t records{std::numeric_limits<std::size_t>::max()};
+    std::size_t blocks{std::numeric_limits<std::size_t>::max()};
+    std::size_t pending{std::numeric_limits<std::size_t>::max()};
+};
+
+// Pure decoder: never opens, creates, recovers or rewrites a file. Ordinary
+// journal loading uses unlimited aggregate budgets to preserve existing policy.
+[[nodiscard]] BlockJournalLoadResult ReadBlockJournal(std::istream& stream,
+                                                      primitives::BlockLimits limits,
+                                                      JournalReadBudget budget = {}) noexcept;
 
 class BlockJournal final
 {
