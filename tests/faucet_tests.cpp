@@ -205,8 +205,8 @@ TEST(FaucetRpcClient, RefusesNonLoopbackDisabledAndNonTestnetConfigurations)
     EXPECT_EQ(nova::faucet::FaucetRpcClient::Create(
                   {"198.51.100.1", 28332U, "faucet", "secret", 1024U, &enabled_testnet}),
               nullptr);
-    EXPECT_EQ(nova::faucet::FaucetRpcClient::Create({"127.0.0.1", 28332U, "faucet", "secret", 1024U,
-                                                     &disabled_testnet}),
+    EXPECT_EQ(nova::faucet::FaucetRpcClient::Create(
+                  {"127.0.0.1", 28332U, "faucet", "secret", 1024U, &disabled_testnet}),
               nullptr);
     EXPECT_EQ(nova::faucet::FaucetRpcClient::Create({"127.0.0.1", 28332U, "faucet", "secret", 1024U,
                                                      &nova::consensus::RegtestNetworkParams()}),
