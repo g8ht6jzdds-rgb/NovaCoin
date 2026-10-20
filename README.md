@@ -30,3 +30,8 @@ OpenSSL, and libsecp256k1. Configure CMake with a pinned vcpkg checkout's
 `scripts/buildsystems/vcpkg.cmake` toolchain file and an explicit target
 triplet. Toolchain binaries and installed packages belong outside version
 control (for example, in `.toolchain/`).
+
+## License
+
+NovaCoin's original project code is licensed under the [MIT License](LICENSE).
+Third-party components retain their respective licenses and notice requirements.
