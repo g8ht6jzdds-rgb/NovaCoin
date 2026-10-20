@@ -283,14 +283,14 @@ TEST(RegtestHarness, RejectsFarFutureBlocksWithoutChangingLocalMiningTime)
     EXPECT_FALSE(error);
 }
 
-TEST(RegtestHarness, RefusesDisabledTestnetBeforeCreatingPersistentState)
+TEST(RegtestHarness, RefusesDisabledMainnetBeforeCreatingPersistentState)
 {
-    const auto root = std::filesystem::temp_directory_path() / "novacoin-disabled-testnet";
+    const auto root = std::filesystem::temp_directory_path() / "novacoin-disabled-mainnet";
     std::error_code error;
     std::filesystem::remove_all(root, error);
     ASSERT_FALSE(error);
-    auto config = Config(root, "testnet", 18644U, 18643U);
-    config.network = nova::consensus::NetworkId::kTestnet;
+    auto config = Config(root, "mainnet", 18644U, 18643U);
+    config.network = nova::consensus::NetworkId::kMainnet;
 
     EXPECT_EQ(RegtestNode::Create(config), nullptr);
     EXPECT_FALSE(std::filesystem::exists(config.data_directory));

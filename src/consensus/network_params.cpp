@@ -314,10 +314,10 @@ const NetworkParams& RegtestNetworkParams() noexcept
 
 const NetworkParams& TestnetNetworkParams() noexcept
 {
-    // Finalization-review candidate only. TESTNET remains disabled until a
-    // separate reviewed activation change sets enabled=true.
+    // Seedless review candidate: selection is enabled, not operational launch.
+    // Operator/custody acceptance and service activation remain separate gates.
     static const NetworkParams parameters = MakeNetwork(
-        NetworkId::kTestnet, false, true, 1, 1, kTestnetIdentity.magic, kTestnetIdentity.p2p,
+        NetworkId::kTestnet, true, true, 1, 1, kTestnetIdentity.magic, kTestnetIdentity.p2p,
         kTestnetIdentity.rpc, kTestnetIdentity.prefixes,
         PowParameters{Target({0x70U, 0xFFU, 0xFFU}), 0x2070'FFFFU},
         DifficultyParameters{600U, 2'016U, 1'209'600U, true, false},

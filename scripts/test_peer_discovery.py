@@ -298,7 +298,8 @@ def hostile(harness, evidence, mode):
 
 def gates(harness):
     observations = []
-    for network in ('testnet', 'mainnet', 'regtest'):
+    # TESTNET is covered offline: starting its services is not authorized.
+    for network in ('mainnet', 'regtest'):
         pp, rp = reserve_ports(2)
         data = harness.runtime / network
         data.mkdir()
@@ -373,7 +374,7 @@ def verify(root):
         elif case == 'disabled':
             require(any('disabled_control' in event for event in events), 'disabled proof missing')
         elif case == 'gates':
-            require(any(len(event.get('disabled_network_gates', [])) == 3 for event in events), 'gates missing')
+            require(any(len(event.get('disabled_network_gates', [])) == 2 for event in events), 'gates missing')
         else:
             require(any(event.get('sentinel_calibration', {}).get('accepted') == 1 for event in events), 'sentinel calibration missing')
             require(any(event.get('hostile_case') == case and event['sentinel']['ready'] and
