@@ -58,8 +58,10 @@ amounts, and impossible/oversized messages.
 
 The REGTEST and TESTNET fixtures are compiled in and exact tests verify their
 block hashes and Merkle roots. The TESTNET candidate additionally requires the
-review/approval artifact in `docs/testnet-genesis-review.md`; its table stays
-disabled until a separate approved enablement change. MAINNET is intentionally not an activation
+review/approval artifact in `docs/testnet-genesis-review.md`. This separately
+authorized seedless review branch enables TESTNET selection but leaves bootstrap
+empty, operator/custody evidence pending and operational launch unauthorized.
+MAINNET is intentionally not an activation
 commitment: its table is disabled and marked **NOT FINAL — DO NOT DEPLOY**.
 Changing any generated fixture requires a reviewed parameter update and new
 exact vectors; it is never a run-time configuration choice.

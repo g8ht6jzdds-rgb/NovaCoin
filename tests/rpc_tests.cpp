@@ -526,7 +526,7 @@ TEST(ExplorerRpcSnapshotIntegration, ExportsSelectedGenesisAndRejectsOtherNetwor
         EXPECT_EQ(state->utxos->size(), count);
         EXPECT_EQ(mempool->size(), 0U);
     }
-    EXPECT_FALSE(nova::consensus::TestnetNetworkParams().enabled);
+    EXPECT_TRUE(nova::consensus::TestnetNetworkParams().enabled);
     EXPECT_FALSE(nova::consensus::MainnetNetworkParams().enabled);
 }
 

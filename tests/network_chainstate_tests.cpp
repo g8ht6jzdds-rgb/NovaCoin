@@ -53,8 +53,8 @@ TEST(NetworkInitialization, FrozenTestnetCommitmentAndConsumerPayload)
     EXPECT_EQ(state->utxos->size(), count);
     EXPECT_EQ(total, 1'000'000'000'000'000LL);
     EXPECT_EQ(chain::NetworkValidationParams(network).coinbase_maturity, 0U);
-    EXPECT_FALSE(network.enabled);
-    EXPECT_NE(node::SelectNetwork(network.id).error, node::NetworkSelectionError::kNone);
+    EXPECT_TRUE(network.enabled);
+    EXPECT_EQ(node::SelectNetwork(network.id).error, node::NetworkSelectionError::kNone);
     EXPECT_FALSE(consensus::MainnetNetworkParams().enabled);
 }
 

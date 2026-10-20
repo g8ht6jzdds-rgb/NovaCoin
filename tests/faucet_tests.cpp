@@ -198,13 +198,15 @@ TEST(FaucetRpcClient, RefusesNonLoopbackDisabledAndNonTestnetConfigurations)
 {
     auto enabled_testnet = nova::consensus::TestnetNetworkParams();
     enabled_testnet.enabled = true;
+    auto disabled_testnet = enabled_testnet;
+    disabled_testnet.enabled = false;
     ASSERT_EQ(nova::consensus::CheckNetworkParams(enabled_testnet),
               nova::consensus::NetworkParamsError::kNone);
     EXPECT_EQ(nova::faucet::FaucetRpcClient::Create(
                   {"198.51.100.1", 28332U, "faucet", "secret", 1024U, &enabled_testnet}),
               nullptr);
-    EXPECT_EQ(nova::faucet::FaucetRpcClient::Create({"127.0.0.1", 28332U, "faucet", "secret", 1024U,
-                                                     &nova::consensus::TestnetNetworkParams()}),
+    EXPECT_EQ(nova::faucet::FaucetRpcClient::Create(
+                  {"127.0.0.1", 28332U, "faucet", "secret", 1024U, &disabled_testnet}),
               nullptr);
     EXPECT_EQ(nova::faucet::FaucetRpcClient::Create({"127.0.0.1", 28332U, "faucet", "secret", 1024U,
                                                      &nova::consensus::RegtestNetworkParams()}),

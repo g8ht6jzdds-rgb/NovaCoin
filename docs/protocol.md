@@ -137,18 +137,19 @@ calculation uses a decimal conversion.
 
 The parameter schema is normative. REGTEST has a complete development table;
 the tagged TESTNET internal candidate has reviewed immutable values and exact
-vectors but remains non-activating; MAINNET remains non-final. Values MUST be
+vectors; this branch enables seedless TESTNET selection, not public launch.
+MAINNET remains non-final. Values MUST be
 selected in a reviewable parameter decision, recorded in this document and in
 compiled-in parameter tables, then covered by exact-vector tests before the
 corresponding network is enabled. A missing or invalid parameter is a
 startup/configuration error, never a default.
 
-Initial enablement policy:
+Seedless review-candidate enablement policy (2026-10-20 owner authorization):
 
 | Network | `deployment_final` | `enabled` | Permitted use |
 | --- | --- | --- | --- |
 | `REGTEST` | `true` | `true` once its complete parameter table and genesis vector exist | local deterministic development |
-| `TESTNET` | `true` for the reviewed internal candidate | `false` | no public network until a later, separate activation change |
+| `TESTNET` | `true` | `true` in this seedless review candidate | code selection only; no service startup, deployment or launch authorized |
 | `MAINNET` | `false` | `false` | must remain disabled until an explicit later decision |
 
 A TESTNET finalization-review candidate MAY set `deployment_final=true` while
@@ -156,6 +157,11 @@ leaving `enabled=false`. This is explicitly non-activating: the daemon MUST
 still refuse TESTNET startup, it does not authorize deployment, and a distinct
 reviewed activation change is required before `enabled` may become `true`.
 MAINNET MUST remain `deployment_final=false` and `enabled=false`.
+
+This branch implements separately authorized seedless enablement from baseline
+`591030940821dacdbb09d2f2ca578d73349986a3`. Compiled bootstrap stays empty;
+operator/custody evidence remains pending. Validation uses offline objects and
+bounded loopback REGTEST only, not TESTNET services or public endpoints.
 
 An enabled network's genesis block is valid only if its canonical header hashes
 to `genesis_block_id`, its parent hash is all zero bytes, its transaction list
@@ -498,8 +504,8 @@ The monetary cap is 31,000,000 NOVA. The existing halving schedule remains
 bounded by 21,000,000 NOVA, so the 10,000,000-NOVA allocation plus scheduled
 subsidy issuance does not exceed the cap. The allocation, cap, P2PKH script,
 complete coinbase serialization, Merkle root, and genesis hash are immutable
-parameters in the tagged internal candidate. TESTNET remains disabled pending
-its separate enablement decision.
+parameters in the tagged internal candidate. This seedless review branch enables
+TESTNET selection only; public launch remains unauthorized.
 
 ### TESTNET initial UTXO state (D1–D7 design disposition)
 
@@ -518,7 +524,8 @@ is retained for read-only consumers and confirmed wallet observation, not as an
 alternative authority for validity. No normal-block rule is relaxed for genesis.
 
 REGTEST retains its existing empty initial UTXOs/metadata-only anchor; MAINNET
-remains unavailable. Both TESTNET and MAINNET remain disabled. Frozen genesis,
+remains unavailable. This branch enables seedless TESTNET selection only;
+MAINNET remains disabled. Frozen genesis,
 network identifiers and monetary commitments are unchanged. This is a consensus-
 sensitive initialization correction, not an activation or migration decision.
 Existing TESTNET data is not certified compatible by a matching network marker
@@ -566,5 +573,5 @@ can activate them:
 5. Any transaction-version upgrade, script feature, witness design, or soft/hard
    fork activation mechanism.
 
-Until these decisions are made, implementations MUST expose no default public
-network and MUST refuse to start TESTNET or MAINNET.
+Implementations MUST expose no default public network. MAINNET remains disabled;
+the seedless TESTNET review gate does not authorize deployment or public startup.

@@ -1,6 +1,13 @@
 # NovaCoin TESTNET deployment report
 
-**Status:** **NOT DEPLOYED — TESTNET DISABLED**
+**Current branch status:** **NOT DEPLOYED — SEEDLESS TESTNET REVIEW GATE ENABLED; MAINNET DISABLED**
+
+On 2026-10-20 the owner authorized this seedless review-only implementation from
+`591030940821dacdbb09d2f2ca578d73349986a3`. TESTNET selection is enabled in code;
+compiled bootstrap remains empty. No operator/custody evidence is promoted to
+accepted, and no merge, tag, service startup, deployment or public launch is
+authorized. Validation does not start TESTNET services. The dated report below
+describes historical disabled-network revisions, not this branch's current gate.
 **Report date:** 2026-10-08 UTC
 **Implementation revision:** `2b6f31f4f8aa9a3cb726dbdaa8069566afcab909`
 **Internal engineering tag:** `task021-engineering-candidate-2b6f31f`

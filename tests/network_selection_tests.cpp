@@ -14,11 +14,14 @@ TEST(NetworkSelection, AdmitsOnlyEnabledAndValidRegtestParameters)
     EXPECT_TRUE(selection.parameters->enabled);
 }
 
-TEST(NetworkSelection, RefusesDisabledTestnetAndMainnetWithoutReturningParameters)
+TEST(NetworkSelection, AdmitsSeedlessTestnetButRefusesMainnet)
 {
     const auto testnet = nova::node::SelectNetwork(nova::consensus::NetworkId::kTestnet);
-    EXPECT_EQ(testnet.error, nova::node::NetworkSelectionError::kDisabled);
-    EXPECT_EQ(testnet.parameters, nullptr);
+    ASSERT_EQ(testnet.error, nova::node::NetworkSelectionError::kNone);
+    ASSERT_NE(testnet.parameters, nullptr);
+    EXPECT_EQ(testnet.parameters, &nova::consensus::TestnetNetworkParams());
+    EXPECT_TRUE(testnet.parameters->enabled);
+    EXPECT_TRUE(testnet.parameters->deployment_final);
 
     const auto mainnet = nova::node::SelectNetwork(nova::consensus::NetworkId::kMainnet);
     EXPECT_EQ(mainnet.error, nova::node::NetworkSelectionError::kDisabled);

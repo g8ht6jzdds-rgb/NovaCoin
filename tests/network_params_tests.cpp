@@ -40,7 +40,7 @@ TEST(NetworkParams, CommitsDistinctRegtestAndTestnetFixtures)
     EXPECT_EQ(CheckNetworkParams(regtest), NetworkParamsError::kNone);
     EXPECT_EQ(CheckNetworkParams(testnet), NetworkParamsError::kNone);
     EXPECT_TRUE(regtest.enabled);
-    EXPECT_FALSE(testnet.enabled);
+    EXPECT_TRUE(testnet.enabled);
     EXPECT_TRUE(testnet.deployment_final);
     EXPECT_NE(regtest.network_magic, testnet.network_magic);
     EXPECT_EQ(regtest.protocol_version, 1);
@@ -78,7 +78,7 @@ TEST(NetworkParams, AllNetworkIdentitiesPortsPrefixesAndGenesisRemainDistinct)
     EXPECT_EQ(TestnetNetworkParams().default_rpc_port, 28'332U);
     EXPECT_EQ(TestnetNetworkParams().address_prefixes.p2pkh, 112U);
     EXPECT_EQ(TestnetNetworkParams().address_prefixes.private_key, 240U);
-    EXPECT_FALSE(TestnetNetworkParams().enabled);
+    EXPECT_TRUE(TestnetNetworkParams().enabled);
     EXPECT_FALSE(MainnetNetworkParams().enabled);
     EXPECT_FALSE(MainnetNetworkParams().deployment_final);
 }
@@ -186,18 +186,17 @@ TEST(NetworkParams, RejectsTestnetActivationWithoutFinalApprovalFlag)
     altered.deployment_final = false;
     EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kTestnetNotFinal);
 
-    // The finalized review candidate remains unavailable until a separately
-    // reviewed activation change sets enabled deliberately.
-    EXPECT_FALSE(TestnetNetworkParams().enabled);
+    // Seedless review enablement still requires the finalized parameter flag.
+    EXPECT_TRUE(TestnetNetworkParams().enabled);
     EXPECT_TRUE(TestnetNetworkParams().deployment_final);
 }
 
-TEST(NetworkParams, FinalizedTestnetRemainsNonActivating)
+TEST(NetworkParams, SeedlessTestnetSelectionLeavesMainnetDisabled)
 {
     const auto& testnet = TestnetNetworkParams();
     const auto& mainnet = MainnetNetworkParams();
     EXPECT_TRUE(testnet.deployment_final);
-    EXPECT_FALSE(testnet.enabled);
+    EXPECT_TRUE(testnet.enabled);
     EXPECT_EQ(CheckNetworkParams(testnet), NetworkParamsError::kNone);
     EXPECT_FALSE(mainnet.deployment_final);
     EXPECT_FALSE(mainnet.enabled);
