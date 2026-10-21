@@ -1,3 +1,4 @@
+#include "build/version.hpp"
 #include "consensus/network_params.hpp"
 #include "primitives/serialization.hpp"
 
@@ -87,6 +88,10 @@ namespace
 
 int main(const int argc, char* argv[])
 {
+    if (nova::build::IsVersionRequest(argc, argv)) {
+        nova::build::PrintVersion(std::cout, "nova-genesis");
+        return 0;
+    }
     if (argc != 9 && argc != 11) {
         std::cerr << "usage: nova-genesis --timestamp <u32> --message <ASCII> "
                      "--target <compact-hex> --reward <amount> "

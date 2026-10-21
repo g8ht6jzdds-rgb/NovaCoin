@@ -1,3 +1,4 @@
+#include "build/version.hpp"
 #include "consensus/network_params.hpp"
 #include "faucet/faucet.hpp"
 #include "faucet/http.hpp"
@@ -89,6 +90,10 @@ template <typename Value>
 
 int main(const int argc, char* argv[])
 {
+    if (nova::build::IsVersionRequest(argc, argv)) {
+        nova::build::PrintVersion(std::cout, "novacoin-faucet");
+        return 0;
+    }
     std::optional<std::uint16_t> public_adapter_port;
     std::optional<std::uint16_t> rpc_port;
     std::optional<std::filesystem::path> audit_log;

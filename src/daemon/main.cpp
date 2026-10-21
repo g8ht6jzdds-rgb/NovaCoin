@@ -1,3 +1,4 @@
+#include "build/version.hpp"
 #include "node/bootstrap_config.hpp"
 #include "node/network_selection.hpp"
 #include "node/peer_service.hpp"
@@ -107,6 +108,10 @@ void ReleaseSecretEnvironmentString(char* value, const std::size_t size) noexcep
 
 int main(const int argc, char* argv[])
 {
+    if (nova::build::IsVersionRequest(argc, argv)) {
+        nova::build::PrintVersion(std::cout, "novacoind");
+        return 0;
+    }
     constexpr std::size_t kMaximumConfiguredPeers = 64U;
     static_cast<void>(std::signal(SIGINT, RequestShutdown));
     static_cast<void>(std::signal(SIGTERM, RequestShutdown));

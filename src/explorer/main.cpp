@@ -1,3 +1,4 @@
+#include "build/version.hpp"
 #include "explorer/explorer.hpp"
 #include "explorer/http.hpp"
 #include "explorer/http_server.hpp"
@@ -79,6 +80,10 @@ namespace
 
 int main(const int argc, char* argv[])
 {
+    if (nova::build::IsVersionRequest(argc, argv)) {
+        nova::build::PrintVersion(std::cout, "nova-explorer");
+        return 0;
+    }
     std::optional<std::uint16_t> rpc_port;
     std::optional<std::uint16_t> http_port;
     std::optional<nova::consensus::NetworkId> network;
