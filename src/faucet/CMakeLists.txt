@@ -10,5 +10,6 @@ if(WIN32)
 endif()
 
 add_executable(novacoin-faucet main.cpp)
+target_link_libraries(novacoin-faucet PRIVATE nova_version)
 nova_apply_project_options(novacoin-faucet)
 target_link_libraries(novacoin-faucet PRIVATE nova_faucet)

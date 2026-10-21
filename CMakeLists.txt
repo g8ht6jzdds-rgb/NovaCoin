@@ -115,6 +115,7 @@ function(nova_apply_project_options target)
     endif()
 endfunction()
 
+include(${CMAKE_SOURCE_DIR}/scripts/build-version.cmake)
 add_subdirectory(src)
 
 if(BUILD_TESTING)

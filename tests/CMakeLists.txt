@@ -1,6 +1,7 @@
 find_package(GTest 1.11 CONFIG REQUIRED)
 
 add_executable(nova_unit_tests
+    version_tests.cpp
     empty_suite.cpp
     serialization_tests.cpp
     transaction_tests.cpp
@@ -30,6 +31,31 @@ add_executable(nova_unit_tests
     faucet_tests.cpp
     property_tests.cpp)
 nova_apply_project_options(nova_unit_tests)
+target_link_libraries(nova_unit_tests PRIVATE nova_version)
+
+find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+add_test(NAME nova.executable_version
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_version.py
+        --cmake ${CMAKE_COMMAND} --source ${CMAKE_SOURCE_DIR}
+        --header ${PROJECT_BINARY_DIR}/generated/build/version_data.hpp
+        $<TARGET_FILE:novacoind> $<TARGET_FILE:novacoin-cli>
+        $<TARGET_FILE:nova-genesis> $<TARGET_FILE:nova-explorer>
+        $<TARGET_FILE:novacoin-faucet>)
+set_tests_properties(nova.executable_version PROPERTIES TIMEOUT 90 LABELS "unit;version")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT NOVA_ENABLE_SANITIZERS)
+    add_library(nova_version_guard SHARED version_guard.cpp)
+    nova_apply_project_options(nova_version_guard)
+    add_executable(nova_version_guard_probe version_guard_probe.cpp)
+    nova_apply_project_options(nova_version_guard_probe)
+    add_test(NAME nova.version_side_effect_guard
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_version_guard.py
+            $<TARGET_FILE:nova_version_guard> $<TARGET_FILE:nova_version_guard_probe>
+            $<TARGET_FILE:novacoind> $<TARGET_FILE:novacoin-cli>
+            $<TARGET_FILE:nova-genesis> $<TARGET_FILE:nova-explorer>
+            $<TARGET_FILE:novacoin-faucet>)
+    set_tests_properties(nova.version_side_effect_guard PROPERTIES TIMEOUT 30 LABELS "unit;version;linux")
+endif()
 target_link_libraries(nova_unit_tests PRIVATE
     GTest::gtest_main
     nova_crypto
