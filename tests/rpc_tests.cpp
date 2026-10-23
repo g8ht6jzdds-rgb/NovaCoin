@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "build/version.hpp"
 #include "explorer/explorer.hpp"
 #include "rpc/rpc.hpp"
 #include "wallet/address.hpp"
@@ -243,6 +244,45 @@ TEST(RpcIntegration, RestrictsExplorerAndFaucetCredentialsToDedicatedMethods)
          "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"faucetpay\",\"params\":{\"address\":\"" +
              *address + "\",\"amount\":11}}"});
     EXPECT_NE(oversized.body.find("-32602"), std::string::npos);
+}
+
+TEST(RpcIntegration, ReportsCentralVersionAndActualNetworkCompatibility)
+{
+    for (const auto regtest : {true, false}) {
+        auto service = CreateService("127.0.0.1", regtest, false, true);
+        ASSERT_NE(service, nullptr);
+        const auto before =
+            service->HandleHttpPost({"POST", "Basic dXNlcjpwYXNz",
+                                     R"({"jsonrpc":"2.0","id":1,"method":"getblockchaininfo"})"});
+        const auto info =
+            service->HandleHttpPost({"POST", "Basic dXNlcjpwYXNz",
+                                     R"({"jsonrpc":"2.0","id":1,"method":"getnetworkinfo"})"});
+        const auto& network = regtest ? nova::consensus::RegtestNetworkParams()
+                                      : nova::consensus::TestnetNetworkParams();
+        EXPECT_EQ(info.status, 200U);
+        EXPECT_NE(
+            info.body.find("\"version\":\"" + std::string{nova::build::kApplicationVersion} + "\""),
+            std::string::npos);
+        EXPECT_NE(info.body.find("\"protocolversion\":" + std::to_string(network.protocol_version)),
+                  std::string::npos);
+        EXPECT_NE(info.body.find("\"minimumpeerprotocolversion\":" +
+                                 std::to_string(network.minimum_peer_protocol_version)),
+                  std::string::npos);
+        const auto after =
+            service->HandleHttpPost({"POST", "Basic dXNlcjpwYXNz",
+                                     R"({"jsonrpc":"2.0","id":1,"method":"getblockchaininfo"})"});
+        EXPECT_EQ(before.body, after.body);
+        EXPECT_EQ(service
+                      ->HandleHttpPost({"POST", "Basic invalid",
+                                        R"({"jsonrpc":"2.0","id":1,"method":"getnetworkinfo"})"})
+                      .status,
+                  401U);
+        EXPECT_EQ(service
+                      ->HandleHttpPost({"POST", "Basic ZXhwbG9yZXI6dmlldw==",
+                                        R"({"jsonrpc":"2.0","id":1,"method":"getnetworkinfo"})"})
+                      .status,
+                  403U);
+    }
 }
 
 TEST(RpcIntegration, ServesReadWalletAndStructuredFailureResponses)

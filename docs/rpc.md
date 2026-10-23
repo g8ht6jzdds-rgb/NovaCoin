@@ -40,8 +40,14 @@ encrypted-wallet path before returning success.
 
 ## Methods
 
-Read methods: `getblockchaininfo`, `getblock`, `gettransaction`, `getutxo`,
+Read methods: `getnetworkinfo`, `getblockchaininfo`, `getblock`, `gettransaction`, `getutxo`,
 `getmempoolinfo`, `getmempoolentry`, and `getpeerinfo`.
+
+`getnetworkinfo` reports the full central application SemVer string as `version`,
+compiled `source_revision`, selected `network`, and the actual immutable table's
+`protocolversion`/`minimumpeerprotocolversion`. These last two integers are network
+compatibility values, not application versions. Authentication/local binding and
+restricted explorer/faucet allowlists are unchanged; this call mutates no state.
 
 Enabled non-mainnet networks provide `getexplorersnapshot`, solely for the
 separate `nova-explorer` process. It returns no wallet, mempool, or

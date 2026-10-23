@@ -1,5 +1,6 @@
 #include "rpc/rpc.hpp"
 
+#include "build/version.hpp"
 #include "wallet/address.hpp"
 
 #include "consensus/network_params.hpp"
@@ -544,6 +545,18 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
         return !params.has_value() ? std::nullopt : Field(*params, name);
     };
     try {
+        if (*method == "getnetworkinfo") {
+            const auto& network = consensus::GetNetworkParams(config_.network);
+            return {
+                200U,
+                ResultResponse(
+                    id, "{\"version\":\"" + std::string{build::kApplicationVersion} +
+                            "\",\"source_revision\":\"" + std::string{build::kSourceRevision} +
+                            "\",\"protocolversion\":" + std::to_string(network.protocol_version) +
+                            ",\"minimumpeerprotocolversion\":" +
+                            std::to_string(network.minimum_peer_protocol_version) +
+                            ",\"network\":\"" + NetworkName(config_.network) + "\"}")};
+        }
         if (*method == "getblockchaininfo") {
             return {200U, ResultResponse(
                               id, "{\"blocks\":" +

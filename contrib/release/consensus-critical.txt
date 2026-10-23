@@ -1,0 +1,19 @@
+# Designated consensus and consensus-sensitive build inputs. Review additions too.
+src/consensus/*
+src/primitives/*
+src/crypto/*
+src/chain/validation.*
+src/chain/utxo.*
+src/chain/chainstate.*
+src/chain/network_chainstate.*
+src/node/network_selection.*
+docs/protocol.md
+docs/chain-selection.md
+docs/networks.md
+CMakeLists.txt
+*/CMakeLists.txt
+*.cmake
+CMakePresets.json
+vcpkg*.json
+contrib/release/*
+scripts/release.py
