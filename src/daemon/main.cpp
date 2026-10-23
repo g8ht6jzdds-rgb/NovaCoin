@@ -112,6 +112,14 @@ int main(const int argc, char* argv[])
         nova::build::PrintVersion(std::cout, "novacoind");
         return 0;
     }
+    // Check before signal setup, argument paths, credentials or node construction.
+    // Even otherwise incomplete/invalid startup arguments cannot bypass the lock.
+    for (int index = 1; index < argc; ++index) {
+        if (nova::node::MAINNET_LOCKED && std::string_view{argv[index]} == "--mainnet") {
+            std::cerr << nova::node::MAINNET_LOCK_REASON << '\n';
+            return 1;
+        }
+    }
     constexpr std::size_t kMaximumConfiguredPeers = 64U;
     static_cast<void>(std::signal(SIGINT, RequestShutdown));
     static_cast<void>(std::signal(SIGTERM, RequestShutdown));

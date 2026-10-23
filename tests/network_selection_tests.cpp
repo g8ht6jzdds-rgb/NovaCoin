@@ -24,7 +24,17 @@ TEST(NetworkSelection, AdmitsSeedlessTestnetButRefusesMainnet)
     EXPECT_TRUE(testnet.parameters->deployment_final);
 
     const auto mainnet = nova::node::SelectNetwork(nova::consensus::NetworkId::kMainnet);
-    EXPECT_EQ(mainnet.error, nova::node::NetworkSelectionError::kDisabled);
+    EXPECT_EQ(mainnet.error, nova::node::NetworkSelectionError::kMainnetLocked);
+    EXPECT_EQ(mainnet.parameters, nullptr);
+}
+
+TEST(NetworkSelection, MainnetLockIsIndependentOfDeploymentParameterValidation)
+{
+    static_assert(nova::node::MAINNET_LOCKED);
+    EXPECT_FALSE(nova::consensus::MainnetNetworkParams().enabled);
+    EXPECT_FALSE(nova::consensus::MainnetNetworkParams().deployment_final);
+    const auto mainnet = nova::node::SelectNetwork(nova::consensus::NetworkId::kMainnet);
+    EXPECT_EQ(mainnet.error, nova::node::NetworkSelectionError::kMainnetLocked);
     EXPECT_EQ(mainnet.parameters, nullptr);
 }
 

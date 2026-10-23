@@ -313,7 +313,8 @@ def gates(harness):
         expected = 2 if network == 'regtest' else 1
         require(result.returncode == expected, 'activation/loopback gate exit')
         diagnostic = (b'peer discovery requires REGTEST IPv4 loopback\n' if network == 'regtest'
-                      else (network + ' is disabled pending immutable parameter approval\n').encode())
+                      else b'MAINNET_LOCKED: mainnet startup is forbidden. Mandatory readiness gates, '
+                           b'external human security review and explicit activation approval are incomplete.\n')
         require(result.stdout == diagnostic and not list(data.iterdir()), 'gate diagnostic/persistence')
         for port in (pp, rp):
             with socket.socket() as probe:
