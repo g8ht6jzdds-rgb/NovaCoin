@@ -140,6 +140,16 @@ TEST(PowWork, CalculatesExactWorkWithoutFloatingPoint)
     EXPECT_FALSE(CalculateWork(Target256{}).has_value());
 }
 
+TEST(PowWork, DistinguishesWorkEquationAtNonDividingTarget)
+{
+    const auto two =
+        TargetFromHex("0000000000000000000000000000000000000000000000000000000000000002");
+    const auto work_for_two = CalculateWork(two);
+    ASSERT_TRUE(work_for_two.has_value());
+    EXPECT_EQ(*work_for_two,
+              TargetFromHex("5555555555555555555555555555555555555555555555555555555555555555"));
+}
+
 TEST(PowRegtestMiner, SearchesNonceValuesWithTheExplicitEasyRegtestTarget)
 {
     nova::primitives::BlockHeader candidate{};

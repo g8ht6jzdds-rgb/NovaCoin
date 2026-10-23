@@ -110,22 +110,33 @@ NetworkParams {
 
   uint32_t median_time_past_window;
   uint32_t max_future_block_time_seconds;
-  uint32_t max_block_weight;
   uint32_t max_block_serialized_size;
   uint32_t max_transactions_per_block;
   uint32_t max_tx_serialized_size;
   uint32_t max_tx_inputs;
   uint32_t max_tx_outputs;
   uint32_t max_script_size;
-  uint32_t max_script_element_size;
-  uint32_t max_script_ops;
-  uint32_t max_stack_items;
   uint32_t max_coinbase_script_size;
   uint32_t locktime_threshold;
   uint32_t max_sequence;
   uint32_t sig_hash_all;
 }
 ```
+
+The displayed schema is a normative ownership map, not a promise that every
+conceptual name is a distinct C++ field. `BlockLimits` owns serialized block and
+transaction bounds; in v0, block weight is exactly the full serialized size and
+has no independent weight rule. `NetworkValidationParams` owns the current
+coinbase-maturity, lock-time threshold, maximum sequence, `SIGHASH_ALL`, and
+future-time bindings. `ChainStateParams` owns the current median-time window and
+difficulty parameters. Genesis chainwork is derived from the committed genesis
+target and stored in the anchor. These bindings are immutable for a selected
+network and are not caller-configurable.
+
+v0 has no general script interpreter. It therefore has no independent script
+element, opcode-count, or stack-item consensus limits. The exact P2PKH spend
+template and the serialized script byte limit are the complete current script
+resource contract; no absent general-interpreter limit is implied.
 
 `Uint256` and `Uint512` are fixed-width unsigned integer types with checked
 operations; `Uint512` is used for accumulated chain work.  A chain-work
@@ -212,7 +223,9 @@ this exact prefix.
 
 For a non-coinbase transaction:
 
-1. Every referenced outpoint MUST exist in the parent UTXO view.
+1. Every referenced outpoint MUST exist in the temporary ordered UTXO view:
+   parent coins plus outputs of earlier regular transactions in this block, less
+   earlier spends. A forward reference is invalid.
 2. No outpoint may appear twice in the transaction or elsewhere in the block.
 3. A coinbase coin MUST have `spend_height - coin.height >= coinbase_maturity`.
 4. `sum(inputs)` and `sum(outputs)` MUST be valid, checked sums; inputs MUST
@@ -221,9 +234,14 @@ For a non-coinbase transaction:
    under section 7.
 6. The transaction MUST be final under section 8.
 
-After all transactions validate, the block atomically removes all spent coins
-and adds all new outputs.  No partial state update is observable after a
-failed transaction or block.
+Regular transactions are processed in block order. Their outputs become visible
+only to later regular transactions. Coinbase outputs are added only after all
+regular transactions validate, so a same-block coinbase spend is invalid even
+when the configured maturity is zero. Creating an outpoint that already exists
+in the parent view or current temporary additions is invalid, including if an
+earlier temporary spend consumed the parent coin. After all transactions
+validate, the block atomically commits the temporary view. No partial state
+update is observable after a failed transaction or block.
 
 ## 6. Blocks and merkle commitment
 
@@ -264,10 +282,13 @@ associated parameters are finalized.
 
 ## 7. v0 script profile
 
-v0 supports a deliberately small, non-Turing-complete script profile:
+v0 supports a deliberately small, non-Turing-complete **spend authorization**
+profile. Output admission and spend authorization are distinct: a structurally
+valid output script within `max_script_size` may be stored as a UTXO, but only
+the P2PKH locking-script form below is spend-authorized by v0.
 
-* Locking scripts: `OP_DUP OP_HASH160 <20-byte pubkey-hash> OP_EQUALVERIFY
-  OP_CHECKSIG` (P2PKH) only.
+* Supported spend locking scripts: `OP_DUP OP_HASH160 <20-byte pubkey-hash>
+  OP_EQUALVERIFY OP_CHECKSIG` (P2PKH) only.
 * Unlocking scripts have exactly two direct pushes:
   `push(len(der_signature) + 1) || der_signature || 0x01 || 0x21 || compressed_pubkey`.
   The first push opcode MUST be in `0x09..0x49`, the signature MUST be strict
@@ -280,10 +301,11 @@ v0 supports a deliberately small, non-Turing-complete script profile:
   strict DER, have low-S normalization, and verify against the computed
   signature hash.
 
-No opcode outside this exact profile is valid.  Scripts, pushed elements,
-opcode count, and stack item count MUST satisfy their respective parameters;
-the exact-template requirement also eliminates alternate pushes and execution
-ambiguity.
+No opcode outside this exact profile is spend-authorized. Unsupported or
+zero-valued output scripts remain stored UTXO entries; v0 neither executes them
+through a general interpreter nor infers a burn rule from an opcode name. The
+exact template and serialized-size limit eliminate alternate pushes and
+execution ambiguity for supported spends.
 
 For `SIGHASH_ALL`, the signature preimage is the canonical serialization of a
 copy of the spending transaction in which every input `script_sig` is empty
@@ -322,7 +344,9 @@ header index. A peer, miner, RPC caller, or other adapter MUST NOT supply an
 expected target to block acceptance.
 
 * Genesis uses the exact `genesis_header.bits`.
-* If `no_retargeting` is true, every descendant uses `pow_limit_compact`.
+* If `no_retargeting` is true, every descendant inherits its parent's expected
+  `bits`. This also applies to a valid anchor whose target is tougher than the
+  configured PoW limit.
 * Otherwise, at heights not divisible by `retarget_interval`, use the parent's
   `bits`, except where `allow_min_difficulty_blocks` is true: if the new block
   time is more than twice `target_spacing_seconds` after its parent, use
@@ -359,7 +383,9 @@ fails closed on overflow.
 ## 10. Chain selection and validation order
 
 Chain work is accumulated as an exact unsigned value using
-`work(target) = floor((2^256 - 1) / (target + 1)) + 1`.  The chosen valid chain
+`work(target) = floor(2^256 / (target + 1))`. The implementation computes this
+with the equivalent checked fixed-width complement/divide/increment procedure;
+it does not use floating point. The chosen valid chain
 is the one with greatest cumulative chain work.  Equal-work ties are broken by
 the lexicographically smaller raw 32-byte block ID, which makes selection
 deterministic.  A candidate may be selected only after all headers and all
@@ -370,8 +396,9 @@ failure:
 
 1. Enforce framing, canonical decoding, count/size bounds, and no trailing
    bytes.
-2. Validate header linkage, expected version (when a version policy is added),
-   time, canonical target, expected difficulty, and PoW.
+2. Validate header linkage, time, canonical target, expected difficulty, and
+   PoW. Serialized block and transaction version fields do not select an
+   alternate v0 consensus rule.
 3. Validate the transaction count, one-and-only-first coinbase rule, transaction
    IDs, and merkle root.
 4. Validate non-coinbase transactions in order against a temporary UTXO view:
@@ -587,9 +614,12 @@ loading, filesystem operations, networking or service initialization. Standalone
 `--version` remains a read-only version request. The lock changes no validation,
 serialization, genesis bytes or monetary parameters.
 
-Network upgrades remain deliberately unimplemented in v0: no version-bit voting,
-scheduled fork or alternate validation rules activate from peer announcements.
-Any proposal needs a versioned normative specification, activation/rollback and
-compatibility analysis, exact vectors, external review and explicit human release
-approval. No future mechanism or MAINNET value is silently specified here.
+v0 is immutable: no in-protocol network upgrade or activation mechanism exists.
+Block and transaction version fields do not select alternate consensus rules, and
+P2P versions are transport compatibility only. No version-bit voting, scheduled
+fork, peer announcement, or alternate validation rule can activate a v0 rule.
+Any future consensus change requires a separately designed and versioned
+normative specification, activation/rollback and compatibility analysis, exact
+vectors, external review, and explicit human approval. No future mechanism or
+MAINNET value is silently specified here.
 See `consensus-freeze.md`, `mainnet-readiness.md` and `../MAINNET_CHECKLIST.md`.

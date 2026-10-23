@@ -76,6 +76,22 @@ TEST(TransactionSerialization, HasCanonicalByteLayoutAndStableTxId)
     EXPECT_EQ(*parsed_transaction_id, *transaction_id);
 }
 
+TEST(VersionPolicy, SerializedVersionsDoNotSelectConsensusRules)
+{
+    for (const auto version : {std::numeric_limits<std::int32_t>::min(), -1, 0, 1,
+                               std::numeric_limits<std::int32_t>::max()}) {
+        auto transaction = ValidTransaction();
+        transaction.version = version;
+        EXPECT_EQ(CheckTransactionStructure(transaction, kLimits),
+                  TransactionStructureError::kNone);
+        nova::primitives::BinaryWriter writer;
+        ASSERT_TRUE(transaction.Serialize(writer, kLimits));
+        const auto parsed = Transaction::Deserialize(writer.bytes(), kLimits);
+        ASSERT_TRUE(parsed.has_value());
+        EXPECT_EQ(parsed->version, version);
+    }
+}
+
 TEST(TransactionStructure, AcceptsAValidCoinbaseShapedTransaction)
 {
     auto transaction = ValidTransaction();
