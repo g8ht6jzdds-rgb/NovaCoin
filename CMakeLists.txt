@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(NovaCoin VERSION 0.1.0 LANGUAGES CXX)
+include(${CMAKE_CURRENT_SOURCE_DIR}/scripts/read-version.cmake)
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/VERSION NOVA_VERSION)
+string(STRIP "${NOVA_VERSION}" NOVA_VERSION)
+nova_validate_version("${NOVA_VERSION}")
+string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" NOVA_VERSION_CORE "${NOVA_VERSION}")
+project(NovaCoin VERSION ${NOVA_VERSION_CORE} LANGUAGES CXX)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/VERSION)
 
 include(CTest)
 

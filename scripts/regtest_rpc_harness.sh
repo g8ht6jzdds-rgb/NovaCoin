@@ -224,6 +224,12 @@ wait_height 29641 0
 start_node delta 29647 29640 29646
 wait_height 29640 0
 
+# Exercise the real authenticated HTTP adapter, without changing its role/binding scope.
+expected_version=$("${daemon}" --version | cut -d ' ' -f 2)
+network_info=$(rpc 29643 getnetworkinfo)
+[[ "${network_info}" == *"\"version\":\"${expected_version}\""* ]]
+printf '%s\n' "${network_info}" >"${work_root}/network-version.json"
+
 # Mining and transfer propagation use the daemon callbacks into RegtestNode,
 # not fabricated blocks or direct store edits.
 rpc 29643 generateregtestblock >/dev/null

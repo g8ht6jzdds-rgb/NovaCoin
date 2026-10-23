@@ -35,6 +35,14 @@ nova_apply_project_options(nova_unit_tests)
 target_link_libraries(nova_unit_tests PRIVATE nova_version)
 
 find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+add_test(NAME nova.release_policy
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_release.py)
+set_tests_properties(nova.release_policy PROPERTIES TIMEOUT 60 LABELS "unit;release;policy")
+add_test(NAME nova.build_metadata
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_build_metadata.py
+        $<TARGET_FILE:nova-build-info> $<TARGET_FILE:novacoind> $<TARGET_FILE:novacoin-cli>
+        ${CMAKE_SOURCE_DIR})
+set_tests_properties(nova.build_metadata PROPERTIES TIMEOUT 30 LABELS "unit;release;version")
 add_test(NAME nova.mainnet_lock
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_mainnet_lock.py
         $<TARGET_FILE:novacoind>)
@@ -86,6 +94,22 @@ set_tests_properties(nova.readiness_vectors PROPERTIES TIMEOUT 60 LABELS "unit;r
 
 add_test(NAME nova.unit COMMAND nova_unit_tests)
 set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")
+
+# Named release gates reuse real assertions instead of accepting hand-written PASS records.
+add_test(NAME nova.consensus COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/run_test_group.py $<TARGET_FILE:nova_unit_tests>
+    --gtest_filter=Crypto*:Serialization*:Transaction*:UTXO*:Block*:Monetary*:Pow*:Consensus*:Mainnet*:NetworkInitialization*:NetworkParams*:GenesisGenerator*:ChainState*)
+add_test(NAME nova.network_integration COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/run_test_group.py $<TARGET_FILE:nova_unit_tests>
+    --gtest_filter=P2P*:PeerManager*:TcpTransport*:SyncProgress*:RegtestHarness.ExercisesFourNodeLifecycleAndAdversarialPaths)
+add_test(NAME nova.wallet_integration COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/run_test_group.py $<TARGET_FILE:nova_unit_tests>
+    --gtest_filter=Wallet*:RpcIntegration*:RegtestHarness.ExercisesFourNodeLifecycleAndAdversarialPaths)
+add_test(NAME nova.reorg COMMAND ${Python3_EXECUTABLE} -B
+    ${CMAKE_SOURCE_DIR}/scripts/run_test_group.py $<TARGET_FILE:nova_unit_tests>
+    --gtest_filter=ChainStateSelection.*:NetworkInitialization.SyntheticSignedSpendRollbackReorgAndRestartReplay:MainnetReadiness.Reorganizations*)
+set_tests_properties(nova.consensus nova.network_integration nova.wallet_integration nova.reorg
+    PROPERTIES TIMEOUT 120 LABELS "release;regtest")
 
 add_test(NAME nova.testnet_release_record
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_SOURCE_DIR}/scripts/verify_testnet_release_record.cmake)

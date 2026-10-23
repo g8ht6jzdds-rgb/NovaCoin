@@ -28,10 +28,10 @@ def main():
     parser.add_argument('--header', type=Path, required=True)
     parser.add_argument('executables', nargs=5, type=Path)
     args = parser.parse_args()
-    fields = re.findall(r'= "([^"]+)";', args.header.read_text())
-    assert len(fields) == 4, fields
-    version, revision, tree, state = fields
-    assert re.fullmatch(r'\d+\.\d+\.\d+', version)
+    fields = dict(re.findall(r'k(\w+) = "([^"]*)";', args.header.read_text()))
+    version, revision, tree, state = [fields[key] for key in
+                                    ('ApplicationVersion', 'SourceRevision', 'SourceTree', 'SourceState')]
+    assert re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', version)
     assert state in ('clean', 'dirty', 'unknown', 'archive-declared')
     with tempfile.TemporaryDirectory(prefix='nova-version-') as directory:
         root = Path(directory)
@@ -70,6 +70,14 @@ def main():
         assert '"unknown"' in generate()
         declared = ['-DARCHIVE_REVISION=' + 'a' * 40, '-DARCHIVE_TREE=' + 'b' * 40]
         assert '"archive-declared"' in generate(declared)
+        assert '"0.7.0-testnet"' in generate(['-DAPP_VERSION=0.7.0-testnet'])
+        assert '"0.9.0-rc.1+build.1"' in generate(['-DAPP_VERSION=0.9.0-rc.1+build.1'])
+        for invalid in ('01.0.0', '0.1.0-01', '0.1.0-rc..1', '0.1.0+', '0.1.0-' + 'x' * 128):
+            generate(['-DAPP_VERSION=' + invalid], success=False)
+        assert '"1234567890"' in generate(['-DBUILD_EPOCH=1234567890'])
+        for invalid in ('00', '-1', '253402300800', 'not-a-time'):
+            generate(['-DBUILD_EPOCH=' + invalid], success=False)
+        generate(['-DCOMPILER=secret/path'], success=False)
         generate(declared[:1], success=False)
         generate(['-DARCHIVE_REVISION=bad', declared[1]], success=False)
         generate(['-DAPP_VERSION=0.1.0;invalid'], success=False)

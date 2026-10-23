@@ -9,6 +9,20 @@ permissions:
   contents: read
 
 jobs:
+  release-validation:
+    name: Required unsigned release validation
+    runs-on: ubuntu-24.04
+    needs: [build-and-test, sanitizer]
+    if: always()
+    steps:
+      - name: Fail closed if a required validation job did not succeed
+        env:
+          STRICT_RESULT: ${{ needs.build-and-test.result }}
+          SANITIZER_RESULT: ${{ needs.sanitizer.result }}
+        run: |
+          test "$STRICT_RESULT" = success
+          test "$SANITIZER_RESULT" = success
+    # No signing keys, credential output, release creation, upload or publication.
   build-and-test:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

@@ -1,8 +1,9 @@
 # NovaCoin
 
 NovaCoin is an educational, Bitcoin-inspired Layer-1 blockchain implementation
-in C++20.  It is bootstrapped as build infrastructure only; no blockchain
-functionality exists yet.
+in C++20. Development implementations include consensus validation, chain state,
+networking, wallet, RPC and tooling. Passing fixtures do not establish production
+readiness; MAINNET remains locked.
 
 ## Build
 
@@ -21,8 +22,8 @@ cmake --build build/debug --target format-check
 require Clang or GCC.
 
 GoogleTest supplies the unit-test framework and CTest supplies test execution.
-The initial CTest coverage is limited to the cryptographic foundation; no
-blockchain, consensus, networking, storage, wallet, or RPC behavior exists yet.
+CTest covers unit, consensus and bounded loopback REGTEST integration fixtures.
+See the retained readiness limitations before making platform or release claims.
 ## Local C++ dependencies
 
 The project declares its build dependencies in `vcpkg.json`: GoogleTest,
@@ -35,3 +36,11 @@ control (for example, in `.toolchain/`).
 
 NovaCoin's original project code is licensed under the [MIT License](LICENSE).
 Third-party components retain their respective licenses and notice requirements.
+
+## Versioning and release milestones
+
+The authoritative development application version is in [VERSION](VERSION).
+See [CHANGELOG.md](CHANGELOG.md), [RELEASE.md](RELEASE.md),
+[versioning policy](docs/versioning.md) and the
+[release checklist](docs/release-checklist.md). Milestones do not certify public
+TESTNET or MAINNET readiness. MAINNET remains locked; no 1.0.0 is created.
