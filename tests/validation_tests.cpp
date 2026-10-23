@@ -341,4 +341,124 @@ TEST(BlockValidation, RejectsInflationAndCrossTransactionDoubleSpends)
               BlockValidationError::kDoubleSpend);
 }
 
+TEST(MainnetMoneyConservation, SignedTransactionsCannotCreateOneAtomicUnit)
+{
+    for (const auto difference : {-1LL, 0LL, 1LL}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        scenario.block.transactions.at(1).outputs.front().value = 50LL * COIN + difference;
+        ResignFirstSpend(scenario);
+        const auto before = scenario.utxos.GetCoin(scenario.spent_key);
+        ASSERT_TRUE(before.has_value());
+        const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            scenario.block.transactions.at(1),
+            {scenario.context.height, scenario.context.median_time_past}, scenario.parameters,
+            scenario.utxos);
+        if (difference > 0) {
+            EXPECT_EQ(result.error, BlockValidationError::kInputValueTooLow);
+        } else {
+            EXPECT_EQ(result.error, BlockValidationError::kNone);
+            EXPECT_EQ(result.fee, -difference);
+        }
+        const auto after = scenario.utxos.GetCoin(scenario.spent_key);
+        ASSERT_TRUE(after.has_value());
+        EXPECT_EQ(after->output.value, before->output.value);
+        EXPECT_EQ(scenario.utxos.size(), 1U);
+    }
+}
+
+TEST(MainnetMoneyConservation, CheckedInputSumRejectsOverflowBeforeSecondAuthorization)
+{
+    Scenario scenario;
+    PopulateScenario(scenario);
+    const UTXOKey second{HashWithLastByte(0x22U), 0U};
+    ASSERT_TRUE(scenario.utxos.AddCoin(second, {{MAX_MONEY, scenario.locking_script}, 0U, false}));
+    scenario.block.transactions.at(1).inputs.push_back(
+        {{second.transaction_id, second.output_index}, {}, 0xFFFF'FFFFU});
+    ResignFirstSpend(scenario);
+    const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+        scenario.block.transactions.at(1),
+        {scenario.context.height, scenario.context.median_time_past}, scenario.parameters,
+        scenario.utxos);
+    EXPECT_EQ(result.error, BlockValidationError::kInputAmountOverflow);
+    EXPECT_EQ(scenario.utxos.size(), 2U);
+}
+
+TEST(MainnetConsensusBoundary, CoinbaseMaturityAtThresholdAndAdjacentHeights)
+{
+    for (const auto seed_height : {7U, 8U, 9U}) {
+        Scenario scenario;
+        PopulateScenario(scenario, true, seed_height);
+        const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            scenario.block.transactions.at(1), {10U, 1'000U}, scenario.parameters, scenario.utxos);
+        EXPECT_EQ(result.error, seed_height > 8U ? BlockValidationError::kImmatureCoinbase
+                                                 : BlockValidationError::kNone);
+        EXPECT_EQ(scenario.utxos.size(), 1U);
+    }
+}
+
+TEST(MainnetConsensusBoundary, LocktimeHeightAndTimeEqualityAndSequenceOverride)
+{
+    for (const auto comparison : {10U, 500'000'010U}) {
+        for (const auto locktime : {comparison - 1U, comparison, comparison + 1U}) {
+            for (const auto sequence : {0U, 0xFFFF'FFFFU}) {
+                Scenario scenario;
+                PopulateScenario(scenario);
+                auto& spend = scenario.block.transactions.at(1);
+                spend.lock_time = locktime;
+                spend.inputs.front().sequence = sequence;
+                if (comparison >= 500'000'000U) {
+                    scenario.context.median_time_past = comparison;
+                    scenario.context.validation_time = comparison + 100U;
+                    scenario.block.header.time = comparison + 1U;
+                }
+                ResignFirstSpend(scenario);
+                const auto result = nova::chain::ConnectBlock(scenario.block, scenario.context,
+                                                              scenario.parameters, scenario.utxos);
+                const bool final = sequence == 0xFFFF'FFFFU || locktime < comparison;
+                EXPECT_EQ(result.error, final ? BlockValidationError::kNone
+                                              : BlockValidationError::kNonFinalTransaction);
+            }
+        }
+    }
+}
+
+TEST(MainnetConsensusBoundary, TimestampMedianAndFutureLimitEquality)
+{
+    for (const auto timestamp : {1'000U, 1'001U, 2'100U, 2'101U}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        scenario.block.header.time = timestamp;
+        ASSERT_TRUE(MineHeader(scenario.block.header));
+        const auto result = nova::chain::CheckBlockHeader(scenario.block.header, scenario.context,
+                                                          scenario.parameters);
+        const auto expected = timestamp <= 1'000U  ? BlockValidationError::kTimeTooOld
+                              : timestamp > 2'100U ? BlockValidationError::kTimeTooNew
+                                                   : BlockValidationError::kNone;
+        EXPECT_EQ(result, expected);
+    }
+}
+
+TEST(MainnetConsensusBoundary, RejectsAlternatePushesSelectorsAndTrailingScriptBytes)
+{
+    for (const auto mutation : {0U, 1U, 2U, 3U}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        auto& script = scenario.block.transactions.at(1).inputs.front().script_sig;
+        if (mutation == 0U) {
+            script.at(script.front()) = 2U;
+        } else if (mutation == 1U) {
+            script.front() = 0x4CU;
+        } else if (mutation == 2U) {
+            script.at(static_cast<std::size_t>(script.front()) + 1U) = 0x4CU;
+        } else {
+            script.push_back(0U);
+        }
+        const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            scenario.block.transactions.at(1), {10U, 1'000U}, scenario.parameters, scenario.utxos);
+        EXPECT_EQ(result.error, BlockValidationError::kMalformedUnlockingScript);
+        EXPECT_EQ(scenario.utxos.size(), 1U);
+    }
+}
+
 } // namespace

@@ -7,7 +7,19 @@
 namespace nova::node
 {
 
-enum class NetworkSelectionError : std::uint8_t { kNone, kDisabled, kInvalidParameters };
+// Node-local defense in depth, not a consensus parameter or runtime switch.
+// Deliberately no CLI/environment/CMake override. TASK022 never unlocks MAINNET.
+inline constexpr bool MAINNET_LOCKED = true;
+inline constexpr const char* MAINNET_LOCK_REASON =
+    "MAINNET_LOCKED: mainnet startup is forbidden. Mandatory readiness gates, "
+    "external human security review and explicit activation approval are incomplete.";
+
+enum class NetworkSelectionError : std::uint8_t {
+    kNone,
+    kDisabled,
+    kInvalidParameters,
+    kMainnetLocked
+};
 
 struct NetworkSelection final {
     NetworkSelectionError error{NetworkSelectionError::kInvalidParameters};

@@ -2,6 +2,7 @@ find_package(GTest 1.11 CONFIG REQUIRED)
 
 add_executable(nova_unit_tests
     version_tests.cpp
+    readiness_tests.cpp
     empty_suite.cpp
     serialization_tests.cpp
     transaction_tests.cpp
@@ -34,6 +35,13 @@ nova_apply_project_options(nova_unit_tests)
 target_link_libraries(nova_unit_tests PRIVATE nova_version)
 
 find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+add_test(NAME nova.mainnet_lock
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_mainnet_lock.py
+        $<TARGET_FILE:novacoind>)
+set_tests_properties(nova.mainnet_lock PROPERTIES TIMEOUT 30 LABELS "unit;readiness;mainnet-lock")
+add_test(NAME nova.readiness_policy
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_readiness_policy.py)
+set_tests_properties(nova.readiness_policy PROPERTIES TIMEOUT 20 LABELS "unit;readiness;policy")
 add_test(NAME nova.executable_version
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_version.py
         --cmake ${CMAKE_COMMAND} --source ${CMAKE_SOURCE_DIR}
@@ -69,6 +77,12 @@ target_link_libraries(nova_unit_tests PRIVATE
     nova_explorer)
 target_link_libraries(nova_unit_tests PRIVATE nova_faucet)
 target_link_libraries(nova_unit_tests PRIVATE nova_inspection)
+
+add_executable(nova_readiness_vectors readiness_vectors.cpp)
+nova_apply_project_options(nova_readiness_vectors)
+target_link_libraries(nova_readiness_vectors PRIVATE nova_chain)
+add_test(NAME nova.readiness_vectors COMMAND nova_readiness_vectors)
+set_tests_properties(nova.readiness_vectors PROPERTIES TIMEOUT 60 LABELS "unit;readiness;determinism")
 
 add_test(NAME nova.unit COMMAND nova_unit_tests)
 set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")

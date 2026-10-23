@@ -575,3 +575,21 @@ can activate them:
 
 Implementations MUST expose no default public network. MAINNET remains disabled;
 the seedless TESTNET review gate does not authorize deployment or public startup.
+
+## 21. MAINNET readiness and deployment lock (non-consensus)
+
+TASK022 does not freeze or activate a real-value network. The compiled node-local
+`nova::node::MAINNET_LOCKED` constant is true and MUST prevent MAINNET node
+construction independently of the existing immutable `enabled=false` and
+`deployment_final=false` fields. There is no CLI, environment, RPC or CMake
+unlock option. `novacoind --mainnet` refuses before configuration/credential
+loading, filesystem operations, networking or service initialization. Standalone
+`--version` remains a read-only version request. The lock changes no validation,
+serialization, genesis bytes or monetary parameters.
+
+Network upgrades remain deliberately unimplemented in v0: no version-bit voting,
+scheduled fork or alternate validation rules activate from peer announcements.
+Any proposal needs a versioned normative specification, activation/rollback and
+compatibility analysis, exact vectors, external review and explicit human release
+approval. No future mechanism or MAINNET value is silently specified here.
+See `consensus-freeze.md`, `mainnet-readiness.md` and `../MAINNET_CHECKLIST.md`.
