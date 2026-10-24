@@ -42,6 +42,41 @@ all declared lengths before allocating or copying payload data.
 `minimum_protocol_version` is an explicit parameter; a lower remote version is
 malformed for that configured network.
 
+## Current production parser limit profile
+
+This table is a reviewable documentation binding for the current `PeerService`
+construction site. It does not make the five node-local compatibility values
+consensus rules or immutable `NetworkParams`, and it does not normalize or
+select replacement values. The accompanying deterministic documentation check
+fails if the published profile drifts from that construction site.
+
+| `P2PParams` entry | Current binding or value | Policy owner / source |
+| --- | --- | --- |
+| `network_magic` | `NetworkParams::network_magic` | network-derived wire identity |
+| `minimum_protocol_version` | `NetworkParams::minimum_peer_protocol_version` | network-derived transport compatibility |
+| `max_payload` | `NetworkParams::block_limits.max_serialized_size` | network-derived primitive bound |
+| `max_user_agent` | `256` | node P2P compatibility policy |
+| `max_addresses` | `1,000` | node P2P compatibility policy |
+| `max_inventory` | `50,000` | node P2P compatibility policy |
+| `max_locator_hashes` | `101` | node P2P compatibility policy |
+| `max_headers` | `2,000` | node P2P compatibility policy |
+| `transaction_limits` | `NetworkParams::block_limits.transaction_limits` | network-derived primitive bounds |
+| `block_limits` | `NetworkParams::block_limits` | network-derived primitive bounds |
+
+The five literal limits are passed by `node::PeerService::P2PParams` in
+`src/node/peer_service.cpp`. They are node P2P compatibility policy: changing
+one requires compatibility and hostile-input review, but does not change
+consensus unless a separately documented consensus parameter changes.
+
+The profile cross-references distinct local runtime resource policies rather
+than incorporating them into parser semantics: static bootstrap ingestion is
+limited to 16 KiB above; `Connection` owns 30/300/60-second
+handshake/idle/window timing and its bounded message queue; `TcpTransport`
+owns the 64/16 peer caps, 64 KiB read buffer, 8 MiB pending send bound, and
+16 accepts per poll; and `Synchronizer` owns the 2,000-header response and
+4,096-pending-header limits below. Those policies are not consensus constants
+and remain independently reviewable.
+
 ## v0 commands
 
 * `version`: `i32 version || u64 services || i64 timestamp || u64 nonce ||
