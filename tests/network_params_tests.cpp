@@ -179,6 +179,25 @@ TEST(NetworkParams, RejectsAlteredEnabledNetworkParameters)
     EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidProtocolParameters);
 }
 
+TEST(NetworkParams, RejectsZeroAndInconsistentDifficultyTimingParameters)
+{
+    auto altered = RegtestNetworkParams();
+    altered.difficulty.target_spacing_seconds = 0U;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidDifficultyParameters);
+
+    altered = RegtestNetworkParams();
+    altered.difficulty.retarget_interval = 0U;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidDifficultyParameters);
+
+    altered = RegtestNetworkParams();
+    altered.difficulty.target_timespan_seconds = 0U;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidDifficultyParameters);
+
+    altered = RegtestNetworkParams();
+    ++altered.difficulty.target_timespan_seconds;
+    EXPECT_EQ(CheckNetworkParams(altered), NetworkParamsError::kInvalidDifficultyParameters);
+}
+
 TEST(NetworkParams, RejectsTestnetActivationWithoutFinalApprovalFlag)
 {
     auto altered = TestnetNetworkParams();
