@@ -10,6 +10,27 @@ automated checks never establishes production or MAINNET readiness.
 Every engineering task follows this sequence. State when a step is not
 applicable; do not silently skip it.
 
+## Canonical module-task prompt
+
+For every module-specific task, start from this prompt and replace
+`<number>` with the assigned task number:
+
+```text
+Implement TASK <number> according to AGENTS.md.
+
+Before changing code:
+
+inspect the relevant repository files and protocol specification.
+
+After implementation:
+
+run all applicable tests,
+review your diff,
+and report remaining risks.
+
+Do not modify unrelated code.
+```
+
 ### 1. Inspect
 
 - Read the relevant implementation, tests, and protocol documentation before
