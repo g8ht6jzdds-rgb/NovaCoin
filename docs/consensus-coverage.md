@@ -32,6 +32,58 @@ missing dedicated coverage and blocks Gate 2. No case is skipped to obtain PASS.
 | C24 Exact network/genesis commitment | consensus/network_params.cpp | `NetworkParams.CommitsExactTestnetGenesisSerializationEvidence` | `NetworkParams.RejectsAnyTestnetGenesisMutation` | `NetworkParams.RejectsAlteredEnabledNetworkParameters` |
 | C25 Immutable-v0 version policy | primitives/block.cpp; primitives/transaction.cpp; net/p2p.cpp | `VersionPolicy.SerializedVersionsDoNotSelectConsensusRules` | NONE: no alternate rule exists to activate | `VersionPolicy.HeaderVersionsDoNotSelectConsensusRules`; `VersionPolicy.TransportVersionsAboveTheMinimumDoNotSelectConsensusRules` |
 
+## Stable clause-to-triad trace
+
+This cross-reference maps the current normative clause ledger to the named
+evidence inventory. `TRIAD-NAMED` means the table names accepted, rejected, and
+boundary evidence; it does **not** establish that the assertion bodies are
+exhaustive. `PARTIAL` means that at least one of those cases is still combined,
+implicit, or not named. `PROCESS`, `GATE5`, `GATE6`, and `GATE8` are deliberately
+outside a unit-test-only Gate 2 claim.
+
+| Ledger clause | Current trace | Gate 2 status |
+| --- | --- | --- |
+| NCV0-001 | `ExplorerIndexTests.*`, `ExplorerHttp*` | PARTIAL boundary evidence |
+| NCV0-002 | `ExplorerIndexTests.ReadsCopiedSnapshotFromNovacoindWithoutMutation` | PARTIAL boundary evidence |
+| NCV0-003 | `BlockValidation.*` | PARTIAL route-equivalence evidence |
+| NCV0-004 | `Monetary*`, `PowWork.*` | PARTIAL; no-floating-point policy is separately checked |
+| NCV0-005 | C01/C02 `Serialization*` | TRIAD-NAMED |
+| NCV0-006 | dependency/audit records | PROCESS |
+| NCV0-007 | `NetworkParams.*` | PARTIAL parameter-binding evidence |
+| NCV0-008 | `MAINNET_CHECKLIST.md` | PROCESS |
+| NCV0-009 | `MainnetLock.*`, `NetworkParams.*` | activation-lock evidence, not Gate 2 completion |
+| NCV0-010 | `NetworkSelection.*` | activation policy, not Gate 2 completion |
+| NCV0-011 | C04 `TransactionStructure.*` | TRIAD-NAMED |
+| NCV0-012 | C08 `BlockStructure.*`, `MainnetConsensusBoundary.*` | TRIAD-NAMED |
+| NCV0-013 | C05 `BlockValidation.AllowsOrderedRegularDependenciesAndRejectsForwardReferences` | PARTIAL combined vector |
+| NCV0-014 | C05 `BlockValidation.*Duplicate*`, `UTXOApply.*` | PARTIAL subcase trace |
+| NCV0-015 | C07 maturity vectors | TRIAD-NAMED |
+| NCV0-016 | C06 `MainnetMoneyConservation.*` | PARTIAL combined vector |
+| NCV0-017 | C15 P2PKH/signature vectors | PARTIAL template subcase trace |
+| NCV0-018 | C16 locktime/sequence vectors | TRIAD-NAMED |
+| NCV0-019 | C13 block/parent vectors | PARTIAL coinbase-bounds trace |
+| NCV0-020 | C12 merkle vectors | TRIAD-NAMED |
+| NCV0-021 | C11 coinbase-reward vectors | TRIAD-NAMED |
+| NCV0-022 | C14/C15 crypto and signature-hash vectors | PARTIAL script/crypto subcase trace |
+| NCV0-023 | C19 `ChainStateDifficulty.*` | PARTIAL adapter-isolation evidence |
+| NCV0-024 | C19 `NetworkParams.*`; `NetworkParams.RejectsZeroAndInconsistentDifficultyTimingParameters` | TRIAD-NAMED timing preconditions |
+| NCV0-025 | C20 MTP/future-time vectors | TRIAD-NAMED |
+| NCV0-026 | `ChainStateSecurity.RejectsFarFutureHeadersWithoutChangingTheActiveTip` | PARTIAL local-time overflow trace |
+| NCV0-027 | `MainnetReadiness.Reorganizations*` | GATE5 implementation-dependent |
+| NCV0-028 | `BlockJournalTest.*`, `InitializationJournalTest.*` | GATE6 implementation-dependent |
+| NCV0-029 | `ChainStateSelection.*`, `Explorer*` | PARTIAL inactive-observer trace |
+| NCV0-030 | `SerializationMalformed.*`, `P2P*` | PARTIAL; parser inventory and fuzz remain Gate 7/8 |
+| NCV0-031 | `BlockValidation.*WithoutMutation` | PARTIAL rejection-family matrix |
+| NCV0-032 | `NetworkInitialization.*`, `SyncProgress.*` | PARTIAL transport-route evidence |
+| NCV0-033 | `Wallet*` | PARTIAL non-consensus boundary evidence |
+| NCV0-034 | `RpcIntegration.*` | PARTIAL non-consensus boundary evidence |
+| NCV0-035 | this matrix | INCOMPLETE until every applicable row has a reviewed triad |
+| NCV0-036 | `fuzz/` evidence | GATE8 |
+| NCV0-037 | `NetworkSelection.*`, `MainnetLock.*` | activation policy, not Gate 2 completion |
+| NCV0-038 | `MainnetLock.*` | activation-lock evidence, not Gate 2 completion |
+| NCV0-039 | C25 `VersionPolicy.*` | PARTIAL property-negative trace; no alternate rule is invented |
+| NCV0-040 | owner and external-review records | PROCESS |
+
 Broad stand-ins and NONE cells MUST NOT be called exhaustive rule coverage.
 Existing retarget/script/time tests elsewhere must be mapped by actual assertions
 before claiming missing coverage is closed. Reference checks verify named tests
