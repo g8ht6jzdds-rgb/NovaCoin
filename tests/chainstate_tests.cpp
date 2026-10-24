@@ -11,6 +11,7 @@ namespace
 {
 
 using nova::chain::BlockStatus;
+using nova::chain::BlockValidationError;
 using nova::chain::ChainAnchor;
 using nova::chain::ChainError;
 using nova::chain::ChainState;
@@ -165,6 +166,37 @@ TEST(ChainStateSelection, ExtendsAStraightChainByCumulativeWork)
     EXPECT_EQ(active->at(0U).height, 0U);
     EXPECT_EQ(active->at(1U).hash, BlockHash(*first));
     EXPECT_EQ(active->at(2U).hash, BlockHash(*second));
+}
+
+TEST(ChainStateDifficulty, NoRetargetingInheritsParentExpectedBits)
+{
+    UTXOSet utxos;
+    auto parameters = TestParameters();
+    constexpr std::uint32_t kToughAnchorBits = 0x1F00'FFFFU;
+    const auto target = nova::consensus::TargetFromCompact(
+        kToughAnchorBits, parameters.block_validation.pow_parameters);
+    ASSERT_TRUE(target.target.has_value());
+    const auto work = nova::consensus::CalculateWork(*target.target);
+    ASSERT_TRUE(work.has_value());
+    auto state =
+        ChainState::Create(parameters,
+                           ChainAnchor{HashWithLastByte(0xB0U), nova::crypto::Hash256{}, 0U, 1'000U,
+                                       *target.target, *work, ChainWork::FromPerBlockWork(*work)},
+                           utxos);
+    ASSERT_NE(state, nullptr);
+
+    Block inherited{{1, state->active_tip(), nova::crypto::Hash256{}, 1'100U, kToughAnchorBits, 0U},
+                    {}};
+    const auto inherited_result = state->AcceptBlock(inherited);
+    EXPECT_EQ(inherited_result.error, ChainError::kBlockValidationFailure);
+    EXPECT_EQ(inherited_result.validation_error, BlockValidationError::kBadProofOfWork);
+
+    Block pow_limit{{1, state->active_tip(), nova::crypto::Hash256{}, 1'100U,
+                     parameters.block_validation.pow_parameters.pow_limit_compact, 1U},
+                    {}};
+    const auto pow_limit_result = state->AcceptBlock(pow_limit);
+    EXPECT_EQ(pow_limit_result.error, ChainError::kBlockValidationFailure);
+    EXPECT_EQ(pow_limit_result.validation_error, BlockValidationError::kUnexpectedBits);
 }
 
 TEST(ChainStateSelection, RetainsTheHigherWorkBranchOverALowerWorkSideBranch)

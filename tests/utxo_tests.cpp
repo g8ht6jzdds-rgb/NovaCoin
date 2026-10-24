@@ -104,6 +104,25 @@ TEST(UTXOApply, DoesNotExposeOutOfRangeCreatedOutput)
     EXPECT_FALSE(set.SpendCoin(UTXOKey{*transaction_id, 1U}).has_value());
 }
 
+TEST(UTXOApply, RejectsExistingOutpointCollisionAtomically)
+{
+    UTXOSet set;
+    const auto input_key = Key(9U, 0U);
+    ASSERT_TRUE(set.AddCoin(input_key, CoinWithValue(50)));
+    const auto transaction = SpendingTransaction(input_key, 40);
+    const auto transaction_id = transaction.TxId(kLimits);
+    ASSERT_TRUE(transaction_id.has_value());
+    const UTXOKey collision{*transaction_id, 0U};
+    ASSERT_TRUE(set.AddCoin(collision, CoinWithValue(7)));
+
+    const auto applied = set.ApplyTransaction(transaction, 101U, false, kLimits);
+    EXPECT_EQ(applied.error, UTXOError::kDuplicateCoin);
+    EXPECT_FALSE(applied.undo.has_value());
+    EXPECT_TRUE(set.HaveCoin(input_key));
+    EXPECT_TRUE(set.HaveCoin(collision));
+    EXPECT_EQ(set.size(), 2U);
+}
+
 TEST(UTXOApply, RejectsMissingDoubleAndDuplicateInputs)
 {
     UTXOSet set;

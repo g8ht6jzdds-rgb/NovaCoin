@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -114,6 +115,34 @@ TEST(SerializationCompactSize, UsesShortestCanonicalEncoding)
     EXPECT_EQ(*second, 253U);
     EXPECT_EQ(*third, 65'536U);
     EXPECT_TRUE(reader.RequireEnd());
+}
+
+TEST(SerializationCompactSize, CoversEveryWireWidthAndCallerBoundary)
+{
+    const std::array<std::uint64_t, 7> values{252U,
+                                              253U,
+                                              65'535U,
+                                              65'536U,
+                                              0xFFFF'FFFFULL,
+                                              0x1'0000'0000ULL,
+                                              std::numeric_limits<std::uint64_t>::max()};
+    BinaryWriter writer;
+    for (const auto value : values) {
+        ASSERT_TRUE(writer.WriteCompactSize(value));
+    }
+
+    BinaryReader reader{writer.bytes()};
+    for (const auto value : values) {
+        const auto parsed = reader.ReadCompactSize(value);
+        ASSERT_TRUE(parsed.has_value());
+        EXPECT_EQ(*parsed, value);
+    }
+    EXPECT_TRUE(reader.RequireEnd());
+
+    const std::array<std::uint8_t, 5> too_wide_for_limit{0xFEU, 0x00U, 0x00U, 0x01U, 0x00U};
+    BinaryReader limited{too_wide_for_limit};
+    EXPECT_FALSE(limited.ReadCompactSize(65'535U).has_value());
+    EXPECT_EQ(limited.error(), DeserializationError::kLimitExceeded);
 }
 
 TEST(SerializationMalformed, RejectsTruncationNoncanonicalLengthsBoundsAndTrailingBytes)
