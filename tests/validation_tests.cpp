@@ -126,6 +126,24 @@ Transaction Coinbase(const nova::primitives::Amount value)
                        std::vector<TxOutput>{TxOutput{value, {0x51U}}}, 0U};
 }
 
+std::vector<std::uint8_t> MinimalCoinbaseHeightScript(const std::uint32_t height)
+{
+    if (height == 0U) {
+        return {0U};
+    }
+    std::vector<std::uint8_t> encoded;
+    auto remaining = height;
+    while (remaining != 0U) {
+        encoded.push_back(static_cast<std::uint8_t>(remaining & 0xFFU));
+        remaining >>= 8U;
+    }
+    if ((encoded.back() & 0x80U) != 0U) {
+        encoded.push_back(0U);
+    }
+    encoded.insert(encoded.begin(), static_cast<std::uint8_t>(encoded.size()));
+    return encoded;
+}
+
 void PopulateScenario(Scenario& scenario, const bool seed_is_coinbase = false,
                       const std::uint32_t seed_height = 0U)
 {
@@ -244,6 +262,26 @@ TEST(BlockValidation, AllowsOrderedRegularDependenciesAndRejectsForwardReference
     EXPECT_EQ(forward.utxos.size(), 1U);
 }
 
+TEST(BlockValidation, RejectsSameBlockCoinbaseSpendWithoutStateMutation)
+{
+    Scenario scenario;
+    PopulateScenario(scenario);
+    scenario.parameters.coinbase_maturity = 0U;
+    const auto coinbase_id = scenario.block.transactions.front().TxId(
+        scenario.parameters.block_limits.transaction_limits);
+    ASSERT_TRUE(coinbase_id.has_value());
+    scenario.block.transactions.push_back(
+        Transaction{1, std::vector<TxInput>{TxInput{OutPoint{*coinbase_id, 0U}, {}, 0xFFFF'FFFFU}},
+                    std::vector<TxOutput>{{25LL * COIN, scenario.locking_script}}, 0U});
+    ASSERT_TRUE(FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+
+    const auto result =
+        ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos);
+    EXPECT_EQ(result.error, BlockValidationError::kMissingUtxo);
+    EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
+    EXPECT_EQ(scenario.utxos.size(), 1U);
+}
+
 TEST(BlockValidation, RejectsPreviousBlockMismatchBeforeStateMutation)
 {
     Scenario scenario;
@@ -360,6 +398,35 @@ TEST(BlockValidation, RejectsUnsupportedReferencedLockingScriptWithoutMutation)
     EXPECT_EQ(scenario.utxos.size(), 2U);
 }
 
+TEST(BlockValidation, StoresUnsupportedOutputsButRejectsTheirSpendWithoutMutation)
+{
+    Scenario scenario;
+    PopulateScenario(scenario);
+    scenario.block.transactions.at(1).outputs.front().script_pubkey = {0x51U};
+    ResignFirstSpend(scenario);
+    const auto transaction_id =
+        scenario.block.transactions.at(1).TxId(scenario.parameters.block_limits.transaction_limits);
+    ASSERT_TRUE(transaction_id.has_value());
+
+    const auto connected =
+        ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos);
+    ASSERT_EQ(connected.error, BlockValidationError::kNone);
+    const UTXOKey unsupported{*transaction_id, 0U};
+    const auto stored = scenario.utxos.GetCoin(unsupported);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(stored->output.script_pubkey, std::vector<std::uint8_t>({0x51U}));
+
+    const Transaction attempted_spend{
+        1, std::vector<TxInput>{TxInput{OutPoint{*transaction_id, 0U}, {}, 0xFFFF'FFFFU}},
+        std::vector<TxOutput>{{48LL * COIN, scenario.locking_script}}, 0U};
+    const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+        attempted_spend, {scenario.context.height + 1U, scenario.context.median_time_past},
+        scenario.parameters, scenario.utxos);
+    EXPECT_EQ(result.error, BlockValidationError::kUnsupportedLockingScript);
+    EXPECT_TRUE(scenario.utxos.HaveCoin(unsupported));
+    EXPECT_EQ(scenario.utxos.size(), 2U);
+}
+
 TEST(SignatureHash, CommitsToTransactionFieldsAndRejectsInvalidSelectorOrInput)
 {
     Scenario scenario;
@@ -394,6 +461,39 @@ TEST(SignatureHash, CommitsToTransactionFieldsAndRejectsInvalidSelectorOrInput)
         nova::chain::ComputeSignatureHash(transaction, 1U, scenario.locking_script,
                                           scenario.parameters.block_limits.transaction_limits, 1U)
             .has_value());
+}
+
+TEST(SignatureHash, HasFixedPreimageAndDigestVector)
+{
+    const Transaction transaction{
+        2,
+        std::vector<TxInput>{
+            TxInput{OutPoint{HashWithLastByte(0x11U), 3U}, {0xAAU}, 0x0102'0304U},
+            TxInput{OutPoint{HashWithLastByte(0x22U), 4U}, {0xBBU, 0xCCU}, 0x0506'0708U}},
+        std::vector<TxOutput>{{9, {0x51U}}, {10, {0x52U, 0x53U}}}, 0x0A0B'0C0DU};
+    constexpr TransactionLimits kLimits{MAX_MONEY, 100'000U, 8U, 8U, 128U};
+    const std::array<std::uint8_t, 120U> expected_preimage{
+        0x02U, 0x00U, 0x00U, 0x00U, 0x02U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x11U, 0x03U, 0x00U, 0x00U, 0x00U, 0x00U, 0x04U, 0x03U, 0x02U, 0x01U, 0x00U, 0x00U,
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x22U, 0x04U, 0x00U, 0x00U, 0x00U, 0x03U, 0x76U,
+        0xA9U, 0x14U, 0x08U, 0x07U, 0x06U, 0x05U, 0x02U, 0x09U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x00U, 0x00U, 0x00U, 0x01U, 0x51U, 0x0AU, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
+        0x00U, 0x02U, 0x52U, 0x53U, 0x0DU, 0x0CU, 0x0BU, 0x0AU, 0x01U, 0x00U, 0x00U, 0x00U};
+    const auto expected_digest = nova::crypto::Hash256::FromHex(
+        "f3f9095b2132b2739f3dc452d27162b07d7d2072b1ea8d2ff81447572a260b7f");
+    ASSERT_TRUE(expected_digest.has_value());
+    const auto independent_digest = nova::crypto::Hash256::DoubleSha256(expected_preimage);
+    ASSERT_TRUE(independent_digest.has_value());
+    EXPECT_EQ(*independent_digest, *expected_digest);
+
+    const auto computed = nova::chain::ComputeSignatureHash(
+        transaction, 1U, std::array<std::uint8_t, 3U>{0x76U, 0xA9U, 0x14U}, kLimits, 1U);
+    ASSERT_TRUE(computed.has_value());
+    EXPECT_EQ(*computed, *expected_digest);
 }
 
 TEST(BlockValidation, RejectsImmatureCoinbaseAndInsufficientInputs)
@@ -544,6 +644,24 @@ TEST(MainnetConsensusBoundary, TimestampMedianAndFutureLimitEquality)
     }
 }
 
+TEST(MainnetConsensusBoundary, CoversLowerEvenMedianAndFutureBoundaries)
+{
+    for (const auto timestamp : {4U, 5U, 604U, 605U}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        scenario.context.median_time_past = 4U;
+        scenario.context.validation_time = 4U;
+        scenario.block.header.time = timestamp;
+        ASSERT_TRUE(MineHeader(scenario.block.header));
+        const auto result = nova::chain::CheckBlockHeader(scenario.block.header, scenario.context,
+                                                          scenario.parameters);
+        const auto expected = timestamp <= 4U    ? BlockValidationError::kTimeTooOld
+                              : timestamp > 604U ? BlockValidationError::kTimeTooNew
+                                                 : BlockValidationError::kNone;
+        EXPECT_EQ(result, expected);
+    }
+}
+
 TEST(MainnetConsensusBoundary, RejectsNonMinimalCoinbaseHeightAndFutureTimeOverflow)
 {
     Scenario nonminimal;
@@ -564,6 +682,42 @@ TEST(MainnetConsensusBoundary, RejectsNonMinimalCoinbaseHeightAndFutureTimeOverf
         nova::chain::CheckBlockHeader(overflow.block.header, overflow.context, overflow.parameters),
         BlockValidationError::kInvalidContext);
     EXPECT_TRUE(overflow.utxos.HaveCoin(overflow.spent_key));
+}
+
+TEST(MainnetConsensusBoundary, AcceptsMinimalOrdinaryCoinbaseHeightEncodings)
+{
+    for (const auto height : {1U, 127U, 128U, 255U, 256U}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        scenario.context.height = height;
+        const auto subsidy =
+            nova::consensus::GetBlockSubsidy(height, scenario.parameters.chain_parameters);
+        ASSERT_TRUE(subsidy.has_value());
+        scenario.block.transactions.front().outputs.front().value = *subsidy + COIN;
+        scenario.block.transactions.front().inputs.front().script_sig =
+            MinimalCoinbaseHeightScript(height);
+        ASSERT_TRUE(
+            FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+        const auto connected =
+            ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos);
+        ASSERT_EQ(connected.error, BlockValidationError::kNone);
+        ASSERT_TRUE(connected.connected.has_value());
+        EXPECT_EQ(DisconnectBlock(*connected.connected, scenario.utxos),
+                  BlockValidationError::kNone);
+        EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
+    }
+
+    Scenario nonminimal;
+    PopulateScenario(nonminimal);
+    nonminimal.context.height = 128U;
+    nonminimal.block.transactions.front().inputs.front().script_sig = {0x03U, 0x80U, 0x00U, 0x00U};
+    ASSERT_TRUE(
+        FinalizeBlock(nonminimal.block, nonminimal.parameters.block_limits.transaction_limits));
+    EXPECT_EQ(
+        ConnectBlock(nonminimal.block, nonminimal.context, nonminimal.parameters, nonminimal.utxos)
+            .error,
+        BlockValidationError::kInvalidCoinbaseHeight);
+    EXPECT_TRUE(nonminimal.utxos.HaveCoin(nonminimal.spent_key));
 }
 
 TEST(MainnetConsensusBoundary, RejectsAlternatePushesSelectorsAndTrailingScriptBytes)

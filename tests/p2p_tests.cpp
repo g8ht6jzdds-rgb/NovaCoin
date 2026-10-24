@@ -61,6 +61,26 @@ TEST(P2PFraming, RejectsPeerBelowConfiguredMinimumProtocolVersion)
     EXPECT_EQ(parser.PushBytes(*serialized).error, nova::net::P2PError::kMalformedPayload);
 }
 
+TEST(VersionPolicy, TransportVersionsAboveTheMinimumDoNotSelectConsensusRules)
+{
+    for (const auto version : {1, 2, std::numeric_limits<std::int32_t>::max()}) {
+        auto message = Version();
+        message.version = version;
+        const auto serialized = nova::net::SerializeMessage({nova::net::Command::kVersion, message},
+                                                            TestProtocolParams());
+        ASSERT_TRUE(serialized.has_value());
+
+        nova::net::MessageParser parser{TestProtocolParams()};
+        const auto parsed = parser.PushBytes(*serialized);
+        ASSERT_EQ(parsed.error, nova::net::P2PError::kNone);
+        ASSERT_EQ(parsed.messages.size(), 1U);
+        const auto* received =
+            std::get_if<nova::net::VersionMessage>(&parsed.messages.front().message);
+        ASSERT_NE(received, nullptr);
+        EXPECT_EQ(received->version, version);
+    }
+}
+
 TEST(P2PFraming, RejectsEveryOtherNetworkMagicBeforeDispatch)
 {
     const auto networks = {&nova::consensus::RegtestNetworkParams(),

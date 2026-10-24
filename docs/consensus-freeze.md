@@ -1,8 +1,9 @@
 # Consensus freeze: checklist and change control
 
-Status: **NOT FROZEN — HUMAN REVIEW REQUIRED**. Base engineering revision:
-`9387c8b03bf308710f6927acc318ca3f968cb2b9`; TASK022 working changes must be bound
-by patch/tree digest in evidence. This document does not approve a consensus
+Status: **NOT FROZEN — HUMAN REVIEW REQUIRED**. Reviewed engineering revision:
+`3846789a37ef28f5397090abbabb4260a80eb90c` (tree
+`87a7b4eb3de1b4642614aca42b0e3cd9174db39f`); TASK022 follow-up changes must be
+bound by patch/tree digest in evidence. This document does not approve a consensus
 change. Frozen TESTNET genesis bytes remain unchanged; no final MAINNET genesis.
 
 ## Specification inventory
