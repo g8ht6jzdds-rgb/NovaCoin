@@ -1,0 +1,9 @@
+NCPV1
+id=transaction-serialization-001
+kind=transaction
+serialized=01000000010000000000000000000000000000000000000000000000000000000000000001020000000151ffffffff013200000000000000015100000000
+source_refs=TransactionSerialization.HasCanonicalByteLayoutAndStableTxId
+spec_section=5
+status=IMPLEMENTED_AND_TESTED
+txid=dc5c9f99ffdd2edb05e0cd3c4b5576b661df48caea870796e753e67552846318
+.
