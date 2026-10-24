@@ -40,3 +40,13 @@ The new deep reorg fixture verifies exact selected coins/count after every block
 and invariant state on invalid extension. It is coinbase-only; existing signed
 spend/undo tests remain mandatory, and deep signed dependency graphs need more
 coverage before an exhaustive safety assertion. No consensus behavior changed.
+
+## Gate 1 evidence companion (not Gate 2 completion)
+
+`docs/consensus-clause-ledger.md` assigns stable IDs to normative clauses and
+rejection families. `nova-freeze-corpus --regtest-testnet` is a diagnostic-only
+stdout emitter for canonical compiled REGTEST/TESTNET parameters and the D1–D7
+vector identifiers. Its exact-byte, malformed-manifest, repeat-generation, and
+working-directory side-effect checks support Gate 1 traceability only. They do
+not fill `NONE` cells, establish exhaustive Gate 2 coverage, freeze the
+protocol, or authorize a network.

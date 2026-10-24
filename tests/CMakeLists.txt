@@ -86,11 +86,24 @@ target_link_libraries(nova_unit_tests PRIVATE
 target_link_libraries(nova_unit_tests PRIVATE nova_faucet)
 target_link_libraries(nova_unit_tests PRIVATE nova_inspection)
 
+# The diagnostic corpus has no storage/node dependency. Keep its focused tests
+# independently buildable so evidence generation does not depend on recovery
+# or service test fixtures.
+add_executable(nova_freeze_corpus_tests freeze_corpus_tests.cpp)
+nova_apply_project_options(nova_freeze_corpus_tests)
+target_link_libraries(nova_freeze_corpus_tests PRIVATE GTest::gtest_main nova_freeze_corpus)
+add_test(NAME nova.freeze_corpus COMMAND nova_freeze_corpus_tests)
+set_tests_properties(nova.freeze_corpus PROPERTIES TIMEOUT 30 LABELS "unit;readiness;determinism")
+
 add_executable(nova_readiness_vectors readiness_vectors.cpp)
 nova_apply_project_options(nova_readiness_vectors)
 target_link_libraries(nova_readiness_vectors PRIVATE nova_chain)
 add_test(NAME nova.readiness_vectors COMMAND nova_readiness_vectors)
 set_tests_properties(nova.readiness_vectors PROPERTIES TIMEOUT 60 LABELS "unit;readiness;determinism")
+add_test(NAME nova.freeze_corpus_cli
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_freeze_corpus.py
+        $<TARGET_FILE:nova-freeze-corpus>)
+set_tests_properties(nova.freeze_corpus_cli PROPERTIES TIMEOUT 30 LABELS "unit;readiness;determinism")
 
 add_test(NAME nova.unit COMMAND nova_unit_tests)
 set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")

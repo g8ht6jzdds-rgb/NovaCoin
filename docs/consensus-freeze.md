@@ -8,6 +8,12 @@ change. Frozen TESTNET genesis bytes remain unchanged; no final MAINNET genesis.
 
 ## Specification inventory
 
+The stable clause/rejection index is in `consensus-clause-ledger.md`. Its
+diagnostic-only `nova-freeze-corpus` companion emits canonical REGTEST/TESTNET
+compiled-parameter and vector evidence to stdout from clean or archive-declared
+source provenance. Neither artifact is a freeze acceptance or an activation
+path.
+
 | Topic | Normative location in protocol.md | Freeze finding |
 | --- | --- | --- |
 | Serialization/endian/varint/trailing bytes | 2–3 | Defined; exact bounds and schema implementation mapping still require sign-off |
@@ -38,7 +44,8 @@ not permission to change consensus now.
 ## Freeze acceptance procedure
 
 1. Identify every MUST and validation rejection, exact immutable parameters and
-   supported parsing scope. Verify consensus-coverage.md rule/test mappings.
+   supported parsing scope. Verify `consensus-clause-ledger.md`,
+   `consensus-coverage.md`, and the hash-bound corpus rule/test mappings.
 2. Resolve discrepancies in protocol FIRST, with rationale, economic/compatibility
    analysis and positive/negative/boundary vectors. Consensus independent of RPC,
    transport, wallet, UI and persistence; deterministic checked integer arithmetic.
