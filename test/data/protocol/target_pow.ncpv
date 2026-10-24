@@ -1,0 +1,9 @@
+NCPV1
+bits=1d00ffff
+id=compact-target-001
+kind=target_pow
+source_refs=PowCompactTarget.DecodesAndEncodesCanonicalTargets
+spec_section=14
+status=IMPLEMENTED_AND_TESTED
+target=00000000ffff0000000000000000000000000000000000000000000000000000
+.
