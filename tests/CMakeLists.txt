@@ -100,6 +100,14 @@ nova_apply_project_options(nova_readiness_vectors)
 target_link_libraries(nova_readiness_vectors PRIVATE nova_chain)
 add_test(NAME nova.readiness_vectors COMMAND nova_readiness_vectors)
 set_tests_properties(nova.readiness_vectors PROPERTIES TIMEOUT 60 LABELS "unit;readiness;determinism")
+
+add_executable(nova_protocol_conformance_tests protocol_conformance_tests.cpp)
+nova_apply_project_options(nova_protocol_conformance_tests)
+target_link_libraries(nova_protocol_conformance_tests PRIVATE GTest::gtest_main nova_chain)
+target_compile_definitions(nova_protocol_conformance_tests PRIVATE
+    NOVA_PROTOCOL_VECTOR_DIR="${CMAKE_SOURCE_DIR}/test/data/protocol")
+add_test(NAME nova.protocol_conformance COMMAND nova_protocol_conformance_tests)
+set_tests_properties(nova.protocol_conformance PROPERTIES TIMEOUT 60 LABELS "unit;consensus;protocol")
 add_test(NAME nova.freeze_corpus_cli
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_freeze_corpus.py
         $<TARGET_FILE:nova-freeze-corpus>)
