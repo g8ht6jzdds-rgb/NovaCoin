@@ -184,6 +184,9 @@ TEST(ChainStateDifficulty, NoRetargetingInheritsParentExpectedBits)
                                        *target.target, *work, ChainWork::FromPerBlockWork(*work)},
                            utxos);
     ASSERT_NE(state, nullptr);
+    const auto original_tip = state->active_tip();
+    const auto original_height = state->active_height();
+    const auto original_utxo_count = utxos.size();
 
     Block inherited{{1, state->active_tip(), nova::crypto::Hash256{}, 1'100U, kToughAnchorBits, 0U},
                     {}};
@@ -197,6 +200,22 @@ TEST(ChainStateDifficulty, NoRetargetingInheritsParentExpectedBits)
     const auto pow_limit_result = state->AcceptBlock(pow_limit);
     EXPECT_EQ(pow_limit_result.error, ChainError::kBlockValidationFailure);
     EXPECT_EQ(pow_limit_result.validation_error, BlockValidationError::kUnexpectedBits);
+    EXPECT_EQ(state->active_tip(), original_tip);
+    EXPECT_EQ(state->active_height(), original_height);
+    EXPECT_EQ(utxos.size(), original_utxo_count);
+}
+
+TEST(ChainWork, AccumulatesExactRegtestPowLimitWork)
+{
+    const auto work =
+        nova::consensus::CalculateWork(nova::consensus::RegtestPowParameters().pow_limit);
+    ASSERT_TRUE(work.has_value());
+
+    auto accumulated = ChainWork::FromPerBlockWork(*work);
+    ASSERT_TRUE(accumulated.Add(*work));
+    ChainWork::Bytes expected{};
+    expected.back() = 4U;
+    EXPECT_EQ(accumulated.bytes(), expected);
 }
 
 TEST(ChainStateSelection, RetainsTheHigherWorkBranchOverALowerWorkSideBranch)

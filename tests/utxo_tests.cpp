@@ -123,6 +123,38 @@ TEST(UTXOApply, RejectsExistingOutpointCollisionAtomically)
     EXPECT_EQ(set.size(), 2U);
 }
 
+TEST(UTXOApply, RejectsStagedAdditionCollisionAndRecoversDistinctOutputs)
+{
+    UTXOSet set;
+    const Transaction coinbase{
+        1,
+        std::vector<TxInput>{
+            TxInput{OutPoint{nova::crypto::Hash256{}, 0xFFFF'FFFFU}, {0x01U, 0x00U}, 0U}},
+        std::vector<TxOutput>{{40, {0x51U}}, {9, {0x51U}}}, 0U};
+    const auto transaction_id = coinbase.TxId(kLimits);
+    ASSERT_TRUE(transaction_id.has_value());
+
+    auto batch = set.BeginBatch();
+    ASSERT_TRUE(batch.has_value());
+    const auto first = batch->ApplyTransaction(coinbase, 101U, true, kLimits);
+    ASSERT_EQ(first.error, UTXOError::kNone);
+    ASSERT_TRUE(first.undo.has_value());
+    EXPECT_TRUE(batch->HaveCoin(UTXOKey{*transaction_id, 0U}));
+    EXPECT_TRUE(batch->HaveCoin(UTXOKey{*transaction_id, 1U}));
+
+    const auto collision = batch->ApplyTransaction(coinbase, 101U, true, kLimits);
+    EXPECT_EQ(collision.error, UTXOError::kDuplicateCoin);
+    EXPECT_FALSE(collision.undo.has_value());
+    EXPECT_TRUE(batch->Commit());
+    EXPECT_TRUE(set.HaveCoin(UTXOKey{*transaction_id, 0U}));
+    EXPECT_TRUE(set.HaveCoin(UTXOKey{*transaction_id, 1U}));
+
+    EXPECT_EQ(set.UndoTransaction(*first.undo), UTXOError::kNone);
+    EXPECT_FALSE(set.HaveCoin(UTXOKey{*transaction_id, 0U}));
+    EXPECT_FALSE(set.HaveCoin(UTXOKey{*transaction_id, 1U}));
+    EXPECT_EQ(set.size(), 0U);
+}
+
 TEST(UTXOApply, RejectsMissingDoubleAndDuplicateInputs)
 {
     UTXOSet set;

@@ -150,6 +150,14 @@ TEST(PowWork, DistinguishesWorkEquationAtNonDividingTarget)
               TargetFromHex("5555555555555555555555555555555555555555555555555555555555555555"));
 }
 
+TEST(PowWork, CalculatesExactRegtestPowLimitWork)
+{
+    const auto work = CalculateWork(RegtestPowParameters().pow_limit);
+    ASSERT_TRUE(work.has_value());
+    EXPECT_EQ(*work,
+              TargetFromHex("0000000000000000000000000000000000000000000000000000000000000002"));
+}
+
 TEST(PowRegtestMiner, SearchesNonceValuesWithTheExplicitEasyRegtestTarget)
 {
     nova::primitives::BlockHeader candidate{};

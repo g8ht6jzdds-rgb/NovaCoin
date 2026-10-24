@@ -130,6 +130,18 @@ TEST(BlockStructure, SerializesParsesAndHashesCanonicalBlocks)
     EXPECT_EQ(*first_hash, *second_hash);
 }
 
+TEST(VersionPolicy, HeaderVersionsDoNotSelectConsensusRules)
+{
+    for (const auto version : {std::numeric_limits<std::int32_t>::min(), -1, 0, 1,
+                               std::numeric_limits<std::int32_t>::max()}) {
+        auto block = ValidBlock({CoinbaseTransaction(), RegularTransaction(5U)});
+        block.header.version = version;
+        EXPECT_EQ(nova::primitives::CheckBlockHeaderStructure(block.header),
+                  nova::primitives::BlockHeaderStructureError::kNone);
+        EXPECT_TRUE(nova::primitives::ComputeBlockHash(block.header).has_value());
+    }
+}
+
 TEST(BlockStructure, RejectsInvalidCoinbaseMerkleDuplicateAndSizeRules)
 {
     auto no_transactions = ValidBlock({CoinbaseTransaction()});
