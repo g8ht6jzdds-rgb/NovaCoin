@@ -1,0 +1,10 @@
+NCPV1
+height=210000
+id=subsidy-testnet-001
+kind=subsidy
+network=TESTNET
+source_refs=MonetarySubsidy.HasExactIntegerValuesAcrossHalvingBoundaries
+spec_section=17
+status=IMPLEMENTED_AND_TESTED
+subsidy=2500000000
+.

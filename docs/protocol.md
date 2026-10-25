@@ -1,625 +1,271 @@
-# NovaCoin protocol specification (draft v0)
+# NovaCoin Protocol Specification v0
 
-**Status:** design baseline for the educational implementation.  This document
-defines the consensus boundary before any consensus code is written.  A rule is
-not active unless it is specified here and represented by a field in the
-network parameters supplied to validation.  The word **MUST** is normative.
+**Status:** normative for the reviewed REGTEST and TESTNET fixtures. MAINNET is
+**UNFINALIZED** and MUST NOT start. **MUST**, **MUST NOT**, **SHALL**, **SHALL
+NOT**, **SHOULD**, and **MAY** are normative. A code, document, or vector
+disagreement MUST be reported as `INCONSISTENT`; it MUST NOT be silently fixed.
 
-This is not a production-readiness claim.  In particular, neither a public
-testnet nor mainnet is enabled by this document.
+## 1. Terminology
 
-## 1. Scope and design rules
+A node validates blocks; a peer is untrusted transport. A transaction spends
+outpoints and creates outputs. An outpoint is `(txid, output index)`; a UTXO is
+an unspent output with creation height and coinbase flag. A block contains a
+header and ordered transactions. A chain is parent-linked valid blocks; the
+active chain is selected by cumulative chainwork. A coinbase is transaction
+zero with the null outpoint. Confirmation means active-chain inclusion plus its
+active descendants. A target is a PoW upper bound; difficulty derives targets.
 
-NovaCoin is a Bitcoin-inspired UTXO Layer-1 chain.  Consensus is limited to
-byte parsing, transactions, scripts, blocks, proof of work, chain selection,
-and the resulting UTXO state.  Peer transport, RPC, wallets, mining
-coordination, indexes, and persistence are not consensus authorities.
+## 2. Primitive data types
 
-### Non-consensus explorer boundary
+`u8/u16/u32/u64` are unsigned little-endian; `i32/i64` are two's-complement
+little-endian. `Hash256` is 32 raw bytes, and PoW treats it as unsigned
+little-endian. Fixed arrays have no length prefix. Vectors are
+`CompactSize(length)||bytes`; arrays are `CompactSize(count)||elements`.
+CompactSize uses the shortest form: `0..252`; `fd||u16`; `fe||u32`; or
+`ff||u64`. Decoders MUST reject truncation, non-minimal lengths, over-limit
+counts, overflow, and trailing bytes before allocation.
 
-A block explorer is a derived, read-only view of blocks that a node has already
-accepted. Explorer indexes, address labels, fee displays, estimates, and query
-results MUST NOT participate in block validation, chain selection, or UTXO
-mutation. Any explorer feed MUST be one-way from copied node data into the
-explorer; the explorer MUST NOT invoke state-transition APIs.
+## 3. Cryptographic primitives
 
-The same pure validation functions MUST validate a block from a peer, a block
-read from disk, and a locally assembled candidate.  Validation receives only
-the parsed object, the parent chain/UTXO context, and immutable
-`NetworkParams`; it does not read wall-clock time, files, configuration, or
-network state directly.  The caller supplies an explicit validation time where
-a time rule needs one.
+`hash256(x)=SHA256(SHA256(x))`; `HASH160(x)=RIPEMD160(SHA256(x))`. Txids hash
+canonical transaction bytes and block IDs hash canonical 80-byte headers.
+v0 uses compressed secp256k1 public keys and strict-DER low-S ECDSA signatures
+over Section 8 digests. Implementations MUST use maintained libraries and MUST
+NOT introduce a novel primitive. Raw digest byte order is used in all vectors.
 
-All monetary values, heights, counts, target values, and serialized integer
-fields use bounded integer arithmetic.  Floating-point arithmetic is forbidden
-in consensus paths.  An overflow, underflow, out-of-range conversion, or
-ambiguous encoding is a consensus failure.
+## 4. Address format (non-consensus)
 
-## 2. Primitive notation and canonical wire format
+P2PKH presentation addresses are Base58Check of `prefix || HASH160(pubkey)`;
+the checksum is the first four raw bytes of `hash256(payload)`. Invalid
+characters, empty text, wrong decoded length/prefix, or bad checksum MUST
+reject. Addresses do not determine block or transaction validity. REGTEST and
+TESTNET prefixes are 111 and 112; MAINNET is **UNFINALIZED**.
 
-Unless a field says otherwise, integers are unsigned little-endian of the
-stated width.  `i32` is two's-complement little-endian and `u256` is a
-256-bit unsigned integer.  `hash256(x)` is `SHA256(SHA256(x))`, represented in
-serialized fields as the 32 digest bytes in the order returned by SHA-256.
-Human-facing hexadecimal displays reverse those bytes, as in Bitcoin; display
-order is never used for hashing or comparison.
-
-`CompactSize` is canonically encoded as follows:
-
-| Value range | Encoding |
-| --- | --- |
-| `0..252` | one byte |
-| `253..65535` | `0xfd` followed by `u16` |
-| `65536..4294967295` | `0xfe` followed by `u32` |
-| `4294967296..18446744073709551615` | `0xff` followed by `u64` |
-
-The shortest permitted form MUST be used.  A decoder MUST reject a longer form
-for a value that has a shorter form, truncation, and a count above the
-applicable consensus limit before allocating or iterating.  Byte vectors are
-`CompactSize(length) || bytes`, subject to their field limit.  Arrays are
-`CompactSize(count) || elements`.
-
-No consensus object permits trailing bytes when decoded from an independently
-framed byte string.  All hashing preimages use the exact canonical
-serialization below.  Alternative encodings, including non-minimal
-`CompactSize`, are invalid rather than normalized.
-
-## 3. Cryptography and identifiers
-
-* Transaction ID (`txid`) is `hash256(canonical_transaction_serialization)`.
-* Witness ID (`wtxid`) is not defined in v0 because v0 has no witness data.
-* Block ID is `hash256(canonical_block_header_serialization)`.
-* The transaction merkle root is defined in section 6.
-* The v0 signature scheme is ECDSA over secp256k1 with SHA-256 message hashes.
-  Implementations MUST use a maintained, reviewed crypto library; they MUST
-  NOT implement SHA-256, secp256k1, or ECDSA themselves.
-
-For all `u256` numerical comparisons (proof of work and targets), the byte
-string is interpreted as a little-endian unsigned integer.  No signed
-interpretation is permitted.
-
-## 4. Consensus parameter model
-
-Every validation entry point MUST receive one immutable `NetworkParams`.  It
-contains every network-dependent consensus constant and no caller may replace
-an individual constant ad hoc.
+## 5. Transactions
 
 ```text
-NetworkParams {
-  NetworkId id;                         // REGTEST, TESTNET, or MAINNET
-  bool enabled;                         // admission gate, immutable at run time
-  bool deployment_final;                // reviewed-finalization gate; not activation
-  int32_t protocol_version;             // P2P version we advertise
-  int32_t minimum_peer_protocol_version; // minimum permitted P2P peer version
-  Hash256 genesis_block_id;
-  BlockHeader genesis_header;            // exact header commitment
-  Uint512 genesis_chainwork;
-
-  Amount money_supply_cap;
-  Amount initial_block_subsidy;
-  uint32_t subsidy_halving_interval;
-  uint32_t coinbase_maturity;
-
-  uint32_t target_spacing_seconds;
-  uint32_t retarget_interval;
-  uint32_t target_timespan_seconds;
-  Uint256 pow_limit_target;
-  uint32_t pow_limit_compact;
-  bool allow_min_difficulty_blocks;
-  bool no_retargeting;
-
-  uint32_t median_time_past_window;
-  uint32_t max_future_block_time_seconds;
-  uint32_t max_block_serialized_size;
-  uint32_t max_transactions_per_block;
-  uint32_t max_tx_serialized_size;
-  uint32_t max_tx_inputs;
-  uint32_t max_tx_outputs;
-  uint32_t max_script_size;
-  uint32_t max_coinbase_script_size;
-  uint32_t locktime_threshold;
-  uint32_t max_sequence;
-  uint32_t sig_hash_all;
-}
+Transaction=i32 version||array<inputs>||array<outputs>||u32 lock_time
+TxIn=Hash256 previous_txid||u32 previous_index||bytes script_sig||u32 sequence
+TxOut=i64 amount||bytes script_pubkey
 ```
 
-The displayed schema is a normative ownership map, not a promise that every
-conceptual name is a distinct C++ field. `BlockLimits` owns serialized block and
-transaction bounds; in v0, block weight is exactly the full serialized size and
-has no independent weight rule. `NetworkValidationParams` owns the current
-coinbase-maturity, lock-time threshold, maximum sequence, `SIGHASH_ALL`, and
-future-time bindings. `ChainStateParams` owns the current median-time window and
-difficulty parameters. Genesis chainwork is derived from the committed genesis
-target and stored in the anchor. These bindings are immutable for a selected
-network and are not caller-configurable.
+Txid is `hash256` of exactly these bytes. A transaction MUST have 1..128 inputs
+and outputs, be at most 100,000 bytes, use scripts at most 256 bytes, and have
+unique input outpoints. Amounts are checked in `0..MAX_MONEY`; output sums MUST
+NOT overflow or exceed `MAX_MONEY`. Version MUST NOT select an alternate v0
+rule. `transactions.ncpv` is a serialized txid vector.
 
-v0 has no general script interpreter. It therefore has no independent script
-element, opcode-count, or stack-item consensus limits. The exact P2PKH spend
-template and the serialized script byte limit are the complete current script
-resource contract; no absent general-interpreter limit is implied.
+## 6. Transaction inputs
 
-`Uint256` and `Uint512` are fixed-width unsigned integer types with checked
-operations; `Uint512` is used for accumulated chain work.  A chain-work
-addition that would overflow `Uint512` is invalid.  `Amount` is `int64_t` and denotes atomic units only.  Valid amounts are
-non-negative and at most `money_supply_cap`; a sum is computed only after
-checking that its next addition cannot exceed `money_supply_cap`.  One
-NovaCoin (`NOVA`) is exactly `100,000,000` atomic units, but no consensus
-calculation uses a decimal conversion.
+A non-coinbase input is valid only if the referenced outpoint exists in the
+temporary UTXO view, is not already spent in the transaction/block, is mature
+when coinbase, is final, and satisfies Section 8. `sequence` participates in
+serialization and absolute lock time only; v0 has no relative locks.
 
-The parameter schema is normative. REGTEST has a complete development table;
-the tagged TESTNET internal candidate has reviewed immutable values and exact
-vectors; this branch enables seedless TESTNET selection, not public launch.
-MAINNET remains non-final. Values MUST be
-selected in a reviewable parameter decision, recorded in this document and in
-compiled-in parameter tables, then covered by exact-vector tests before the
-corresponding network is enabled. A missing or invalid parameter is a
-startup/configuration error, never a default.
+## 7. Transaction outputs
 
-Seedless review-candidate enablement policy (2026-10-20 owner authorization):
+An output is an `i64` amount and bounded locking bytes. Zero is permitted;
+maximum is `MAX_MONEY`. Unknown structurally valid scripts MAY enter the UTXO
+set but are not spend-authorized. v0 has no general script interpreter or
+implicit burn rule.
 
-| Network | `deployment_final` | `enabled` | Permitted use |
+## 8. Signature authorization
+
+The sole spend-authorized locking form is
+`76 a9 14 <20-byte HASH160(pubkey)> 88 ac`. The unlocker is exactly two direct
+pushes: strict-DER low-S signature plus selector `01`, then a 33-byte compressed
+key. Alternate push forms, selectors, extra bytes, invalid points, high-S, and
+key-hash mismatch are invalid. For `SIGHASH_ALL=1`, clear every input script,
+replace the checked input script with the referenced locking bytes, canonically
+serialize, append `u32le(1)`, then hash256. `sighash.ncpv` binds a preimage and
+digest.
+
+## 9. UTXO model
+
+Apply regular transactions in order to parent UTXOs plus earlier regular
+outputs, minus earlier spends. Forward references and duplicate spends reject.
+Coinbase outputs are added only after regular validation, so same-block
+coinbase spends reject. Checked `sum(inputs)>=sum(outputs)` is required and
+`fee=sum(inputs)-sum(outputs)`. Missing inputs, underflow/overflow, or a parent
+or staged outpoint collision reject. The complete transition is atomic.
+
+## 10. Coinbase transaction
+
+Only transaction zero MAY be coinbase. It has one null outpoint, at least one
+output, and a 2..100 byte script. An ordinary coinbase script MUST begin with
+the minimally encoded direct-push current height (`00` at height zero). The
+committed REGTEST/TESTNET genesis serializations are explicit anchor exceptions
+and use their documented timestamp/message construction. Coinbase total MUST
+NOT exceed subsidy plus fees; maturity is network-bound.
+
+## 11. Block format
+
+```text
+BlockHeader=i32 version||Hash256 previous_block_id||Hash256 merkle_root||u32 time||u32 bits||u32 nonce
+Block=BlockHeader||array<transactions>
+```
+
+Headers are exactly 80 bytes. Blocks have 1..256 transactions, one first
+coinbase, no other coinbase, no duplicate txids, and at most 1,000,000 bytes.
+Header/transaction versions MUST NOT activate alternate v0 consensus rules.
+
+## 12. Block hash
+
+The block ID is `hash256` of exactly the Section 11 header bytes. Transactions
+are committed through the Merkle root, not directly by the header hash.
+`blocks.ncpv` binds TESTNET block serialization and header hash.
+
+## 13. Merkle tree
+
+Start with txids in order. A one-tx block root is its txid. At each level,
+duplicate the final hash when count is odd, then replace adjacent pairs with
+`hash256(left||right)`. The result MUST equal the header root. Reordering or
+changing txids changes the root. `merkle.ncpv` covers the odd rule.
+
+## 14. Proof of work
+
+`bits` is Bitcoin compact target encoding (8-bit exponent and 23-bit unsigned
+mantissa). Zero, negative/sign-bit, overflowing, non-canonical, or above-limit
+targets reject. The raw block ID interpreted as unsigned little-endian MUST be
+`<= target`; equality is valid. Operations use exact integers only.
+`target_pow.ncpv` binds a canonical conversion.
+
+## 15. Difficulty adjustment
+
+Genesis uses committed bits. With `no_retargeting`, children inherit parent
+expected bits. Otherwise, at a retarget boundary, clamp elapsed time to
+`[timespan/4,timespan*4]`, then calculate
+`min(powLimit, old_target*elapsed/timespan)` using checked wide integers and
+truncation toward zero; canonically compact-encode it. REGTEST is
+no-retargeting, TESTNET has 600-second spacing and its parameter-bound
+minimum-difficulty behavior. MAINNET is **UNFINALIZED**. Floating point is
+forbidden.
+
+## 16. Timestamp rules
+
+Non-genesis time MUST exceed the lower median of configured prior header times
+and MUST NOT exceed `validation_time+future_limit`. The median uses integers;
+validation time is sampled from a trusted local clock before validation. Peer
+data MUST NOT alter it. Local clock acquisition is policy; bounds are consensus.
+
+## 17. Monetary policy
+
+`COIN=100000000`, `INITIAL_SUBSIDY=50*COIN`, `MAX_MONEY=31000000*COIN`.
+At height `h`, subsidy is `floor(INITIAL_SUBSIDY/2^floor(h/I))`; all shifts,
+products, and totals are checked and the final nonzero era pays one unit.
+
+| Network | interval | height 0 | first halving | scheduled ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| REGTEST | 150 | 5000000000 | 2500000000 at 150 | 21,000,000 NOVA |
+| TESTNET | 210000 | 5000000000 | 2500000000 at 210000 | 21,000,000 NOVA |
+| MAINNET | **UNFINALIZED** | **UNFINALIZED** | **UNFINALIZED** | **UNFINALIZED** |
+
+TESTNET's committed ten-million-NOVA genesis allocation plus its 21-million
+scheduled issuance is within MAX_MONEY and has no MAINNET implication.
+
+## 18. Block validation
+
+Nodes SHALL: canonically parse/bound bytes; validate parent/time/target/PoW;
+validate structure/coinbase/txids/Merkle root; validate regular transactions in
+order against temporary UTXOs; validate fees and reward; atomically commit; and
+then consider chainwork. Received, persisted, and local blocks use this path.
+
+## 19. Chain selection
+
+Block work is `floor(2^256/(target+1))`; chainwork is checked accumulated work.
+Choose greatest valid cumulative work, never greatest height. Equal work uses
+lexicographically smaller raw block ID. Overflow is invalid.
+
+## 20. Reorganizations
+
+Find the fork, disconnect the active suffix with undo data, connect the winning
+suffix through Section 18, then publish the tip. Disconnect notifications occur
+before connects. Failure MUST restore the old branch and UTXO state atomically.
+
+## 21. Mempool policy
+
+Admission, relay, fees, eviction, capacity, and template ordering are
+**NON-CONSENSUS**. Mempool presence MUST NOT bypass block validation.
+
+## 22. P2P protocol
+
+Envelope: `u32le magic||command[12]||u32le payload_length||checksum[4]||payload`.
+Command is NUL-padded ASCII; checksum is first four raw hash256 bytes. Reject
+wrong magic, malformed command, unknown command, excess/truncated payload,
+checksum mismatch, and non-canonical payload. Supported commands are `version`,
+`verack`, `ping`, `pong`, `addr`, `getaddr`, `inv`, `getdata`, `tx`, `block`,
+`getheaders`, `headers`. Limits are user agent 256, addresses 1000, inventory
+50000, locators 101, headers 2000. These are compatibility/resource policy;
+parsed blocks/txs still require consensus validation.
+
+## 23. Node synchronization
+
+After handshake, discover headers from a verified tip, validate linkage,
+difficulty, and PoW before accumulating work, request blocks, validate through
+Section 18, then activate only the best valid chain. Advertised height is not
+authority.
+
+## 24. Network parameters
+
+| Field | REGTEST | TESTNET | MAINNET |
 | --- | --- | --- | --- |
-| `REGTEST` | `true` | `true` once its complete parameter table and genesis vector exist | local deterministic development |
-| `TESTNET` | `true` | `true` in this seedless review candidate | code selection only; no service startup, deployment or launch authorized |
-| `MAINNET` | `false` | `false` | must remain disabled until an explicit later decision |
-
-A TESTNET finalization-review candidate MAY set `deployment_final=true` while
-leaving `enabled=false`. This is explicitly non-activating: the daemon MUST
-still refuse TESTNET startup, it does not authorize deployment, and a distinct
-reviewed activation change is required before `enabled` may become `true`.
-MAINNET MUST remain `deployment_final=false` and `enabled=false`.
-
-This branch implements separately authorized seedless enablement from baseline
-`591030940821dacdbb09d2f2ca578d73349986a3`. Compiled bootstrap stays empty;
-operator/custody evidence remains pending. Validation uses offline objects and
-bounded loopback REGTEST only, not TESTNET services or public endpoints.
-
-An enabled network's genesis block is valid only if its canonical header hashes
-to `genesis_block_id`, its parent hash is all zero bytes, its transaction list
-and UTXO effects validate under that network's complete parameters, and its
-full canonical block serialization matches the committed genesis fixture.
-
-## 5. Transactions and UTXO state
-
-An `OutPoint` is exactly `Hash256 txid || u32 output_index`.  It identifies a
-previous transaction output.  A `Coin` in the UTXO view contains the referenced
-`TxOut`, the creating block height, and whether it came from a coinbase
-transaction.
-
-```text
-TxIn  = OutPoint previous_output
-      || bytes<max_script_size> script_sig
-      || u32 sequence
-
-TxOut = i64 value
-      || bytes<max_script_size> script_pubkey
-
-Transaction = i32 version
-           || array<max_tx_inputs> inputs
-           || array<max_tx_outputs> outputs
-           || u32 lock_time
-```
-
-An ordinary transaction MUST have at least one input and one output.  It MUST
-be at most `max_tx_serialized_size`; each count and byte vector MUST obey its
-network limit.  Every output amount MUST be valid.  Its output total MUST not
-overflow or exceed `money_supply_cap`.
-
-A coinbase transaction is recognized solely by having exactly one input whose
-outpoint has all-zero `txid` and `output_index == 0xffffffff`.  It MUST have at
-least one output, may occur only at transaction index zero of a block, and its
-`script_sig` length MUST be in `[2, max_coinbase_script_size]`.  Its sequence
-and lock time are serialized but have no special implicit values.  The v0
-coinbase script MUST begin with the minimally encoded current block height;
-the remaining bytes are opaque subject to the size limit.  A transaction that
-uses the null outpoint but fails any coinbase rule is invalid.
-
-The height prefix is a canonical ScriptNum direct push. Height zero is exactly
-`0x00` (`OP_0`). For a nonzero height, encode its unsigned magnitude in the
-shortest little-endian byte sequence, append `0x00` only when the final byte's
-high bit would otherwise be set, then prefix those bytes with their direct push
-length (`0x01..0x05`). The coinbase script may contain opaque bytes only after
-this exact prefix.
-
-For a non-coinbase transaction:
-
-1. Every referenced outpoint MUST exist in the temporary ordered UTXO view:
-   parent coins plus outputs of earlier regular transactions in this block, less
-   earlier spends. A forward reference is invalid.
-2. No outpoint may appear twice in the transaction or elsewhere in the block.
-3. A coinbase coin MUST have `spend_height - coin.height >= coinbase_maturity`.
-4. `sum(inputs)` and `sum(outputs)` MUST be valid, checked sums; inputs MUST
-   be at least outputs.  The fee is their exact non-negative difference.
-5. Each input's unlocking script MUST satisfy the referenced locking script
-   under section 7.
-6. The transaction MUST be final under section 8.
-
-Regular transactions are processed in block order. Their outputs become visible
-only to later regular transactions. Coinbase outputs are added only after all
-regular transactions validate, so a same-block coinbase spend is invalid even
-when the configured maturity is zero. Creating an outpoint that already exists
-in the parent view or current temporary additions is invalid, including if an
-earlier temporary spend consumed the parent coin. After all transactions
-validate, the block atomically commits the temporary view. No partial state
-update is observable after a failed transaction or block.
-
-## 6. Blocks and merkle commitment
-
-```text
-BlockHeader = i32 version
-            || Hash256 previous_block_id
-            || Hash256 merkle_root
-            || u32 time
-            || u32 bits
-            || u32 nonce
-
-Block = BlockHeader header
-      || array<max_transactions_per_block> transactions
-```
-
-The header is exactly 80 bytes.  A non-genesis block MUST have a parent known
-to the candidate chain.  The block MUST include between one and
-`max_transactions_per_block` transactions, begin with exactly one coinbase,
-and contain no other coinbase transaction.  Its full serialized size MUST not
-exceed `max_block_serialized_size`.  Until a witness design is explicitly
-specified, `max_block_weight` equals the full serialized size and is checked
-against the same serialized byte sequence.
-
-To calculate the merkle root, start with each transaction's `txid` in block
-order.  If a level has an odd number of hashes, duplicate its final hash.
-Replace each adjacent pair `left, right` with `hash256(left || right)` until one
-hash remains.  That hash MUST equal `header.merkle_root`.  A block with only
-one transaction commits that transaction's `txid`.  The transaction ordering
-and count in the block are therefore committed.  Duplicate transaction IDs
-within a block are invalid, even if their serializations somehow differ.
-
-The coinbase output total MUST be no greater than
-`block_subsidy(height) + fees`. `block_subsidy` is the initial subsidy
-right-shifted by `floor(height / subsidy_halving_interval)`; the final nonzero
-era pays one atomic unit and later eras pay zero. All shift and addition
-preconditions MUST be checked. This formula becomes active only when the
-associated parameters are finalized.
-
-## 7. v0 script profile
-
-v0 supports a deliberately small, non-Turing-complete **spend authorization**
-profile. Output admission and spend authorization are distinct: a structurally
-valid output script within `max_script_size` may be stored as a UTXO, but only
-the P2PKH locking-script form below is spend-authorized by v0.
-
-* Supported spend locking scripts: `OP_DUP OP_HASH160 <20-byte pubkey-hash>
-  OP_EQUALVERIFY OP_CHECKSIG` (P2PKH) only.
-* Unlocking scripts have exactly two direct pushes:
-  `push(len(der_signature) + 1) || der_signature || 0x01 || 0x21 || compressed_pubkey`.
-  The first push opcode MUST be in `0x09..0x49`, the signature MUST be strict
-  DER, and the sole sighash byte is `SIGHASH_ALL (0x01)`. The second push is
-  always the direct 33-byte opcode `0x21`; no `OP_PUSHDATA*`, extra push, or
-  alternate encoding is valid.
-* The supplied public key's `HASH160(pubkey)` MUST equal the locking script's
-  20-byte value.  `HASH160(x)` is `RIPEMD160(SHA256(x))`.
-* Public keys MUST be valid compressed secp256k1 points.  Signatures MUST be
-  strict DER, have low-S normalization, and verify against the computed
-  signature hash.
-
-No opcode outside this exact profile is spend-authorized. Unsupported or
-zero-valued output scripts remain stored UTXO entries; v0 neither executes them
-through a general interpreter nor infers a burn rule from an opcode name. The
-exact template and serialized-size limit eliminate alternate pushes and
-execution ambiguity for supported spends.
-
-For `SIGHASH_ALL`, the signature preimage is the canonical serialization of a
-copy of the spending transaction in which every input `script_sig` is empty
-except the input being checked, whose `script_sig` is the referenced
-`script_pubkey`, followed by `u32(0x00000001)`.  Its digest is `hash256` of
-that preimage.  The DER signature's final sighash byte is excluded from DER
-parsing and included only as the required `0x01` selector.  The script engine
-must not accept any other selector.
-
-## 8. Lock time and sequence
-
-A transaction with `lock_time == 0` is final.  Otherwise, it is final if every
-input sequence is `max_sequence`, or if `lock_time` is strictly less than the
-comparison value.  Values below `locktime_threshold` compare to the candidate
-block height; values at or above it compare to the candidate block's
-median-time-past.  v0 defines no relative sequence locks; all non-final
-sequence values only opt into this absolute-lock-time rule.
-
-## 9. Proof of work, time, and difficulty
-
-`bits` encodes a target using Bitcoin's compact-target format: an unsigned
-8-bit exponent in the most significant byte and an unsigned 23-bit mantissa
-in the remaining bits.  Decode it with exact integer operations.  A target is
-invalid if its mantissa is zero, its sign bit is set, its decoded value cannot
-fit in 256 bits, its encoding is non-canonical, or it exceeds
-`pow_limit_target`.  Re-encoding a valid target MUST produce the original
-`bits` value.
-
-The header PoW is valid when the little-endian `u256` value of its block ID is
-less than or equal to the decoded target.  This comparison is unsigned and
-constant definition/encoding must not depend on host endianness.
-
-For an enabled network, expected `bits` is deterministic and MUST be derived
-inside consensus from immutable network parameters and the validated ancestor
-header index. A peer, miner, RPC caller, or other adapter MUST NOT supply an
-expected target to block acceptance.
-
-* Genesis uses the exact `genesis_header.bits`.
-* If `no_retargeting` is true, every descendant inherits its parent's expected
-  `bits`. This also applies to a valid anchor whose target is tougher than the
-  configured PoW limit.
-* Otherwise, at heights not divisible by `retarget_interval`, use the parent's
-  `bits`, except where `allow_min_difficulty_blocks` is true: if the new block
-  time is more than twice `target_spacing_seconds` after its parent, use
-  `pow_limit_compact`.  For a timely block in that mode, start at its parent
-  and walk backward while the examined block is not at a retarget boundary,
-  has `bits == pow_limit_compact`, and was itself more than twice
-  `target_spacing_seconds` later than its parent.  Use the first block's
-  `bits` that does not meet all three conditions.  This precisely identifies
-  only the preceding minimum-difficulty exceptions; an ordinary block whose
-  target happens to equal the PoW limit is retained.
-* At each retarget boundary, measure elapsed time from the first block in the
-  preceding interval through the parent.  Clamp it to
-  `[target_timespan_seconds / 4, target_timespan_seconds * 4]`.  Compute
-  `new_target = min(pow_limit_target, old_target * actual_timespan /
-  target_timespan_seconds)` with an exact wide integer product and truncation
-  toward zero.  Canonically compact-encode it for expected `bits`.
-
-Parameter validation MUST ensure `retarget_interval > 0`,
-`target_timespan_seconds > 0`, `target_spacing_seconds > 0`, and multiplication
-and interval arithmetic are safe before a network can be enabled.
-
-For any non-genesis block, `header.time` MUST be strictly greater than the
-median of up to `median_time_past_window` previous headers' times, and MUST be
-no more than `validation_time + max_future_block_time_seconds`.  The median is
-the middle element of the sorted integer times (for an even count, the lower
-middle), computed without floating point.
-
-`validation_time` is sampled only from a node's trusted local clock before
-validation begins. It is never derived from, increased by, or otherwise
-influenced by the candidate header. A rejected header MUST NOT alter local time
-tracking. Any local `header.time + 1` bookkeeping uses checked arithmetic and
-fails closed on overflow.
-
-## 10. Chain selection and validation order
-
-Chain work is accumulated as an exact unsigned value using
-`work(target) = floor(2^256 / (target + 1))`. The implementation computes this
-with the equivalent checked fixed-width complement/divide/increment procedure;
-it does not use floating point. The chosen valid chain
-is the one with greatest cumulative chain work.  Equal-work ties are broken by
-the lexicographically smaller raw 32-byte block ID, which makes selection
-deterministic.  A candidate may be selected only after all headers and all
-blocks from its fork point pass their applicable validation.
-
-Block validation is performed in this order, failing closed at the first
-failure:
-
-1. Enforce framing, canonical decoding, count/size bounds, and no trailing
-   bytes.
-2. Validate header linkage, time, canonical target, expected difficulty, and
-   PoW. Serialized block and transaction version fields do not select an
-   alternate v0 consensus rule.
-3. Validate the transaction count, one-and-only-first coinbase rule, transaction
-   IDs, and merkle root.
-4. Validate non-coinbase transactions in order against a temporary UTXO view:
-   finality, duplicate spends, UTXO existence/maturity, amounts/fees, and
-   scripts.
-5. Validate the coinbase reward ceiling and atomically commit the temporary view.
-6. Add exact block work and evaluate deterministic chain selection.
-
-An implementation keeps a `BlockIndex` for every known valid block, including
-the block ID, parent ID, height, decoded target, per-block work, cumulative
-`Uint512` work, and status.  `Chain` stores the selected active tip and height;
-`ChainState` owns the index and active UTXO state.  To activate a better
-branch, it MUST build the fork paths, disconnect the old branch with its
-stored undo data, connect the winning branch through the same `ConnectBlock`
-pipeline, and only then publish the active tip.  On any failure it MUST restore
-the original branch and UTXO state.  The detailed implementation contract is
-in `docs/chain-selection.md`.
-
-## 10.1 Durable block acceptance and observer notifications
-
-Block persistence is a write-ahead journal, not a cache. A node durably flushes
-a `prepare(block)` record before publishing the matching chain-state transition,
-then durably flushes a `commit(block_hash)` record only after validation
-succeeds. Startup replays only prepared records with matching later commits. A
-truncated final record is an incomplete write and is ignored; a malformed
-complete record or a commit without its preparation is fatal. If commit
-persistence fails after acceptance, the node MUST roll the accepted block back
-before returning an error.
-
-Wallet and mempool observers receive active-chain transitions only. A valid but
-inactive side-branch block MUST NOT be presented as confirmed or remove a
-transaction from the active mempool. Reorganizations notify disconnects before
-connects so observers can restore their local state.
-
-## 11. Hostile-input limits and failure model
-
-Network parsers MUST receive a caller-supplied frame no larger than
-`max_block_serialized_size` for a block and `max_tx_serialized_size` for a
-transaction.  They MUST enforce declared lengths before reading, allocating,
-recursing, or multiplying sizes; reject zero/oversized/ambiguous counts where
-the object requires a positive count; and use checked arithmetic for every
-offset and aggregate.  Consensus code returns structured errors and MUST NOT
-throw across a network boundary, abort, rely on assertions, or retain attacker
-controlled byte views after their owner is released.
-
-Validation errors are deterministic and category-stable (for example:
-`noncanonical_compact_size`, `oversized_script`, `duplicate_input`,
-`missing_utxo`, `bad_merkle_root`, `bad_pow`, `bad_coinbase_reward`).  Error
-text itself is non-consensus diagnostic data.
-
-## 12. Mempool policy is not consensus
-
-The mempool is a node-local cache of transactions that appear valid against a
-particular active UTXO set and next-block context.  Its admission fees,
-capacity, retention, eviction, and template ordering are not consensus rules.
-They MUST NOT change `CheckBlock`, `ConnectBlock`, `DisconnectBlock`, or chain
-selection.  A block is valid only through the validation order in section 10,
-whether or not its transactions were present in any mempool.  The v0 policy,
-including dependency handling and mandatory revalidation after chain-state
-changes, is documented in `docs/mempool.md`.
-
-## 13. P2P transport is not consensus
-
-Network framing, peer handshakes, address relay, inventory relay, connection
-limits, and peer timeouts are node-local transport policy.  A `tx` or `block`
-received from a peer has no consensus effect merely by parsing successfully.
-It MUST flow through canonical deserialization, structural validation, the
-ordinary consensus validation pipeline, and then chain-state processing.  The
-transport layer MUST NOT mutate UTXOs, a block index, or the active chain.  The
-v0 wire format and hostile-input controls are documented in `docs/p2p.md`.
-
-## 14. Synchronization
-
-A node starts synchronization only after P2P version handshake completion. It
-requests headers from its verified tip, validates parent linkage and proof of
-work before accumulating header chainwork, requests missing blocks, and sends
-each received block through the normal `ChainState::AcceptBlock` pipeline. A
-peer's advertised height, header claims, and block claims are never authority.
-Only verified proof of work and fully validated blocks can affect chain
-selection. The current deferred-difficulty synchronization contract is in
-`docs/synchronization.md`.
-
-## 15. Reference wallet boundary
-
-The reference wallet is not consensus code.  It may generate keys, track
-wallet-relevant outputs, construct and sign transactions, perform local
-defense-in-depth signature checks, and submit transactions through an
-application-defined broadcast boundary.  It MUST NOT mutate UTXO or chain
-state, decide whether a transaction or block is valid, or cause an unvalidated
-network message to affect consensus state.  Its P2PKH convention, deterministic
-coin selection, fee calculation, and explicit non-features are documented in
-`docs/wallet.md`.
-
-## 16. Local RPC boundary
-
-JSON-RPC is a localhost application interface, not a consensus channel.  It
-MUST require configured authentication, reject non-loopback binding, bound and
-validate hostile request data, and route transaction/block work only through
-the ordinary wallet, mempool, mining, and chain-state interfaces.  It MUST NOT
-export private keys.  The v0 methods and error contract are in `docs/rpc.md`.
-
-## 17. Network parameter tables and genesis
-
-The compiled-in REGTEST, TESTNET, and disabled MAINNET tables bind monetary,
-PoW, difficulty, network magic, ports, address presentation prefixes, and a
-genesis commitment.  Each genesis fixture has an all-zero parent, canonical
-coinbase transaction and Merkle root, canonical target, valid PoW, and exact
-hash test vector.  MAINNET remains **NOT FINAL — DO NOT DEPLOY**.  The
-parameter values and generator input contract are in `docs/networks.md`.
-
-### TESTNET creator allocation
-
-The tagged internal candidate commits a TESTNET-only genesis allocation of
-`1,000,000,000,000,000` atomic units (10,000,000 NOVA).  The output uses the
-canonical P2PKH locking script for public-key hash
-`37f3432cb47a3f078ed6351c5fa25d8cfed1ad64`:
-
-```text
-OP_DUP OP_HASH160 PUSH20 37f3432cb47a3f078ed6351c5fa25d8cfed1ad64
-OP_EQUALVERIFY OP_CHECKSIG
-```
-
-The supplied textual source was a Base58Check address with version byte zero.
-That text is not a NovaCoin TESTNET address and is not committed as an address
-encoding; only its checksum-validated 20-byte public-key hash is committed.
-The allocation is immediately spendable by the holder of the matching private
-key.  It is part of TESTNET genesis only and has no consensus privilege.
-
-The monetary cap is 31,000,000 NOVA. The existing halving schedule remains
-bounded by 21,000,000 NOVA, so the 10,000,000-NOVA allocation plus scheduled
-subsidy issuance does not exceed the cap. The allocation, cap, P2PKH script,
-complete coinbase serialization, Merkle root, and genesis hash are immutable
-parameters in the tagged internal candidate. This seedless review branch enables
-TESTNET selection only; public launch remains unauthorized.
-
-### TESTNET initial UTXO state (D1–D7 design disposition)
-
-The immutable TESTNET genesis outputs are materialized atomically at height zero
-with `is_coinbase=true` when constructing a fresh unpublished network chain state,
-before replay of child blocks. The current maturity policy remains zero; ordinary
-signature/value checks apply to a first post-genesis spend. This is not a holder
-exemption or a change to the maturity of other coinbases.
-
-Initialization is once per fresh state, never a missing-outpoint repair on live
-state (including spent-to-empty state). Restart reconstructs initial state and
-replays children; a spent genesis output must therefore remain spent. Genesis
-is an anchor, not an ordinary WAL child or disconnectable seed; ordinary child
-undo restores its Coin only when reversing a spend. The exact genesis payload
-is retained for read-only consumers and confirmed wallet observation, not as an
-alternative authority for validity. No normal-block rule is relaxed for genesis.
-
-REGTEST retains its existing empty initial UTXOs/metadata-only anchor; MAINNET
-remains unavailable. This branch enables seedless TESTNET selection only;
-MAINNET remains disabled. Frozen genesis,
-network identifiers and monetary commitments are unchanged. This is a consensus-
-sensitive initialization correction, not an activation or migration decision.
-Existing TESTNET data is not certified compatible by a matching network marker
-or tip. No automatic reset/migration, genesis-in-child-journal skipping, or source
-data rewrite is authorized; any inventory, reindex/upgrade or legacy acceptance
-requires a separately authorized coherent-copy plan. The offline inspector and
-REGTEST-hardcoded explorer RPC correction remain separate work.
-
-## 18. Regtest integration harness
-
-The REGTEST integration harness runs isolated local node runtimes with
-deterministic time, data directories, block journals, wallets, ports, logs,
-and explicit peer-link topology.  It replays persisted blocks through the
-ordinary chain-state pipeline and uses the same block/transaction admission
-routes as local relay.  It is a test facility, never a consensus authority;
-the v0 scope and limitations are in `docs/regtest-harness.md`.
-
-## 19. Required implementation evidence
-
-Before enabling a network, its implementation MUST include deterministic unit
-tests for every rule above, with at least one accepted and one rejected vector
-per rule.  Required negative vectors include malformed/truncated and
-non-minimal CompactSize values; all count/size limits; integer overflows;
-invalid amounts; noncanonical targets; wrong PoW; wrong expected difficulty;
-bad timestamps; broken merkle roots; duplicate txids/spends; coinbase placement
-and reward errors; immature/missing UTXOs; lock-time failures; malformed or
-high-S signatures; wrong P2PKH key hash; and chain-work tie handling.
-
-Parser and consensus-deserializer fuzz targets MUST be deterministic with a
-bounded input size and must assert no crash, unbounded allocation, undefined
-behavior, or acceptance of malformed/noncanonical encodings.  Exact genesis,
-transaction, header, target, signature-hash, and retarget test vectors are
-required.  Tests never bypass or weaken validation.
-
-## 20. Deliberately deferred decisions
-
-The items below are not implicit defaults.  They require a reviewed update to
-this specification and concrete `NetworkParams` values before implementation
-can activate them:
-
-1. Every genesis block fixture and identity commitment.
-2. Resource, monetary, and PoW parameter values for REGTEST and TESTNET.
-3. TESTNET activation date and public seed/transport policy.
-4. A MAINNET parameter table, activation governance, and explicit enablement.
-5. Any transaction-version upgrade, script feature, witness design, or soft/hard
-   fork activation mechanism.
-
-Implementations MUST expose no default public network. MAINNET remains disabled;
-the seedless TESTNET review gate does not authorize deployment or public startup.
-
-## 21. MAINNET readiness and deployment lock (non-consensus)
-
-TASK022 does not freeze or activate a real-value network. The compiled node-local
-`nova::node::MAINNET_LOCKED` constant is true and MUST prevent MAINNET node
-construction independently of the existing immutable `enabled=false` and
-`deployment_final=false` fields. There is no CLI, environment, RPC or CMake
-unlock option. `novacoind --mainnet` refuses before configuration/credential
-loading, filesystem operations, networking or service initialization. Standalone
-`--version` remains a read-only version request. The lock changes no validation,
-serialization, genesis bytes or monetary parameters.
-
-v0 is immutable: no in-protocol network upgrade or activation mechanism exists.
-Block and transaction version fields do not select alternate consensus rules, and
-P2P versions are transport compatibility only. No version-bit voting, scheduled
-fork, peer announcement, or alternate validation rule can activate a v0 rule.
-Any future consensus change requires a separately designed and versioned
-normative specification, activation/rollback and compatibility analysis, exact
-vectors, external review, and explicit human approval. No future mechanism or
-MAINNET value is silently specified here.
-See `consensus-freeze.md`, `mainnet-readiness.md` and `../MAINNET_CHECKLIST.md`.
+| magic | `0xDAB5BFFA` | `0xDAB5BFFB` | **UNFINALIZED** |
+| P2P/RPC | 18444/18443 | 28333/28332 | **UNFINALIZED** |
+| P2PKH prefix | 111 | 112 | **UNFINALIZED** |
+| pow limit | `0x207fffff` | `0x2070ffff` | **UNFINALIZED** |
+| spacing | 600 s | 600 s | **UNFINALIZED** |
+| halving | 150 | 210000 | **UNFINALIZED** |
+
+Missing/invalid parameters MUST NOT default.
+
+## 25. Genesis block
+
+Enabled genesis has zero parent, version 1, one coinbase, canonical Merkle
+root, committed time/bits/nonce, valid PoW, and exact bytes. Its coinbase is
+little-endian timestamp plus printable ASCII message, per Section 10 exception.
+
+| Network | time | message | reward | nonce | hash |
+| --- | ---: | --- | ---: | ---: | --- |
+| REGTEST | 1704067200 | `NovaCoin Regtest Genesis` | 5000000000 | 3 | `c974d11a5276ca7eb69b1ec0a8062fb47b49c02f5ac726532483d090ac53eb79` |
+| TESTNET | 1704153600 | `NovaCoin Testnet Genesis` | 1000000000000000 | 2 | `7825772a2dd18d4619622b198052a9c82ca17b0f847754f6cb24960df7a7914c` |
+| MAINNET | **UNFINALIZED** | **UNFINALIZED** | **UNFINALIZED** | **UNFINALIZED** | **UNFINALIZED** |
+
+## 26. Protocol versioning
+
+P2P protocol/minimum-peer versions are transport compatibility only. They MAY
+negotiate supported messages but MUST NOT select v0 consensus rules. REGTEST
+and TESTNET use 1/1; MAINNET is **UNFINALIZED**.
+
+## 27. Consensus upgrades
+
+v0 has no activation mechanism. Software, tx, block, P2P version, peer signal,
+or time MUST NOT silently activate alternate consensus. A future change needs a
+separate normative specification, activation/rollback and fork analysis,
+testnet evidence, vectors, external review, and explicit human approval.
+
+## 28. Security invariants
+
+Valid transactions cannot create money; UTXOs cannot be double-spent on a valid
+chain; rewards cannot exceed subsidy plus fees; only valid-PoW chains activate;
+selection uses cumulative work; and hostile inputs cannot bypass canonical,
+bounded validation.
+
+## 29. Test vectors
+
+`test/data/protocol/` is canonical UTF-8 ASCII `NCPV1`: sorted unique
+`name=value` fields followed by `.`; bytes are lowercase hex and decimal is
+canonical. `MANIFEST.sha256` binds all `.ncpv` files. Unknown kinds or malformed
+grammar MUST fail closed. Existing corpus covers hashing, transaction
+serialization, SIGHASH_ALL, Merkle, compact target, subsidy, block
+serialization, and TESTNET genesis. Missing address, complete signature, and
+difficulty-example vectors are explicitly insufficient, not inferred.
+
+## 30. Implementation conformance
+
+`nova.protocol_conformance` verifies manifest/grammar and C++ hashing, txid,
+signature digest, Merkle, compact target, subsidy, TESTNET block, and genesis
+vectors. `docs/protocol-conformance-report.md` classifies every feature as
+`IMPLEMENTED AND TESTED`, `IMPLEMENTED BUT INSUFFICIENTLY TESTED`, `SPECIFIED
+BUT NOT IMPLEMENTED`, `IMPLEMENTED BUT NOT SPECIFIED`, or `INCONSISTENT`.
+This specification does not freeze consensus, close readiness gates, launch a
+network, or remove `MAINNET_LOCKED`.
