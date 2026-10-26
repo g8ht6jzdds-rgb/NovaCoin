@@ -366,6 +366,84 @@ std::vector<std::uint8_t> ReadFile(const std::filesystem::path& path)
     return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
 
+TEST(ProtocolConformance, SignatureAuthorizationCorpus)
+{
+    for (const std::string_view filename :
+         {"signature_auth_valid.ncpv", "signature_auth_malformed.ncpv",
+          "signature_auth_keyhash_mismatch.ncpv", "signature_auth_digest_mismatch.ncpv",
+          "signature_auth_boundary.ncpv", "signature_auth_boundary_max.ncpv"}) {
+        SCOPED_TRACE(filename);
+        const auto record = ReadRecord(filename);
+        ASSERT_TRUE(record.has_value());
+        const auto bytes = ReadFile(VectorDirectory() / filename);
+        EXPECT_EQ(std::string(bytes.begin(), bytes.end()), EncodeRecord(*record));
+        const auto parsed = ParseSignatureAuthorizationRecord(*record);
+        ASSERT_TRUE(parsed.has_value());
+        const auto result = ReplaySignatureAuthorization(*parsed);
+        ASSERT_TRUE(result.has_value()) << "replay failed or controlled UTXO view changed";
+        EXPECT_EQ(*result, parsed->expected_result);
+    }
+}
+
+TEST(ProtocolConformance, SignatureAuthorizationCorpusBindsReviewedDigest)
+{
+    const auto expected = nova::crypto::Hash256::FromHex(
+        "5e2d72e3b19679b59812b4d7b04ac13f9e8611a0fbc9b3a912b90218ee6fd03d");
+    ASSERT_TRUE(expected.has_value());
+    const auto parameters =
+        nova::chain::NetworkValidationParams(nova::consensus::RegtestNetworkParams());
+    for (const std::string_view filename :
+         {"signature_auth_valid.ncpv", "signature_auth_digest_mismatch.ncpv"}) {
+        SCOPED_TRACE(filename);
+        const auto record = ReadRecord(filename);
+        ASSERT_TRUE(record.has_value());
+        const auto parsed = ParseSignatureAuthorizationRecord(*record);
+        ASSERT_TRUE(parsed.has_value());
+        const auto digest = nova::chain::ComputeSignatureHash(
+            parsed->transaction, parsed->input_index, parsed->referenced_coin.output.script_pubkey,
+            parameters.block_limits.transaction_limits, parameters.sighash_all);
+        ASSERT_TRUE(digest.has_value());
+        if (filename == "signature_auth_valid.ncpv") {
+            EXPECT_EQ(*digest, *expected);
+            EXPECT_EQ(Field(*record, "transaction"),
+                      Field(SignatureAuthorizationFixture(), "transaction"));
+        } else {
+            EXPECT_NE(*digest, *expected);
+            EXPECT_EQ(Field(*record, "unlocking_script"),
+                      Field(SignatureAuthorizationFixture(), "unlocking_script"));
+        }
+    }
+}
+
+TEST(ProtocolConformance, SignatureAuthorizationCorpusPushBoundaries)
+{
+    for (const std::string_view filename :
+         {"signature_auth_boundary.ncpv", "signature_auth_boundary_max.ncpv"}) {
+        SCOPED_TRACE(filename);
+        const auto record = ReadRecord(filename);
+        ASSERT_TRUE(record.has_value());
+        const auto parsed = ParseSignatureAuthorizationRecord(*record);
+        ASSERT_TRUE(parsed.has_value());
+        const auto& script = parsed->transaction.inputs.at(parsed->input_index).script_sig;
+        const bool minimum = filename == "signature_auth_boundary.ncpv";
+        const std::size_t push_size = minimum ? 9U : 73U;
+        ASSERT_EQ(script.size(), push_size + 35U);
+        EXPECT_EQ(script.front(), push_size);
+        EXPECT_EQ(script.at(push_size), 1U);
+        EXPECT_EQ(script.at(push_size + 1U), 33U);
+        EXPECT_TRUE(
+            nova::crypto::PublicKey::FromCompressed(std::span<const std::uint8_t>{script}.last(33U))
+                .has_value());
+        // Length admission is not signature validity. The upper fixture is high-S.
+        const auto signature = nova::crypto::Signature::FromDer(
+            std::span<const std::uint8_t>{script}.subspan(1U, push_size - 1U));
+        EXPECT_EQ(signature.has_value(), minimum);
+        EXPECT_EQ(parsed->expected_result,
+                  minimum ? nova::chain::BlockValidationError::kInvalidSignature
+                          : nova::chain::BlockValidationError::kMalformedUnlockingScript);
+    }
+}
+
 TEST(ProtocolConformance, SignatureAuthorizationSchemaRejectsUnknownAndMissingFields)
 {
     const auto fixture = SignatureAuthorizationFixture();

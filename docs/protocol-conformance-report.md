@@ -4,6 +4,10 @@
 **Scope:** TASK025 initial vector corpus and test-only conformance target.  This
 report does not resolve a disagreement or declare MAINNET readiness.
 
+P2PKH corpus follow-up baseline: `33a448d25308161692ed1339689463a6a4e148b3`.
+The scoped test/data/documentation delta adds six `signature_auth_*.ncpv`
+records; the PR's exact head binds their manifest and replay assertions.
+
 | Protocol feature | Evidence | Classification |
 | --- | --- | --- |
 | 1 Terminology | `docs/protocol.md` | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
@@ -13,7 +17,7 @@ report does not resolve a disagreement or declare MAINNET readiness.
 | 5 Transactions | transaction tests; `transactions.ncpv` | IMPLEMENTED AND TESTED |
 | 6 Inputs | validation tests | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
 | 7 Outputs | transaction/validation tests | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
-| 8 Signature authorization | validation tests; `sighash.ncpv` | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
+| 8 Signature authorization | validation tests; `sighash.ncpv`; six `signature_auth_*.ncpv` records replayed by `ProtocolConformance.SignatureAuthorizationCorpus`, with digest and push-boundary assertions | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
 | 9 UTXO model | validation/UTXO tests | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
 | 10 Coinbase | validation/monetary/network-parameter tests | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
 | 11 Block format | block tests; `blocks.ncpv` | IMPLEMENTED AND TESTED |
@@ -41,8 +45,12 @@ report does not resolve a disagreement or declare MAINNET readiness.
 
 - MAINNET values and genesis are **UNFINALIZED**; no conformance result applies
   to MAINNET.
-- Address, full signature, and difficulty-example vector families are not yet
-  present.
+- Address and difficulty-example vector families are not yet present. Scoped
+  full P2PKH authorization is now present (valid, selector rejection, key-hash
+  mismatch, digest mismatch, lower/upper push boundaries), but exhaustive
+  signature/DER/key and multi-input coverage remains incomplete. TESTNET
+  minimum-difficulty recovery remains IMPLEMENTED BUT INSUFFICIENTLY TESTED;
+  this change adds no difficulty profile or vector.
 - Gate 1 remains **FAIL / NOT FROZEN** pending human/external freeze review;
   Gate 2 is incomplete. Existing CTest-registration and clang-tidy limitations
   remain limitations, not passes.
