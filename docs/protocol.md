@@ -78,7 +78,10 @@ key. Alternate push forms, selectors, extra bytes, invalid points, high-S, and
 key-hash mismatch are invalid. For `SIGHASH_ALL=1`, clear every input script,
 replace the checked input script with the referenced locking bytes, canonically
 serialize, append `u32le(1)`, then hash256. `sighash.ncpv` binds a preimage and
-digest.
+digest. `signature_auth_*.ncpv` adds scoped full-authorization examples, including
+unchanged-signature/different-digest rejection and push-boundary rejection; the
+record inventory in `test/data/protocol/FORMAT.md` identifies each case. These
+examples do not expand the spend-authorized form or select another sighash mode.
 
 ## 9. UTXO model
 
@@ -257,14 +260,16 @@ bounded validation.
 canonical. `MANIFEST.sha256` binds all `.ncpv` files. Unknown kinds or malformed
 grammar MUST fail closed. Existing corpus covers hashing, transaction
 serialization, SIGHASH_ALL, Merkle, compact target, subsidy, block
-serialization, and TESTNET genesis. Missing address, complete signature, and
-difficulty-example vectors are explicitly insufficient, not inferred.
+serialization, TESTNET genesis, and scoped P2PKH signature authorization.
+Address and difficulty-example vectors and exhaustive signature coverage remain
+explicitly insufficient, not inferred.
 
 ## 30. Implementation conformance
 
 `nova.protocol_conformance` verifies manifest/grammar and C++ hashing, txid,
-signature digest, Merkle, compact target, subsidy, TESTNET block, and genesis
-vectors. `docs/protocol-conformance-report.md` classifies every feature as
+signature digest, scoped signature authorization with unchanged controlled UTXOs,
+Merkle, compact target, subsidy, TESTNET block, and genesis vectors.
+`docs/protocol-conformance-report.md` classifies every feature as
 `IMPLEMENTED AND TESTED`, `IMPLEMENTED BUT INSUFFICIENTLY TESTED`, `SPECIFIED
 BUT NOT IMPLEMENTED`, `IMPLEMENTED BUT NOT SPECIFIED`, or `INCONSISTENT`.
 This specification does not freeze consensus, close readiness gates, launch a

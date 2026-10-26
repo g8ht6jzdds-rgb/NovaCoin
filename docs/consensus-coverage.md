@@ -93,6 +93,21 @@ and invariant state on invalid extension. It is coinbase-only; existing signed
 spend/undo tests remain mandatory, and deep signed dependency graphs need more
 coverage before an exhaustive safety assertion. No consensus behavior changed.
 
+## Scoped P2PKH corpus evidence (not Gate 2 completion)
+
+P2PKH corpus follow-up on `33a448d25308161692ed1339689463a6a4e148b3`:
+`ProtocolConformance.SignatureAuthorizationCorpus` replays six manifest-bound
+`signature_auth_*.ncpv` records: acceptance, wrong selector, key-hash mismatch,
+changed signed output, and signature-push lengths 9/73. Each validation checks
+the controlled UTXO view is unchanged. `SignatureAuthorizationCorpusBindsReviewedDigest`
+binds the accepted digest and unchanged-signature/different-digest rejection;
+`SignatureAuthorizationCorpusPushBoundaries` distinguishes length admission
+from strict-DER/low-S and cryptographic validity. See the per-file inventory in
+`test/data/protocol/FORMAT.md`. C15, NCV0-017 and NCV0-022 remain PARTIAL;
+these records do not claim exhaustive script, DER, key or multi-input coverage.
+Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete. TESTNET recovery coverage
+remains insufficient under the accepted immutable-profile limitation.
+
 ## Gate 1 evidence companion (not Gate 2 completion)
 
 `docs/consensus-clause-ledger.md` assigns stable IDs to normative clauses and
