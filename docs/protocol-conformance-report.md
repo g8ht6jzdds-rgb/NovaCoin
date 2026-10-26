@@ -55,3 +55,17 @@ records; the PR's exact head binds their manifest and replay assertions.
   Gate 2 is incomplete. Existing CTest-registration and clang-tidy limitations
   remain limitations, not passes.
 - Any future code/spec/vector contradiction MUST be added as `INCONSISTENT`.
+
+## CFD01–CFD15 / CFP01 approved clarification follow-up
+
+Baseline `0ecaec5ef299859cb76e90060cf17798aba6f711`; see
+[the decision-to-assertion trace](consensus-decision-coverage.md) for exact
+positive, negative and boundary bindings and explicit missing evidence.
+The original candidate references above are historical, not this follow-up's
+tested-head identity. No existing corpus hash or production behavior changes.
+
+Retarget exceptional-case proof, recovery adapter equivalence, unconditional
+failure atomicity, every-caller sentinel safety and Synchronizer no-retarget
+alignment remain open. The latter is a known conformance gap, not waived by
+ordinary REGTEST outcomes. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
+Historical failures and unavailable checks are not converted to passes.

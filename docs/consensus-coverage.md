@@ -117,3 +117,17 @@ vector identifiers. Its exact-byte, malformed-manifest, repeat-generation, and
 working-directory side-effect checks support Gate 1 traceability only. They do
 not fill `NONE` cells, establish exhaustive Gate 2 coverage, freeze the
 protocol, or authorize a network.
+
+## CFD01–CFD15 / CFP01 approved clarification follow-up
+
+Baseline `0ecaec5ef299859cb76e90060cf17798aba6f711`; see
+[the decision-to-assertion trace](consensus-decision-coverage.md) for exact
+positive, negative and boundary bindings and explicit missing evidence.
+The original candidate references above are historical, not this follow-up's
+tested-head identity. No existing corpus hash or production behavior changes.
+
+Retarget exceptional-case proof, recovery adapter equivalence, unconditional
+failure atomicity, every-caller sentinel safety and Synchronizer no-retarget
+alignment remain open. The latter is a known conformance gap, not waived by
+ordinary REGTEST outcomes. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
+Historical failures and unavailable checks are not converted to passes.

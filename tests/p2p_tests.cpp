@@ -222,4 +222,27 @@ TEST(TcpTransport, NumericDialRejectsHostnameAndExhaustedCapacity)
     EXPECT_EQ(full->peer_count(), 0U);
 }
 
+TEST(P2PFraming, OwnerEveryFragmentBoundaryWaitsForCompleteFrame)
+{
+    const auto bytes = nova::net::SerializeMessage(
+        {nova::net::Command::kPing, nova::net::NonceMessage{9U}}, TestProtocolParams());
+    ASSERT_TRUE(bytes.has_value());
+    for (std::size_t split = 0; split < bytes->size(); ++split) {
+        nova::net::MessageParser parser{TestProtocolParams()};
+        const auto partial = parser.PushBytes(std::span<const std::uint8_t>{*bytes}.first(split));
+        EXPECT_EQ(partial.error, nova::net::P2PError::kNone);
+        EXPECT_TRUE(partial.messages.empty());
+        const auto complete =
+            parser.PushBytes(std::span<const std::uint8_t>{*bytes}.subspan(split));
+        EXPECT_EQ(complete.error, nova::net::P2PError::kNone);
+        EXPECT_EQ(complete.messages.size(), 1U);
+    }
+    auto malformed = *bytes;
+    malformed.back() ^= 1U;
+    nova::net::MessageParser parser{TestProtocolParams()};
+    const auto rejected = parser.PushBytes(malformed);
+    EXPECT_EQ(rejected.error, nova::net::P2PError::kChecksumMismatch);
+    EXPECT_TRUE(rejected.messages.empty());
+}
+
 } // namespace

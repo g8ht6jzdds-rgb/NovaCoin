@@ -265,3 +265,19 @@ After cancellation only a new explicit valid header offer can establish a new
 request, even from another peer; the offer is not proof of body possession.
 No automatic redial, blind reassignment, fairness or withholding cure is provided.
 Late and duplicate blocks retain the ordinary validator/duplicate behavior.
+
+## Incomplete streams and connection termination (CFP01)
+
+Incomplete TCP fragments may be buffered within the existing parser bounds;
+only complete validated frames may be dispatched. A malformed complete frame
+rejects. This distinction changes no numeric limit in the profile above.
+
+The current local transport policy is separately bound to
+`src/net/transport.cpp:TcpTransport::Pump`: EOF, non-would-block receive/send
+errors, parser/peer receive errors, requested closes and send-buffer exhaustion
+remove the peer. `src/net/p2p.cpp:Connection::Tick` expires on clock rollback,
+strictly exceeded handshake timeout before establishment, or strictly exceeded
+idle timeout; Pump releases sockets whose peer state has expired. Existing
+discovery-specific deadlines remain their separate local policy. No new timeout
+or per-fragment deadline is selected here. Parser fragment tests do not establish
+complete transport-close/timeout branch coverage or public TESTNET acceptance.

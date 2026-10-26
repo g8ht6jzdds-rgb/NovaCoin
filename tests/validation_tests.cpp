@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "chain/validation.hpp"
+#include "consensus/network_params.hpp"
 
 #include <array>
 #include <cstdint>
@@ -740,6 +741,97 @@ TEST(MainnetConsensusBoundary, RejectsAlternatePushesSelectorsAndTrailingScriptB
         EXPECT_EQ(result.error, BlockValidationError::kMalformedUnlockingScript);
         EXPECT_EQ(scenario.utxos.size(), 1U);
     }
+}
+
+TEST(MainnetConsensusBoundary, OwnerFinalityZeroAndThresholdSwitch)
+{
+    for (const auto locktime : {0U, 499999999U, 500000000U, 500000001U}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        auto& spend = scenario.block.transactions.at(1);
+        spend.lock_time = locktime;
+        spend.inputs.front().sequence = 0U;
+        ResignFirstSpend(scenario);
+        // Distinct height/time values discriminate the threshold's branch;
+        // zero context makes the zero-locktime bypass observable as well.
+        const auto context =
+            locktime == 0U ? nova::chain::TransactionValidationContext{0U, 0U}
+                           : nova::chain::TransactionValidationContext{500000001U, 500000000U};
+        const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            spend, context, scenario.parameters, scenario.utxos);
+        EXPECT_EQ(result.error, locktime < 500000000U ? BlockValidationError::kNone
+                                                      : BlockValidationError::kNonFinalTransaction);
+        EXPECT_EQ(scenario.utxos.size(), 1U);
+        EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
+    }
+}
+
+TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)
+{
+    for (const auto size : {1U, 2U, 100U, 101U}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        auto& script = scenario.block.transactions.front().inputs.front().script_sig;
+        script.resize(size, 0x42U);
+        ASSERT_TRUE(
+            FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+        // Use the immutable network's 100-byte coinbase limit, not the older 64-byte fixture limit.
+        scenario.parameters.block_limits.max_coinbase_script_size =
+            nova::consensus::RegtestNetworkParams().block_limits.max_coinbase_script_size;
+        EXPECT_EQ(nova::chain::CheckBlock(scenario.block, scenario.context, scenario.parameters),
+                  size == 1U || size == 101U ? BlockValidationError::kInvalidCoinbaseScriptSize
+                                             : BlockValidationError::kNone);
+        EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
+    }
+    for (const auto height : {0U, std::numeric_limits<std::uint32_t>::max()}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        scenario.context.height = height;
+        const auto subsidy =
+            nova::consensus::GetBlockSubsidy(height, scenario.parameters.chain_parameters);
+        ASSERT_TRUE(subsidy.has_value());
+        scenario.block.transactions.front().outputs.front().value = *subsidy + COIN;
+        auto& script = scenario.block.transactions.front().inputs.front().script_sig;
+        script = MinimalCoinbaseHeightScript(height);
+        script.push_back(0x42U);
+        ASSERT_TRUE(
+            FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+        const auto connected =
+            ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos);
+        ASSERT_EQ(connected.error, BlockValidationError::kNone);
+        ASSERT_TRUE(connected.connected.has_value());
+        ASSERT_EQ(DisconnectBlock(*connected.connected, scenario.utxos),
+                  BlockValidationError::kNone);
+        script.front() ^= 1U;
+        ASSERT_TRUE(
+            FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+        EXPECT_EQ(
+            ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos)
+                .error,
+            BlockValidationError::kInvalidCoinbaseHeight);
+        EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
+    }
+}
+
+TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)
+{
+    Scenario scenario;
+    PopulateScenario(scenario);
+    const auto ceiling = std::numeric_limits<std::uint32_t>::max();
+    const auto limit = scenario.parameters.max_future_block_time_seconds;
+    scenario.context.validation_time = ceiling - limit;
+    scenario.block.header.time = ceiling;
+    ASSERT_TRUE(MineHeader(scenario.block.header));
+    EXPECT_EQ(
+        nova::chain::CheckBlockHeader(scenario.block.header, scenario.context, scenario.parameters),
+        BlockValidationError::kNone);
+    ++scenario.context.validation_time;
+    const auto saved_time = scenario.context.validation_time;
+    EXPECT_EQ(
+        nova::chain::CheckBlockHeader(scenario.block.header, scenario.context, scenario.parameters),
+        BlockValidationError::kInvalidContext);
+    EXPECT_EQ(scenario.context.validation_time, saved_time);
+    EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
 }
 
 } // namespace
