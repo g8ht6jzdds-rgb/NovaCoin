@@ -69,3 +69,26 @@ failure atomicity, every-caller sentinel safety and Synchronizer no-retarget
 alignment remain open. The latter is a known conformance gap, not waived by
 ordinary REGTEST outcomes. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
 Historical failures and unavailable checks are not converted to passes.
+
+## Scoped signature triad follow-up
+
+Base `1b83e00f0e49a8703d0a6fef1291ccc538ca732e`: eight additive public-fixture
+records cover invalid key prefix, DER tag, trailing authorization, adjacent push
+lengths, unsupported referenced lock and amount equality/insufficiency. The
+original fourteen corpus files remain byte-identical. Exact clause-to-triad and
+named assertion bindings are in `consensus-coverage.md`; record grammar and
+single-fault mutations are in `test/data/protocol/FORMAT.md`.
+
+The conformance harness checks the independently serialized golden preimage and
+the unchanged digest of amount-only synthetic UTXO contexts, plus exact fees and
+non-mutation of both controlled coins. These assertions do not prove alternative
+valid chain histories or block/reorg atomicity. Historical IMPLEMENTED AND TESTED
+family labels above remain scoped historical evidence, not complete current
+Gate 2 certificates. This follow-up adds no normative rule or production change.
+
+Maximum-valid DER71/push72, complete key/DER/multi-input cases, full difficulty
+histories, recovery discrimination, scaling failure classification, ancestry
+handling, Synchronizer alignment, sentinel callers and unconditional atomicity
+remain incomplete. Gate 1 is FAIL / NOT FROZEN; Gate 2 incomplete; MAINNET locked.
+Actual exact-head checks, failures and unavailable-tool/platform limitations
+belong in the accompanying external evidence packet, not presumed passes here.
