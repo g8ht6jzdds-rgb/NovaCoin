@@ -108,7 +108,7 @@
           }
         },
         "boundary": {
-          "description": "499999999/500000000/500000001 and sequence override",
+          "description": "499999999/500000000/500000001",
           "assertion": "MainnetConsensusBoundary.OwnerFinalityZeroAndThresholdSwitch",
           "binding": {
             "path": "tests/validation_tests.cpp",
