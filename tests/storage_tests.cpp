@@ -8,11 +8,35 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <system_error>
 
 namespace
 {
+
+TEST(JournalHostileInput, EmptyStreamIsValidAndUnknownTagCannotPublishBlocks)
+{
+    const auto limits = nova::consensus::RegtestNetworkParams().block_limits;
+    std::istringstream empty;
+    const auto valid = nova::storage::ReadBlockJournal(empty, limits, {8U, 1U, 1U, 1U});
+    EXPECT_EQ(valid.error, nova::storage::BlockJournalError::kNone);
+    EXPECT_TRUE(valid.blocks.empty());
+    std::istringstream hostile{std::string(1U, '\x7f')};
+    const auto rejected = nova::storage::ReadBlockJournal(hostile, limits, {8U, 1U, 1U, 1U});
+    EXPECT_EQ(rejected.error, nova::storage::BlockJournalError::kMalformedRecord);
+    EXPECT_TRUE(rejected.blocks.empty());
+}
+
+TEST(JournalHostileInput, ZeroBudgetRejectsNonemptyStreamBeforeRecordAllocation)
+{
+    const auto limits = nova::consensus::RegtestNetworkParams().block_limits;
+    std::istringstream input{std::string(5U, '\xff')};
+    const auto result = nova::storage::ReadBlockJournal(input, limits, {0U, 0U, 0U, 0U});
+    EXPECT_EQ(result.error, nova::storage::BlockJournalError::kResourceLimit);
+    EXPECT_TRUE(result.blocks.empty());
+    EXPECT_EQ(input.tellg(), 0);
+}
 
 using nova::storage::BlockJournal;
 using nova::storage::BlockJournalError;

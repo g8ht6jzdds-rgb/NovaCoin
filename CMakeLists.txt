@@ -52,6 +52,18 @@ endif()
 
 add_library(nova_project_options INTERFACE)
 
+# Instrument parser implementations as well as harnesses. fuzzer-no-link
+# supplies coverage without introducing libFuzzer's main into ordinary targets.
+if(NOVA_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "NOVA_BUILD_FUZZERS requires Clang.")
+    endif()
+    target_compile_options(nova_project_options INTERFACE
+        -fsanitize=fuzzer-no-link,address,undefined)
+    target_link_options(nova_project_options INTERFACE
+        -fsanitize=fuzzer-no-link,address,undefined)
+endif()
+
 if(MSVC)
     target_compile_options(nova_project_options INTERFACE /W4 /permissive- /EHsc)
     if(NOVA_WARNINGS_AS_ERRORS)

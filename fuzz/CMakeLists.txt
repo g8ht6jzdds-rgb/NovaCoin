@@ -46,6 +46,9 @@ nova_add_fuzzer(fuzz_offline_inspection offline_inspection_fuzz.cpp)
 target_link_libraries(fuzz_offline_inspection PRIVATE nova_inspection)
 
 add_custom_target(nova_fuzzers DEPENDS
+    fuzz_wallet_import
+    fuzz_rpc
+    fuzz_journal
     fuzz_offline_inspection
     fuzz_deserializer
     fuzz_transaction_deserializer
@@ -58,3 +61,12 @@ add_custom_target(nova_fuzzers DEPENDS
     fuzz_sync_admission
     fuzz_body_request_recovery
     fuzz_bootstrap_reader)
+
+nova_add_fuzzer(fuzz_journal journal_fuzz.cpp)
+target_link_libraries(fuzz_journal PRIVATE nova_storage nova_consensus)
+
+nova_add_fuzzer(fuzz_rpc rpc_fuzz.cpp)
+target_link_libraries(fuzz_rpc PRIVATE nova_rpc)
+
+nova_add_fuzzer(fuzz_wallet_import wallet_import_fuzz.cpp)
+target_link_libraries(fuzz_wallet_import PRIVATE nova_wallet nova_consensus)
