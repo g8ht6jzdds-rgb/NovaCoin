@@ -22,6 +22,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace
@@ -645,6 +646,144 @@ TEST(ProtocolConformance, SubsidyAndCommittedGenesisVectors)
     ASSERT_TRUE(actual_hash.has_value());
     EXPECT_EQ(*actual_hash, *expected_hash);
     EXPECT_EQ(parsed->header.merkle_root, *expected_merkle);
+}
+
+TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)
+{
+    nova::crypto::Hash256::Bytes nonzero{};
+    nonzero.back() = 1U;
+    for (const auto index : {0U, 0xfffffffeU, 0xffffffffU}) {
+        const nova::primitives::OutPoint null_hash{nova::crypto::Hash256{}, index};
+        EXPECT_EQ(null_hash.IsNull(), index == 0xffffffffU);
+        EXPECT_EQ(null_hash.IsMalformed(), index != 0xffffffffU);
+        const nova::primitives::OutPoint nonnull{nova::crypto::Hash256{nonzero}, index};
+        EXPECT_FALSE(nonnull.IsNull());
+        EXPECT_FALSE(nonnull.IsMalformed());
+    }
+    auto fixture = ParseSignatureAuthorizationRecord(SignatureAuthorizationFixture());
+    ASSERT_TRUE(fixture.has_value());
+    const auto parameters =
+        nova::chain::NetworkValidationParams(nova::consensus::RegtestNetworkParams());
+    nova::chain::UTXOSet empty;
+    fixture->transaction.inputs.front().previous_output.output_index = 0xffffffffU;
+    EXPECT_EQ(nova::chain::ValidateTransactionAgainstUTXOSet(fixture->transaction, {1U, 1U},
+                                                             parameters, empty)
+                  .error,
+              nova::chain::BlockValidationError::kMissingUtxo);
+    EXPECT_EQ(empty.size(), 0U);
+}
+
+TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)
+{
+    const auto fixture = SignatureAuthorizationFixture();
+    auto bytes = HexBytes(Field(fixture, "transaction"));
+    ASSERT_TRUE(bytes.has_value());
+    const auto& limits = nova::consensus::RegtestNetworkParams().block_limits.transaction_limits;
+    ASSERT_TRUE(nova::primitives::Transaction::Deserialize(*bytes, limits).has_value());
+    bytes->push_back(0U);
+    EXPECT_FALSE(nova::primitives::Transaction::Deserialize(*bytes, limits).has_value());
+    bytes->pop_back();
+    bytes->pop_back();
+    EXPECT_FALSE(nova::primitives::Transaction::Deserialize(*bytes, limits).has_value());
+    // This asserts admission, not allocator instrumentation or allocation timing.
+}
+
+TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)
+{
+    // R/S below are public signature components, never private key material.
+    for (const auto& [hex, accepted] : std::array<std::pair<std::string_view, bool>, 9>{
+             {{"3006020101020101", true},
+              {"3006020100020101", false},
+              {"3006020101020100", false},
+              {"3006020180020101", false},
+              {"300702020001020101", false},
+              {"300602010102010100", false},
+              {"302502010102207fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0",
+               true},
+              {"302502010102207fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a1",
+               false},
+              {"3026022100fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141020101",
+               false}}}) {
+        SCOPED_TRACE(hex);
+        const auto bytes = HexBytes(hex);
+        ASSERT_TRUE(bytes.has_value());
+        const auto signature = nova::crypto::Signature::FromDer(*bytes);
+        EXPECT_EQ(signature.has_value(), accepted);
+        if (signature.has_value()) {
+            EXPECT_EQ(HexText(signature->SerializeDer()), hex);
+        }
+    }
+}
+
+TEST(ProtocolConformance, OwnerCompressedKeyBoundaries)
+{
+    const auto fixture = ParseSignatureAuthorizationRecord(SignatureAuthorizationFixture());
+    ASSERT_TRUE(fixture.has_value());
+    const auto& script = fixture->transaction.inputs.front().script_sig;
+    ASSERT_GE(script.size(), 33U);
+    std::vector<std::uint8_t> key(script.end() - 33, script.end());
+    ASSERT_TRUE(nova::crypto::PublicKey::FromCompressed(key).has_value());
+    auto invalid_prefix = key;
+    invalid_prefix.front() = 4U;
+    EXPECT_FALSE(nova::crypto::PublicKey::FromCompressed(invalid_prefix).has_value());
+    key.pop_back();
+    EXPECT_FALSE(nova::crypto::PublicKey::FromCompressed(key).has_value());
+    key.resize(34U, 0U);
+    EXPECT_FALSE(nova::crypto::PublicKey::FromCompressed(key).has_value());
+    std::vector<std::uint8_t> invalid_point(33U, 0xffU);
+    invalid_point.front() = 2U;
+    EXPECT_FALSE(nova::crypto::PublicKey::FromCompressed(invalid_point).has_value());
+}
+
+TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)
+{
+    for (const auto& [network, expected] :
+         std::array<std::pair<const nova::consensus::NetworkParams*, std::int64_t>, 2>{
+             {{&nova::consensus::RegtestNetworkParams(), 1499999998350LL},
+              {&nova::consensus::TestnetNetworkParams(), 2099999997690000LL}}}) {
+        SCOPED_TRACE(network->monetary.halving_interval);
+        EXPECT_EQ(nova::consensus::CalculateTheoreticalIssuance(network->monetary), expected);
+        std::int64_t independent_sum = 0;
+        auto subsidy = network->monetary.initial_subsidy;
+        while (subsidy != 0) {
+            independent_sum +=
+                subsidy * static_cast<std::int64_t>(network->monetary.halving_interval);
+            subsidy /= 2;
+        }
+        EXPECT_EQ(independent_sum, expected);
+        const auto interval = network->monetary.halving_interval;
+        EXPECT_EQ(nova::consensus::GetBlockSubsidy(32U * interval, network->monetary), 1);
+        EXPECT_EQ(nova::consensus::GetBlockSubsidy(33U * interval - 1U, network->monetary), 1);
+        EXPECT_EQ(nova::consensus::GetBlockSubsidy(33U * interval, network->monetary), 0);
+        auto invalid = network->monetary;
+        invalid.halving_interval = 0U;
+        EXPECT_FALSE(nova::consensus::CalculateTheoreticalIssuance(invalid).has_value());
+    }
+    EXPECT_LE(2099999997690000LL + nova::consensus::TESTNET_CREATOR_ALLOCATION,
+              nova::consensus::MAX_MONEY);
+}
+
+TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)
+{
+    for (const auto& [magnitude, compact] :
+         std::array<std::pair<std::string_view, std::uint32_t>, 5>{
+             {{"0000000000000000000000000000000000000000000000000000000000000001", 0x01010000U},
+              {"0000000000000000000000000000000000000000000000000000000000000080", 0x02008000U},
+              {"0000000000000000000000000000000000000000000000000000000000800000", 0x04008000U},
+              {"0000000000000000000000000000000000000000000000000000000001234567", 0x04012345U},
+              {"00000000000000000000000000000000000000000000000000000000012345ff", 0x04012345U}}}) {
+        const auto target = nova::consensus::Target256::FromHex(magnitude);
+        ASSERT_TRUE(target.has_value());
+        EXPECT_EQ(nova::consensus::CompactFromTarget(*target), compact);
+        const auto decoded = nova::consensus::TargetFromCompact(compact);
+        ASSERT_TRUE(decoded.target.has_value());
+        EXPECT_FALSE(*target < *decoded.target);
+        EXPECT_EQ(nova::consensus::CompactFromTarget(*decoded.target), compact);
+    }
+    EXPECT_EQ(nova::consensus::TargetFromCompact(0x01010001U).error,
+              nova::consensus::TargetError::kNonCanonical);
+    EXPECT_EQ(nova::consensus::TargetFromCompact(0x00800001U).error,
+              nova::consensus::TargetError::kNegative);
 }
 
 } // namespace

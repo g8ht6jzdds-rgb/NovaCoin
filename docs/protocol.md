@@ -23,14 +23,30 @@ little-endian. Fixed arrays have no length prefix. Vectors are
 `CompactSize(length)||bytes`; arrays are `CompactSize(count)||elements`.
 CompactSize uses the shortest form: `0..252`; `fd||u16`; `fe||u32`; or
 `ff||u64`. Decoders MUST reject truncation, non-minimal lengths, over-limit
-counts, overflow, and trailing bytes before allocation.
+counts and arithmetic overflow. Count, length, overflow and remaining-byte
+checks MUST precede the corresponding allocation. Bounded temporary parsing is
+permitted; trailing bytes MUST reject before successful whole-message admission.
+This ordering does not change the set of accepted serialized inputs.
 
 ## 3. Cryptographic primitives
 
 `hash256(x)=SHA256(SHA256(x))`; `HASH160(x)=RIPEMD160(SHA256(x))`. Txids hash
 canonical transaction bytes and block IDs hash canonical 80-byte headers.
 v0 uses compressed secp256k1 public keys and strict-DER low-S ECDSA signatures
-over Section 8 digests. Implementations MUST use maintained libraries and MUST
+over Section 8 digests. A public key MUST be exactly 33 bytes, start with `02`
+or `03`, represent a point on secp256k1, and reserialize identically in compressed
+form. The curve is `y^2=x^3+7 mod p`, with
+`p=0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f`.
+The prefix selects the even (`02`) or odd (`03`) y coordinate; the remaining
+32 bytes encode x as an unsigned big-endian integer less than p.
+The subgroup order is
+`n=0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141`.
+A signature MUST be 8..72 bytes of DER: `30 L 02 LR R 02 LS S`, with
+one-byte lengths, `L=4+LR+LS`, and no remaining bytes. R and S are positive,
+minimal big-endian signed INTEGER encodings: no negative high bit and no leading
+zero except a necessary sign pad. Their integer values MUST satisfy
+`1 <= R < n` and `1 <= S <= floor(n/2)`. Parsing and DER reserialization MUST
+be byte-identical. Format acceptance alone does not establish ECDSA validity. Implementations MUST use maintained libraries and MUST
 NOT introduce a novel primitive. Raw digest byte order is used in all vectors.
 
 ## 4. Address format (non-consensus)
@@ -62,6 +78,19 @@ temporary UTXO view, is not already spent in the transaction/block, is mature
 when coinbase, is final, and satisfies Section 8. `sequence` participates in
 serialization and absolute lock time only; v0 has no relative locks.
 
+A null outpoint is exactly a zero 32-byte txid AND index `0xffffffff`.
+A zero txid with any other index is malformed. A nonzero txid with index
+`0xffffffff` is not malformed by shape alone; existence and spendability MUST
+still be checked. Exactly one null input identifies coinbase shape; placement
+and reward checks remain separate.
+
+After structural validation, a transaction is final iff `lock_time == 0`, or
+every input sequence equals `0xffffffff`, or its lock time is strictly below
+the comparison value. That value is the candidate height when
+`lock_time < 500000000`, otherwise median time past. Equality fails that last
+comparison; the zero-locktime and all-final-sequence alternatives still apply.
+These are existing validation bindings, not new relative-lock rules.
+
 ## 7. Transaction outputs
 
 An output is an `i64` amount and bounded locking bytes. Zero is permitted;
@@ -74,7 +103,8 @@ implicit burn rule.
 The sole spend-authorized locking form is
 `76 a9 14 <20-byte HASH160(pubkey)> 88 ac`. The unlocker is exactly two direct
 pushes: strict-DER low-S signature plus selector `01`, then a 33-byte compressed
-key. Alternate push forms, selectors, extra bytes, invalid points, high-S, and
+key. The signature push is 9..73 bytes including selector `01`; the key push
+is exactly 33 bytes. Alternate push forms, selectors, extra bytes, invalid points, high-S, and
 key-hash mismatch are invalid. For `SIGHASH_ALL=1`, clear every input script,
 replace the checked input script with the referenced locking bytes, canonically
 serialize, append `u32le(1)`, then hash256. `sighash.ncpv` binds a preimage and
@@ -96,7 +126,12 @@ or staged outpoint collision reject. The complete transition is atomic.
 
 Only transaction zero MAY be coinbase. It has one null outpoint, at least one
 output, and a 2..100 byte script. An ordinary coinbase script MUST begin with
-the minimally encoded direct-push current height (`00` at height zero). The
+the minimally encoded direct-push current height (`00` at height zero).
+For a nonzero u32 height, encode its magnitude little-endian without redundant
+zero bytes, append a zero sign pad iff the last byte has bit 7 set, and prefix
+the resulting length as one direct-push byte. Only this prefix encodes height;
+remaining bytes MAY follow within the existing 2..100-byte total bound.
+Height zero therefore still needs at least one suffix byte. The
 committed REGTEST/TESTNET genesis serializations are explicit anchor exceptions
 and use their documented timestamp/message construction. Coinbase total MUST
 NOT exceed subsidy plus fees; maturity is network-bound.
@@ -133,6 +168,16 @@ targets reject. The raw block ID interpreted as unsigned little-endian MUST be
 `<= target`; equality is valid. Operations use exact integers only.
 `target_pow.ncpv` binds a canonical conversion.
 
+Let `e=bits>>24` and `m=bits & 0x007fffff`. The sign bit `0x00800000`
+MUST be clear. Decode `T=m>>(8*(3-e))` when `e<=3`, otherwise
+`T=m<<(8*(e-3))`, using mathematical integers before checking 256-bit range.
+Reject zero or overflow. To encode positive T, let e be its byte-length and
+retain its three most significant bytes (right-pad with zeros if e<3).
+If the mantissa high bit is set, shift it right eight bits and increment e.
+Return `(e<<24)|mantissa`. Discarded low bytes are truncated, never rounded up.
+Decoding MUST reject unless encoding T reproduces bits exactly, and T MUST NOT
+exceed the selected network's existing powLimit.
+
 ## 15. Difficulty adjustment
 
 Genesis uses committed bits. With `no_retargeting`, children inherit parent
@@ -144,12 +189,40 @@ no-retargeting, TESTNET has 600-second spacing and its parameter-bound
 minimum-difficulty behavior. MAINNET is **UNFINALIZED**. Floating point is
 forbidden.
 
+A boundary has `child_height % adjustment_interval == 0`; the first ancestor
+is at `child_height-adjustment_interval`. Compute elapsed as
+`max(parent.time-first.time,0)`, then clamp as above. A quotient exceeding
+256-bit representation saturates at powLimit. Invalid parameters, invalid
+previous targets and unavailable required ancestry are context failures, not
+permission to substitute a target. Before freeze, evidence MUST establish that
+other scaling failure causes cannot be confused with quotient saturation under
+admitted parameters. That proof remains outstanding.
+
+For TESTNET's existing minimum-difficulty rule outside retarget boundaries, a
+child delayed strictly more than twice spacing (1200 seconds) uses powLimit.
+Otherwise walk backward through consecutive powLimit ancestors, stopping at a
+retarget boundary, a non-powLimit ancestor, or a powLimit ancestor that was NOT
+delayed strictly more than twice spacing relative to its own predecessor.
+Reuse the retained ancestor's expected bits. Recovery is defined over complete
+validated ancestry. Missing ancestry is unavailable context, not an alternate
+valid target or permanent invalidity of the block. ChainState/Synchronizer
+missing-predecessor equivalence remains unverified. Current immutable-profile
+vectors do not discriminate every recovery path; no new profile is introduced.
+
+The no-retarget inheritance rule remains normative. Synchronizer's powLimit
+shortcut is a known conformance gap requiring a separate alignment proposal;
+coincidence on frozen REGTEST history is not a general equivalence proof.
+
 ## 16. Timestamp rules
 
 Non-genesis time MUST exceed the lower median of configured prior header times
 and MUST NOT exceed `validation_time+future_limit`. The median uses integers;
 validation time is sampled from a trusted local clock before validation. Peer
 data MUST NOT alter it. Local clock acquisition is policy; bounds are consensus.
+Before addition, `validation_time > UINT32_MAX-future_limit` MUST reject the
+validation context. Neither wrapping nor saturation is permitted. At equality
+the addition is representable. Any `header.time+1` bookkeeping is a distinct
+operation and MUST NOT substitute for this checked-addition rule.
 
 ## 17. Monetary policy
 
@@ -157,21 +230,38 @@ data MUST NOT alter it. Local clock acquisition is policy; bounds are consensus.
 At height `h`, subsidy is `floor(INITIAL_SUBSIDY/2^floor(h/I))`; all shifts,
 products, and totals are checked and the final nonzero era pays one unit.
 
-| Network | interval | height 0 | first halving | scheduled ceiling |
+| Network | interval | height 0 | first halving | exact theoretical full schedule |
 | --- | ---: | ---: | ---: | ---: |
-| REGTEST | 150 | 5000000000 | 2500000000 at 150 | 21,000,000 NOVA |
-| TESTNET | 210000 | 5000000000 | 2500000000 at 210000 | 21,000,000 NOVA |
+| REGTEST | 150 | 5000000000 | 2500000000 at 150 | 14,999.99998350 NOVA |
+| TESTNET | 210000 | 5000000000 | 2500000000 at 210000 | 20,999,999.97690000 NOVA |
 | MAINNET | **UNFINALIZED** | **UNFINALIZED** | **UNFINALIZED** | **UNFINALIZED** |
 
-TESTNET's committed ten-million-NOVA genesis allocation plus its 21-million
-scheduled issuance is within MAX_MONEY and has no MAINNET implication.
+The integer sum `sum(k=0..63, floor(5000000000/2^k))` is 9,999,999,989
+base units. Multiplying by the existing intervals gives 1,499,999,998,350
+(REGTEST) and 2,099,999,997,690,000 (TESTNET) base units. Zero subsidy follows
+the final nonzero era. These full schedules include the ordinary height-zero
+term; they are not measured issued supply.
+
+Parameter validation conservatively adds the full genesis allocation to the
+full schedule: TESTNET's 1,000,000,000,000,000 genesis units plus
+2,099,999,997,690,000 is 3,099,999,997,690,000, below MAX_MONEY
+3,100,000,000,000,000. Actual child rewards start at height 1 and may be
+underclaimed. Fees transfer existing value rather than create supply. Genesis
+initialization, actual issuance and UTXO value MUST be accounted separately;
+REGTEST starts with empty UTXOs while TESTNET seeds its frozen creator output.
+No subsidy, allocation, interval or MAX_MONEY value changes. MAINNET economics
+remain UNFINALIZED.
 
 ## 18. Block validation
 
 Nodes SHALL: canonically parse/bound bytes; validate parent/time/target/PoW;
 validate structure/coinbase/txids/Merkle root; validate regular transactions in
-order against temporary UTXOs; validate fees and reward; atomically commit; and
-then consider chainwork. Received, persisted, and local blocks use this path.
+order against temporary UTXOs; validate fees and reward; and atomically publish
+only valid state selected by chainwork. These are logical validation dependencies
+and publication conditions, not a mandatory internal execution or error order.
+Safe early checks and work calculation MAY occur without bypassing validation;
+high work alone MUST NOT activate a candidate. Received, persisted, and local
+blocks require all the same validation dependencies.
 
 ## 19. Chain selection
 
@@ -184,6 +274,11 @@ lexicographically smaller raw block ID. Overflow is invalid.
 Find the fork, disconnect the active suffix with undo data, connect the winning
 suffix through Section 18, then publish the tip. Disconnect notifications occur
 before connects. Failure MUST restore the old branch and UTXO state atomically.
+This unconditional safety requirement is retained, not weakened for allocation,
+crash or restoration failure. Implementation compliance remains FAIL pending
+failure-model evidence and separately authorized remedies. A later design must
+identify the observable publication/notification interface; ordinary successful
+reorg fixtures do not prove all failure classes.
 
 ## 21. Mempool policy
 
@@ -194,12 +289,17 @@ Admission, relay, fees, eviction, capacity, and template ordering are
 
 Envelope: `u32le magic||command[12]||u32le payload_length||checksum[4]||payload`.
 Command is NUL-padded ASCII; checksum is first four raw hash256 bytes. Reject
-wrong magic, malformed command, unknown command, excess/truncated payload,
+wrong magic, malformed command, unknown command, excess or malformed complete payload,
 checksum mismatch, and non-canonical payload. Supported commands are `version`,
 `verack`, `ping`, `pong`, `addr`, `getaddr`, `inv`, `getdata`, `tx`, `block`,
 `getheaders`, `headers`. Limits are user agent 256, addresses 1000, inventory
 50000, locators 101, headers 2000. These are compatibility/resource policy;
-parsed blocks/txs still require consensus validation.
+parsed blocks/txs still require consensus validation. Incomplete stream fragments
+MAY be buffered within existing bounds; an incomplete TCP fragment is not itself
+a malformed complete message. No incomplete message may be dispatched as valid.
+Connection close/timeout handling is separate local transport policy, not a new
+consensus rule. See `docs/p2p.md` for the approved profile and transport bindings;
+these clarifications select no new timeout or payload values.
 
 ## 23. Node synchronization
 
@@ -219,7 +319,11 @@ authority.
 | spacing | 600 s | 600 s | **UNFINALIZED** |
 | halving | 150 | 210000 | **UNFINALIZED** |
 
-Missing/invalid parameters MUST NOT default.
+Missing/invalid parameters MUST NOT default into an admitted network or state.
+An internal locked sentinel is permitted only with safe rejection/non-admission
+proof for every caller; unverified callers remain open. An internal fallback
+lookup is not permission to initialize storage, chains or services. MAINNET
+remains locked; the caller proof is not established by this specification.
 
 ## 25. Genesis block
 
