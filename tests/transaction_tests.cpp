@@ -2,6 +2,7 @@
 
 #include "primitives/transaction.hpp"
 
+#include "consensus/network_params.hpp"
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -198,6 +199,50 @@ TEST(TransactionParsing, RejectsMalformedAndNoncanonicalEncodings)
     std::vector<std::uint8_t> trailing{writer.bytes().begin(), writer.bytes().end()};
     trailing.push_back(0x00U);
     EXPECT_FALSE(Transaction::Deserialize(trailing, kLimits).has_value());
+}
+
+TEST(MonetarySerialization, WireAmountsRejectNegativeExcessAndTruncationWithoutClamping)
+{
+    const auto limits = nova::consensus::RegtestNetworkParams().block_limits.transaction_limits;
+    constexpr auto MAX_MONEY = nova::consensus::MAX_MONEY;
+    for (const auto amount :
+         {Amount{0}, MAX_MONEY, Amount{-1}, MAX_MONEY + 1, std::numeric_limits<Amount>::min(),
+          std::numeric_limits<Amount>::max()}) {
+        nova::primitives::BinaryWriter writer;
+        ASSERT_TRUE(writer.WriteI64(amount));
+        nova::primitives::BinaryReader reader{writer.bytes()};
+        EXPECT_EQ(reader.ReadI64(), amount);
+        EXPECT_TRUE(reader.RequireEnd());
+        // Encode hostile bytes explicitly, rather than asking the validated serializer
+        // to create a transaction it must reject.
+        nova::primitives::BinaryWriter wire;
+        ASSERT_TRUE(wire.WriteU32(1U));
+        ASSERT_TRUE(wire.WriteCompactSize(1U));
+        nova::crypto::Hash256::Bytes hash{};
+        hash.back() = 1U;
+        ASSERT_TRUE(wire.WriteHash256(nova::crypto::Hash256{hash}));
+        ASSERT_TRUE(wire.WriteU32(0U));
+        ASSERT_TRUE(wire.WriteCompactSize(0U));
+        ASSERT_TRUE(wire.WriteU32(0xFFFF'FFFFU));
+        ASSERT_TRUE(wire.WriteCompactSize(1U));
+        ASSERT_TRUE(wire.WriteI64(amount));
+        const std::array<std::uint8_t, 1U> script{0x51U};
+        ASSERT_TRUE(wire.WriteBytes(script, limits.max_script_size));
+        ASSERT_TRUE(wire.WriteU32(0U));
+        const auto parsed = Transaction::Deserialize(wire.bytes(), limits);
+        if (amount == 0 || amount == MAX_MONEY) {
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->outputs.front().value, amount);
+            nova::primitives::BinaryWriter replay;
+            ASSERT_TRUE(parsed->Serialize(replay, limits));
+            EXPECT_EQ(std::vector<std::uint8_t>(replay.bytes().begin(), replay.bytes().end()),
+                      std::vector<std::uint8_t>(wire.bytes().begin(), wire.bytes().end()));
+        } else {
+            EXPECT_FALSE(parsed.has_value());
+        }
+        const auto bytes = wire.bytes();
+        EXPECT_FALSE(Transaction::Deserialize(bytes.first(bytes.size() - 1U), limits).has_value());
+    }
 }
 
 } // namespace

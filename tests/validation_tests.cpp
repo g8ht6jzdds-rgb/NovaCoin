@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include "chain/network_chainstate.hpp"
 #include "chain/validation.hpp"
 #include "consensus/network_params.hpp"
 
+#include "consensus/network_params.hpp"
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -832,6 +834,160 @@ TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)
         BlockValidationError::kInvalidContext);
     EXPECT_EQ(scenario.context.validation_time, saved_time);
     EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
+}
+
+using KnownCoins = std::vector<std::pair<UTXOKey, nova::chain::Coin>>;
+
+void ExpectCompleteKnownState(const UTXOSet& state, const KnownCoins& expected)
+{
+    ASSERT_EQ(state.size(), expected.size());
+    for (const auto& [key, coin] : expected) {
+        const auto actual = state.GetCoin(key);
+        ASSERT_TRUE(actual.has_value());
+        EXPECT_EQ(actual->output.value, coin.output.value);
+        EXPECT_EQ(actual->output.script_pubkey, coin.output.script_pubkey);
+        EXPECT_EQ(actual->height, coin.height);
+        EXPECT_EQ(actual->is_coinbase, coin.is_coinbase);
+    }
+}
+
+TEST(MonetaryStateSafety, InvalidAmountsNeverMutateTheCompleteControlledView)
+{
+    for (const auto amount : {nova::primitives::Amount{-1}, MAX_MONEY + 1,
+                              std::numeric_limits<nova::primitives::Amount>::min(),
+                              std::numeric_limits<nova::primitives::Amount>::max()}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        const auto before = scenario.utxos.GetCoin(scenario.spent_key);
+        ASSERT_TRUE(before.has_value());
+        scenario.block.transactions.at(1).outputs.front().value = amount;
+        const auto output_result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            scenario.block.transactions.at(1), {10U, 1'000U}, scenario.parameters, scenario.utxos);
+        EXPECT_EQ(output_result.error, BlockValidationError::kInvalidTransactionStructure);
+        ExpectCompleteKnownState(scenario.utxos, {{scenario.spent_key, *before}});
+        scenario.block.transactions.at(1).outputs.front().value = 49LL * COIN;
+        ASSERT_TRUE(scenario.utxos.SpendCoin(scenario.spent_key).has_value());
+        auto hostile_coin = *before;
+        hostile_coin.output.value = amount;
+        ASSERT_TRUE(scenario.utxos.AddCoin(scenario.spent_key, hostile_coin));
+        const auto input_result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            scenario.block.transactions.at(1), {10U, 1'000U}, scenario.parameters, scenario.utxos);
+        EXPECT_EQ(input_result.error, BlockValidationError::kInvalidInputAmount);
+        ExpectCompleteKnownState(scenario.utxos, {{scenario.spent_key, hostile_coin}});
+    }
+}
+
+TEST(MonetaryStateSafety, InputSumAtCapAndOneOverIsCheckedWithCompleteStateEquality)
+{
+    for (const auto delta : {-1LL, 0LL, 1LL}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        const UTXOKey second{HashWithLastByte(0x22U), 0U};
+        const nova::chain::Coin second_coin{
+            {MAX_MONEY - 50LL * COIN + delta, scenario.locking_script}, 0U, false};
+        ASSERT_TRUE(scenario.utxos.AddCoin(second, second_coin));
+        const auto first = scenario.utxos.GetCoin(scenario.spent_key);
+        ASSERT_TRUE(first.has_value());
+        auto& transaction = scenario.block.transactions.at(1);
+        transaction.inputs.push_back(
+            {{second.transaction_id, second.output_index}, {}, 0xFFFF'FFFFU});
+        const auto key = KeyFor(1U);
+        ASSERT_TRUE(key.has_value());
+        const auto public_key = key->DerivePublicKey();
+        ASSERT_TRUE(public_key.has_value());
+        for (std::size_t index = 0U; index < 2U; ++index)
+            ASSERT_TRUE(SignInput(transaction, *key, *public_key, scenario.locking_script,
+                                  scenario.parameters.block_limits.transaction_limits, index));
+        const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            transaction, {10U, 1'000U}, scenario.parameters, scenario.utxos);
+        EXPECT_EQ(result.error, delta > 0 ? BlockValidationError::kInputAmountOverflow
+                                          : BlockValidationError::kNone);
+        if (delta <= 0)
+            EXPECT_EQ(result.fee, MAX_MONEY + delta - 49LL * COIN);
+        ExpectCompleteKnownState(scenario.utxos,
+                                 {{scenario.spent_key, *first}, {second, second_coin}});
+    }
+}
+
+TEST(MonetaryStateSafety, ExcessBlockFeesAndRewardDiscardEveryStagedOutput)
+{
+    for (const bool excessive_fee : {false, true}) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        const UTXOKey second{HashWithLastByte(0x22U), 0U};
+        const nova::chain::Coin second_coin{{MAX_MONEY, scenario.locking_script}, 0U, false};
+        ASSERT_TRUE(scenario.utxos.AddCoin(second, second_coin));
+        const auto first = scenario.utxos.GetCoin(scenario.spent_key);
+        ASSERT_TRUE(first.has_value());
+        auto spend = scenario.block.transactions.at(1);
+        spend.inputs.front().previous_output = {second.transaction_id, second.output_index};
+        spend.outputs.front().value = excessive_fee ? 0 : MAX_MONEY;
+        const auto key = KeyFor(1U);
+        ASSERT_TRUE(key.has_value());
+        const auto public_key = key->DerivePublicKey();
+        ASSERT_TRUE(public_key.has_value());
+        ASSERT_TRUE(SignInput(spend, *key, *public_key, scenario.locking_script,
+                              scenario.parameters.block_limits.transaction_limits));
+        scenario.block.transactions.push_back(std::move(spend));
+        ASSERT_TRUE(
+            FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+        const auto result =
+            ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos);
+        if (excessive_fee) {
+            EXPECT_EQ(result.error, BlockValidationError::kFeeOverflow);
+            EXPECT_FALSE(result.connected.has_value());
+        } else {
+            ASSERT_EQ(result.error, BlockValidationError::kNone);
+            ASSERT_TRUE(result.connected.has_value());
+            EXPECT_EQ(result.connected->total_fees, COIN);
+            EXPECT_EQ(DisconnectBlock(*result.connected, scenario.utxos),
+                      BlockValidationError::kNone);
+        }
+        ExpectCompleteKnownState(scenario.utxos,
+                                 {{scenario.spent_key, *first}, {second, second_coin}});
+    }
+    Scenario reward;
+    PopulateScenario(reward);
+    const auto before = reward.utxos.GetCoin(reward.spent_key);
+    ASSERT_TRUE(before.has_value());
+    ++reward.block.transactions.front().outputs.front().value;
+    ASSERT_TRUE(FinalizeBlock(reward.block, reward.parameters.block_limits.transaction_limits));
+    const auto rejected =
+        ConnectBlock(reward.block, reward.context, reward.parameters, reward.utxos);
+    EXPECT_EQ(rejected.error, BlockValidationError::kInvalidCoinbaseReward);
+    EXPECT_FALSE(rejected.connected.has_value());
+    ExpectCompleteKnownState(reward.utxos, {{reward.spent_key, *before}});
+}
+
+TEST(MonetaryStateSafety, ActualZeroMaturityBindingAndFixtureThresholdHaveNoMutation)
+{
+    for (const auto* network :
+         {&nova::consensus::RegtestNetworkParams(), &nova::consensus::TestnetNetworkParams()}) {
+        Scenario scenario;
+        PopulateScenario(scenario, true, 10U);
+        const auto parameters = nova::chain::NetworkValidationParams(*network);
+        ASSERT_EQ(parameters.coinbase_maturity, 0U);
+        const auto coin = scenario.utxos.GetCoin(scenario.spent_key);
+        ASSERT_TRUE(coin.has_value());
+        for (const auto height : {9U, 10U, 11U}) {
+            const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+                scenario.block.transactions.at(1), {height, 1'000U}, parameters, scenario.utxos);
+            EXPECT_EQ(result.error, height < 10U ? BlockValidationError::kImmatureCoinbase
+                                                 : BlockValidationError::kNone);
+            ExpectCompleteKnownState(scenario.utxos, {{scenario.spent_key, *coin}});
+        }
+    }
+    for (const auto height : {7U, 8U, 9U}) {
+        Scenario fixture;
+        PopulateScenario(fixture, true, height);
+        const auto coin = fixture.utxos.GetCoin(fixture.spent_key);
+        ASSERT_TRUE(coin.has_value());
+        const auto result = nova::chain::ValidateTransactionAgainstUTXOSet(
+            fixture.block.transactions.at(1), {10U, 1'000U}, fixture.parameters, fixture.utxos);
+        EXPECT_EQ(result.error, height > 8U ? BlockValidationError::kImmatureCoinbase
+                                            : BlockValidationError::kNone);
+        ExpectCompleteKnownState(fixture.utxos, {{fixture.spent_key, *coin}});
+    }
 }
 
 } // namespace
