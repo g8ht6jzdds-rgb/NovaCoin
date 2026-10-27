@@ -50,3 +50,42 @@ private signing material. No signature is generated during conformance replay.
 The existing exact-field harness does not add a `boundary_case` field; filenames
 and IDs distinguish the cases. This is scoped evidence, not exhaustive DER,
 key-encoding, script, or multi-input authorization coverage.
+
+## Pure consensus API records
+
+Four additional exact-field kinds use common fields `expected_result`, `id`,
+`kind`, `network=REGTEST`, `source_refs`, `spec_section`, `status=TEST_ONLY`:
+
+| Kind | Additional required fields | Expected result |
+| --- | --- | --- |
+| `sighash_context` | `expected_digest`, `expected_preimage`, `input_index`, `referenced_output_script`, `sighash_selector`, `transaction` | `accept` or `unavailable` |
+| `compact_target` | `bits`, `target` | `accept`, `negative`, `zero`, `overflow`, `noncanonical`, `above_pow_limit` |
+| `block_work` | `expected_work`, `target` | `accept` or `unavailable` |
+| `pow_compare` | `block_hash`, `target` | `accept` or `reject` |
+
+Unknown/missing/empty fields, kinds and result labels fail closed. Unsigned
+index/selector decimal conversion is checked before host-width narrowing.
+`bits` is exactly eight lowercase hex digits representing numeric u32, not
+wire-endian bytes. Targets and work are exactly 32 big-endian numeric bytes;
+`block_hash` is 32 raw bytes interpreted little-endian only by the PoW comparison.
+Successful digest fields are 32 raw bytes. On an unavailable sighash both expected
+preimage/digest are the literal `none`; failed compact decoding or block-work
+calculation likewise uses `target=none` or `expected_work=none` respectively.
+`none` is an explicit result tag, never a zero/default numeric value.
+
+Sighash context reconstructs transaction scripts, serialization and selector
+suffix and checks the exact preimage and the existing ComputeSignatureHash API.
+The two-input public fixture is inherited from
+`SignatureHash.HasFixedPreimageAndDigestVector`; no signing keys/signature creation
+are involved. Its scripts are a digest fixture, not an accepted spend.
+Compact cases use the actual REGTEST pow limit. Block-work and PoW comparison
+records are pure arithmetic API cases (including non-network target domains and
+non-realized header hashes), not admitted network histories.
+
+Eighteen new records cover input-zero/one and invalid input/selector sighashes;
+canonical compact target, exact REGTEST limit and five rejection classes;
+work at targets one/two/maximum and invalid zero; and inclusive target-1/equality/
+target+1 hash comparison. Fixture provenance uses an external Python integer/
+wire-layout/hash reference, with existing fixed preimage and unit-vector checks.
+These records do not establish difficulty-retarget/recovery, full signature,
+UTXO-transition, monetary or reorganization coverage. Gates 1/2 remain incomplete.

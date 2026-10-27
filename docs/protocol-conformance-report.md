@@ -55,3 +55,11 @@ records; the PR's exact head binds their manifest and replay assertions.
   Gate 2 is incomplete. Existing CTest-registration and clang-tidy limitations
   remain limitations, not passes.
 - Any future code/spec/vector contradiction MUST be added as `INCONSISTENT`.
+
+Scoped additional evidence: reconstructed transaction-context sighash records,
+compact-target rejection/limit records, pure block-work arithmetic and inclusive
+PoW comparison are replayed by `ProtocolConformance.PureConsensusVectorTriads`.
+These expand sections 8/14/19 evidence only; their API-domain and schema limits
+are documented in `test/data/protocol/FORMAT.md`. Existing feature classifications
+remain conservative: no difficulty-adjustment/recovery or full authorization,
+UTXO, failure-model or freeze completeness is claimed.

@@ -1,0 +1,11 @@
+NCPV1
+bits=23000001
+expected_result=overflow
+id=compact_context_overflow
+kind=compact_target
+network=REGTEST
+source_refs=PowCompactTarget.DecodesAndEncodesCanonicalTargets;PowCompactTarget.RejectsMalformedAndNonCanonicalEncodings
+spec_section=14
+status=TEST_ONLY
+target=none
+.
