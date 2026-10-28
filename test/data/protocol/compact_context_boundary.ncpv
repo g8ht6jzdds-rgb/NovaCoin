@@ -1,0 +1,11 @@
+NCPV1
+bits=207fffff
+expected_result=accept
+id=compact_context_boundary
+kind=compact_target
+network=REGTEST
+source_refs=PowCompactTarget.DecodesAndEncodesCanonicalTargets;PowCompactTarget.RejectsMalformedAndNonCanonicalEncodings
+spec_section=14
+status=TEST_ONLY
+target=7fffff0000000000000000000000000000000000000000000000000000000000
+.

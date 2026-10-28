@@ -118,6 +118,19 @@ working-directory side-effect checks support Gate 1 traceability only. They do
 not fill `NONE` cells, establish exhaustive Gate 2 coverage, freeze the
 protocol, or authorize a network.
 
+### Pure-API vector follow-up (Gate 2 remains incomplete)
+
+`ProtocolConformance.PureConsensusVectorTriads` replays eighteen canonical
+records for reconstructed SIGHASH_ALL context, REGTEST-bound compact-target
+decoding, block-work arithmetic and inclusive little-endian PoW comparison.
+`PureVectorSchemaAndExpectedResultsFailClosed` rejects missing/unknown fields,
+unsupported labels, malformed expectations and overflowing numeric conversions.
+Each family has positive, negative and boundary examples. See
+`test/data/protocol/FORMAT.md` for the exact per-kind schema and domain limits.
+No signature generation or production changes are introduced. This does not
+close missing difficulty calculations/recovery, exhaustive signatures, full
+UTXO/reorg/failure-model evidence or human freeze acceptance.
+
 ## CFD01–CFD15 / CFP01 approved clarification follow-up
 
 Baseline `0ecaec5ef299859cb76e90060cf17798aba6f711`; see
