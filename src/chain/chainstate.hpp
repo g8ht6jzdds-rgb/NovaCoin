@@ -187,6 +187,10 @@ class ChainState final
     [[nodiscard]] static std::unique_ptr<ChainState>
     Create(ChainStateParams parameters, ChainAnchor anchor, UTXOSet& utxos) noexcept;
 
+    // Per-instance one-shot fault seam; never configured from network input.
+    enum class FailurePoint : std::uint8_t { kNone, kBeforeStaging, kAfterCopy, kAfterTransition };
+    void SetFailurePointForTesting(FailurePoint point) noexcept;
+
     [[nodiscard]] ChainResult AcceptBlock(const primitives::Block& block) noexcept;
     // Used only to roll back a staged journal acceptance that could not be
     // durably committed. Callers must provide the immediately preceding tip.
@@ -215,6 +219,15 @@ class ChainState final
   private:
     friend class NetworkChainInitializer;
 
+    template <typename Operation>
+    [[nodiscard]] ChainResult ApplyAtomically(Operation&& operation,
+                                              std::optional<crypto::Hash256> failure_hash) noexcept;
+    [[nodiscard]] ChainResult AcceptBlockStaged(const primitives::Block& block) noexcept;
+    [[nodiscard]] ChainResult ActivateBestChainStaged() noexcept;
+    [[nodiscard]] ChainResult
+    RollbackAcceptedBlockStaged(const crypto::Hash256& block_hash,
+                                const crypto::Hash256& previous_tip) noexcept;
+
     [[nodiscard]] std::optional<BlockValidationContext>
     BuildContext(const BlockIndex& parent, std::uint32_t candidate_time) const;
     [[nodiscard]] std::optional<std::uint32_t>
@@ -230,6 +243,7 @@ class ChainState final
     UTXOSet& utxos_;
     Indexes indexes_;
     Chain active_chain_;
+    FailurePoint failure_point_{FailurePoint::kNone};
 };
 
 } // namespace nova::chain

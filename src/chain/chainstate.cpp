@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <new>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -190,7 +191,77 @@ std::unique_ptr<ChainState> ChainState::Create(ChainStateParams parameters, Chai
     }
 }
 
+void ChainState::SetFailurePointForTesting(const FailurePoint point) noexcept
+{
+    failure_point_ = point;
+}
+
+template <typename Operation>
+ChainResult ChainState::ApplyAtomically(Operation&& operation,
+                                        const std::optional<crypto::Hash256> failure_hash) noexcept
+{
+    const auto failure = std::exchange(failure_point_, FailurePoint::kNone);
+    try {
+        if (failure == FailurePoint::kBeforeStaging)
+            throw std::bad_alloc{};
+        UTXOSet staged_utxos;
+        staged_utxos.coins_ = utxos_.coins_;
+        ChainState staged{parameters_, staged_utxos, indexes_, active_chain_.tip(),
+                          active_chain_.height()};
+        if (failure == FailurePoint::kAfterCopy)
+            throw std::bad_alloc{};
+        const auto result = operation(staged);
+        if (result.error != ChainError::kNone)
+            return result;
+        if (failure == FailurePoint::kAfterTransition)
+            throw std::bad_alloc{};
+        // Stable component addresses and the live UTXO reference are retained.
+        // No allocation, callbacks or I/O may occur within publication.
+        static_assert(std::is_nothrow_swappable_v<Indexes>);
+        static_assert(std::is_nothrow_swappable_v<UTXOSet::Coins>);
+        static_assert(std::is_nothrow_copy_assignable_v<Chain>);
+        indexes_.swap(staged.indexes_);
+        utxos_.coins_.swap(staged_utxos.coins_);
+        active_chain_ = staged.active_chain_;
+        return result;
+    } catch (...) {
+        return {ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash};
+    }
+}
+
 ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
+{
+    const auto hash = primitives::ComputeBlockHash(block.header);
+    if (!hash.has_value())
+        return {ChainError::kBlockHashFailure, BlockValidationError::kBlockHashFailure,
+                std::nullopt};
+    // Common hostile/duplicate requests must not force a whole-state copy.
+    const auto parent = indexes_.find(block.header.previous_block_id);
+    if (parent == indexes_.end() || !IsUsableStatus(parent->second.status))
+        return {ChainError::kUnknownParent, BlockValidationError::kNone, *hash};
+    if (indexes_.contains(*hash))
+        return {ChainError::kDuplicateBlock, BlockValidationError::kNone, *hash};
+    return ApplyAtomically([&block](ChainState& staged) { return staged.AcceptBlockStaged(block); },
+                           hash);
+}
+
+ChainResult ChainState::ActivateBestChain() noexcept
+{
+    return ApplyAtomically([](ChainState& staged) { return staged.ActivateBestChainStaged(); },
+                           std::nullopt);
+}
+
+ChainResult ChainState::RollbackAcceptedBlock(const crypto::Hash256& block_hash,
+                                              const crypto::Hash256& previous_tip) noexcept
+{
+    return ApplyAtomically(
+        [&block_hash, &previous_tip](ChainState& staged) {
+            return staged.RollbackAcceptedBlockStaged(block_hash, previous_tip);
+        },
+        block_hash);
+}
+
+ChainResult ChainState::AcceptBlockStaged(const primitives::Block& block) noexcept
 {
     const auto hash = primitives::ComputeBlockHash(block.header);
     if (!hash.has_value()) {
@@ -267,7 +338,7 @@ ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
         candidate_iterator->second.status = BlockStatus::kActive;
         active_chain_.SetTip(*hash, candidate_iterator->second.height);
         MarkActiveChain();
-        const auto activation = ActivateBestChain();
+        const auto activation = ActivateBestChainStaged();
         if (activation.error != ChainError::kNone) {
             const auto restored = ReorganizeChain(original_tip);
             if (restored.error != ChainError::kNone) {
@@ -283,7 +354,7 @@ ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
     }
 }
 
-ChainResult ChainState::ActivateBestChain() noexcept
+ChainResult ChainState::ActivateBestChainStaged() noexcept
 {
     try {
         const BlockIndex* best = nullptr;
@@ -305,8 +376,8 @@ ChainResult ChainState::ActivateBestChain() noexcept
     }
 }
 
-ChainResult ChainState::RollbackAcceptedBlock(const crypto::Hash256& block_hash,
-                                              const crypto::Hash256& previous_tip) noexcept
+ChainResult ChainState::RollbackAcceptedBlockStaged(const crypto::Hash256& block_hash,
+                                                    const crypto::Hash256& previous_tip) noexcept
 {
     try {
         const auto candidate = indexes_.find(block_hash);

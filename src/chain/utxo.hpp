@@ -138,6 +138,7 @@ class UTXOSet final : public UTXOView
     Coins coins_;
 
     friend class UTXOBatch;
+    friend class ChainState;
 };
 
 } // namespace nova::chain
