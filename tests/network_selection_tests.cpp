@@ -53,4 +53,15 @@ TEST(NetworkSelection, OwnerUnknownNetworkNeverAdmitsFallback)
     EXPECT_EQ(nova::node::SelectNetwork(nova::consensus::NetworkId::kMainnet).parameters, nullptr);
 }
 
+TEST(NetworkSelection, UnknownEnumDomainRejectsBeforeFallbackSelection)
+{
+    for (std::uint32_t raw = 3U; raw <= 255U; ++raw) {
+        SCOPED_TRACE(raw);
+        const auto selection =
+            nova::node::SelectNetwork(static_cast<nova::consensus::NetworkId>(raw));
+        ASSERT_EQ(selection.error, nova::node::NetworkSelectionError::kInvalidParameters);
+        EXPECT_EQ(selection.parameters, nullptr);
+    }
+}
+
 } // namespace
