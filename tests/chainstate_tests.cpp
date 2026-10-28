@@ -217,6 +217,43 @@ TEST(ChainStateDifficulty, MissingTestnetRecoveryAncestryIsUnavailableContext)
     EXPECT_EQ(controlled.size(), 1U);
 }
 
+TEST(ChainStateDifficulty, SelfLinkedTestnetDifficultyAncestryIsUnavailableContext)
+{
+    const auto& network = nova::consensus::TestnetNetworkParams();
+    const auto target =
+        nova::consensus::TargetFromCompact(network.pow.pow_limit_compact, network.pow);
+    ASSERT_TRUE(target.target.has_value());
+    const auto work = nova::consensus::CalculateWork(*target.target);
+    ASSERT_TRUE(work.has_value());
+    const auto anchor_hash = HashWithLastByte(0xB9U);
+    const auto anchor_time =
+        network.genesis_block.header.time + network.difficulty.target_spacing_seconds;
+    auto parameters = ChainStateParams{
+        nova::chain::NetworkValidationParams(network), network.difficulty, 11U,
+        std::make_shared<nova::chain::FixedValidationTimeSource>(anchor_time + 100'000U)};
+    for (const auto height : {1U, network.difficulty.retarget_interval - 1U}) {
+        UTXOSet controlled;
+        auto state = ChainState::Create(parameters,
+                                        {anchor_hash, anchor_hash, height, anchor_time,
+                                         *target.target, *work, ChainWork::FromPerBlockWork(*work)},
+                                        controlled);
+        ASSERT_NE(state, nullptr);
+        for (const auto delay : {network.difficulty.target_spacing_seconds,
+                                 network.difficulty.target_spacing_seconds * 2U}) {
+            const auto block = MakeCoinbaseBlock(anchor_hash, height + 1U, anchor_time + delay,
+                                                 network.pow.pow_limit_compact, parameters);
+            ASSERT_TRUE(block.has_value());
+            const auto result = state->AcceptBlock(*block);
+            EXPECT_EQ(result.error, ChainError::kContextFailure);
+            EXPECT_EQ(result.validation_error, BlockValidationError::kInvalidContext);
+            EXPECT_FALSE(state->GetBlockIndex(BlockHash(*block)).has_value());
+            EXPECT_EQ(state->active_tip(), anchor_hash);
+            EXPECT_EQ(state->active_height(), height);
+            EXPECT_EQ(controlled.size(), 0U);
+        }
+    }
+}
+
 TEST(ChainStateDifficulty, NoRetargetingInheritsParentExpectedBits)
 {
     UTXOSet utxos;

@@ -573,7 +573,7 @@ const BlockIndex* ChainState::Ancestor(const BlockIndex& start,
     const BlockIndex* current = &start;
     while (current->height > height) {
         const auto parent = indexes_.find(current->previous_hash);
-        if (parent == indexes_.end()) {
+        if (parent == indexes_.end() || parent->second.height != current->height - 1U) {
             return nullptr;
         }
         current = &parent->second;
@@ -608,7 +608,7 @@ ChainState::ExpectedBits(const BlockIndex& parent,
         while (current->height % difficulty.retarget_interval != 0U &&
                current->expected_bits == pow_limit) {
             const auto previous = indexes_.find(current->previous_hash);
-            if (previous == indexes_.end()) {
+            if (previous == indexes_.end() || previous->second.height != current->height - 1U) {
                 return std::nullopt;
             }
             const auto is_delayed =
