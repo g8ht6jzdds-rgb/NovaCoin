@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -103,10 +104,10 @@ nova::net::PeerManager MakePeerManager()
     return nova::net::PeerManager{nova::net::PeerManagerParams{connection, 2U, 2U}};
 }
 
-std::unique_ptr<nova::rpc::RpcService> CreateService(const std::string_view bind = "127.0.0.1",
-                                                     const bool regtest = true,
-                                                     const bool harness_callbacks = false,
-                                                     const bool restricted_credentials = false)
+std::unique_ptr<nova::rpc::RpcService>
+CreateService(const std::string_view bind = "127.0.0.1", const bool regtest = true,
+              const bool harness_callbacks = false, const bool restricted_credentials = false,
+              const std::optional<nova::consensus::NetworkId> network_override = std::nullopt)
 {
     static UTXOSet utxos;
     static auto state = CreateChainState(utxos);
@@ -135,12 +136,13 @@ std::unique_ptr<nova::rpc::RpcService> CreateService(const std::string_view bind
         dependencies.connect_peer = [](const nova::net::TcpEndpoint&) { return true; };
         dependencies.disconnect_peers = []() {};
     }
-    nova::rpc::RpcConfig config{std::string{bind},
-                                "user",
-                                "pass",
-                                {256U, 8'192U, 4'096U},
-                                regtest ? nova::consensus::NetworkId::kRegtest
-                                        : nova::consensus::NetworkId::kTestnet};
+    nova::rpc::RpcConfig config{
+        std::string{bind},
+        "user",
+        "pass",
+        {256U, 8'192U, 4'096U},
+        network_override.value_or(regtest ? nova::consensus::NetworkId::kRegtest
+                                          : nova::consensus::NetworkId::kTestnet)};
     if (restricted_credentials) {
         config.restricted_principals = {{"explorer", "view", nova::rpc::RpcRole::kExplorer},
                                         {"faucet", "faucet", nova::rpc::RpcRole::kFaucet}};
@@ -195,6 +197,24 @@ std::string SocketRequest(nova::rpc::LoopbackHttpServer& server, const std::stri
     EXPECT_GT(received, 0);
     return received > 0 ? std::string{response.data(), static_cast<std::size_t>(received)}
                         : std::string{};
+}
+
+TEST(RpcIntegration, RejectsUnknownAndLockedNetworksAtFactoryAdmission)
+{
+    for (const auto network :
+         {nova::consensus::NetworkId::kMainnet, static_cast<nova::consensus::NetworkId>(3U),
+          static_cast<nova::consensus::NetworkId>(255U)}) {
+        SCOPED_TRACE(static_cast<unsigned>(network));
+        for (const auto bind : {"127.0.0.1", "::1"}) {
+            EXPECT_EQ(CreateService(bind, true, false, false, network), nullptr);
+        }
+    }
+    for (const auto network :
+         {nova::consensus::NetworkId::kRegtest, nova::consensus::NetworkId::kTestnet}) {
+        for (const auto bind : {"127.0.0.1", "::1"}) {
+            EXPECT_NE(CreateService(bind, true, false, false, network), nullptr);
+        }
+    }
 }
 
 TEST(RpcIntegration, RequiresLoopbackBindingAndBasicAuthentication)
