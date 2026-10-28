@@ -263,7 +263,7 @@ Synchronizer::ExpectedBits(const HeaderIndex& parent,
         return std::nullopt;
     const auto child_height = parent.height + 1U;
     if (difficulty.no_retargeting)
-        return pow_limit;
+        return parent.bits;
     if (child_height % difficulty.retarget_interval != 0U) {
         const auto delayed = candidate_time > parent.time &&
                              candidate_time - parent.time > difficulty.target_spacing_seconds * 2U;
