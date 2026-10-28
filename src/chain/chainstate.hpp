@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace nova::chain
@@ -237,12 +238,19 @@ class ChainState final
     [[nodiscard]] ChainResult ReorganizeChain(const crypto::Hash256& new_tip) noexcept;
     [[nodiscard]] ChainResult ConnectIndexedBlock(BlockIndex& index) noexcept;
     [[nodiscard]] ChainError DisconnectIndexedBlock(BlockIndex& index) noexcept;
-    void MarkActiveChain() noexcept;
+    void MarkActiveChain();
+    [[nodiscard]] const BlockIndex* FindIndex(const crypto::Hash256& hash) const noexcept;
+    [[nodiscard]] BlockIndex* EditIndex(const crypto::Hash256& hash);
+    void EraseIndex(const crypto::Hash256& hash);
+    template <typename Visitor> void ForEachIndex(Visitor&& visitor) const;
 
     ChainStateParams parameters_;
     UTXOSet& utxos_;
     UTXOBatch* transition_utxos_{};
+    // A private transition stores only replacements/new entries here.
     Indexes indexes_;
+    const Indexes* base_indexes_{};
+    std::set<crypto::Hash256, HashLess> erased_indexes_;
     Chain active_chain_;
     FailurePoint failure_point_{FailurePoint::kNone};
 };

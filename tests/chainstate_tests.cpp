@@ -3,6 +3,7 @@
 #include "chain/chainstate.hpp"
 #include "chain/network_chainstate.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -577,6 +578,88 @@ TEST(ChainStateAtomicity, StagingFailuresPreserveStateAndAreConsumedOnce)
         EXPECT_FALSE(utxos.HaveCoin(second_key));
         EXPECT_EQ(state->ActivateBestChain().error, ChainError::kNone);
     }
+}
+
+TEST(ChainStateAtomicity, SparseReorgPreservesUnchangedAndDisconnectedIndexStatuses)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto parameters = TestParameters();
+    std::vector<nova::crypto::Hash256> known{state->active_tip()};
+    const auto verify = [&]() {
+        const auto active = state->GetActiveBlockIndexes();
+        ASSERT_TRUE(active.has_value());
+        for (const auto& hash : known) {
+            const auto index = state->GetBlockIndex(hash);
+            ASSERT_TRUE(index.has_value());
+            const auto on_active =
+                std::find_if(active->begin(), active->end(),
+                             [&](const auto& item) { return item.hash == hash; }) != active->end();
+            EXPECT_EQ(index->status, on_active ? BlockStatus::kActive : BlockStatus::kValid);
+            if (index->block.has_value()) {
+                const auto coin = utxos.GetCoin(CoinbaseOutputKey(*index->block, parameters));
+                EXPECT_EQ(coin.has_value(), on_active);
+                if (coin.has_value()) {
+                    EXPECT_EQ(coin->output.value,
+                              index->block->transactions.front().outputs.front().value);
+                    EXPECT_EQ(coin->output.script_pubkey,
+                              index->block->transactions.front().outputs.front().script_pubkey);
+                    EXPECT_EQ(coin->height, index->height);
+                    EXPECT_TRUE(coin->is_coinbase);
+                }
+            }
+        }
+    };
+    const auto shared = MakeCoinbaseBlock(known.front(), 1U, 1100U, kRegularBits, parameters);
+    ASSERT_TRUE(shared.has_value());
+    ASSERT_EQ(state->AcceptBlock(*shared).error, ChainError::kNone);
+    known.push_back(BlockHash(*shared));
+    auto parent = known.back();
+    for (const auto height : {2U, 3U}) {
+        const auto block =
+            MakeCoinbaseBlock(parent, height, 1000U + height * 100U, kRegularBits, parameters);
+        ASSERT_TRUE(block.has_value());
+        ASSERT_EQ(state->AcceptBlock(*block).error, ChainError::kNone);
+        parent = BlockHash(*block);
+        known.push_back(parent);
+        verify();
+    }
+    parent = BlockHash(*shared);
+    for (const auto height : {2U, 3U, 4U}) {
+        const auto side =
+            MakeCoinbaseBlock(parent, height, 1010U + height * 100U, kRegularBits, parameters);
+        ASSERT_TRUE(side.has_value());
+        if (height == 4U) {
+            const auto before_tip = state->active_tip();
+            const auto before_count = state->known_block_count();
+            std::vector<BlockStatus> statuses;
+            for (const auto& hash : known) {
+                const auto index = state->GetBlockIndex(hash);
+                ASSERT_TRUE(index.has_value());
+                statuses.push_back(index->status);
+            }
+            state->SetFailurePointForTesting(ChainState::FailurePoint::kAfterTransition);
+            EXPECT_EQ(state->AcceptBlock(*side).error, ChainError::kAllocationFailure);
+            EXPECT_EQ(state->active_tip(), before_tip);
+            EXPECT_EQ(state->known_block_count(), before_count);
+            EXPECT_FALSE(state->GetBlockIndex(BlockHash(*side)).has_value());
+            for (std::size_t i = 0U; i < known.size(); ++i) {
+                const auto index = state->GetBlockIndex(known[i]);
+                ASSERT_TRUE(index.has_value());
+                EXPECT_EQ(index->status, statuses[i]);
+            }
+            verify();
+        }
+        ASSERT_EQ(state->AcceptBlock(*side).error, ChainError::kNone);
+        parent = BlockHash(*side);
+        known.push_back(parent);
+        verify();
+    }
+    EXPECT_EQ(state->active_tip(), parent);
+    EXPECT_EQ(state->active_height(), 4U);
+    EXPECT_EQ(utxos.size(), 4U);
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*shared, parameters)));
 }
 
 TEST(ChainStateSecurity, RejectsFarFutureHeadersWithoutChangingTheActiveTip)
