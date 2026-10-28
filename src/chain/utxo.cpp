@@ -3,12 +3,23 @@
 #include <algorithm>
 #include <limits>
 #include <set>
+#include <type_traits>
 #include <utility>
 
 namespace nova::chain
 {
 namespace
 {
+
+constexpr std::uint64_t NextRevision(const std::uint64_t value) noexcept
+{
+    return value == std::numeric_limits<std::uint64_t>::max() ? value : value + 1U;
+}
+static_assert(NextRevision(0U) == 1U);
+static_assert(NextRevision(std::numeric_limits<std::uint64_t>::max() - 1U) ==
+              std::numeric_limits<std::uint64_t>::max());
+static_assert(NextRevision(std::numeric_limits<std::uint64_t>::max()) ==
+              std::numeric_limits<std::uint64_t>::max());
 
 using Coins = std::map<UTXOKey, Coin>;
 using Delta = UTXODelta;
@@ -139,17 +150,37 @@ bool operator<(const UTXOKey& left, const UTXOKey& right) noexcept
     return left.output_index < right.output_index;
 }
 
-UTXOBatch::UTXOBatch(UTXOSet& base) noexcept : base_(base), base_set_(&base) {}
+UTXOBatch::UTXOBatch(UTXOSet& base) : base_(base), base_set_(&base), base_revision_(base.revision_)
+{
+}
 
-UTXOBatch::UTXOBatch(UTXOBatch& parent) noexcept
+UTXOBatch::UTXOBatch(UTXOBatch& parent)
     : base_(parent), parent_(&parent), parent_revision_(parent.revision_)
 {
 }
 
+UTXOBatch::UTXOBatch(UTXOBatch&& other)
+    : base_(other.base_), base_set_(other.base_set_), parent_(other.parent_),
+      revision_(other.revision_), parent_revision_(other.parent_revision_),
+      base_revision_(other.base_revision_), closed_(other.closed_)
+{
+    // Empty container construction can allocate (notably MSVC Debug).
+    // It finishes before touching the source; the following swaps cannot throw.
+    static_assert(std::is_nothrow_swappable_v<decltype(delta_.additions)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(delta_.spends)>);
+    delta_.additions.swap(other.delta_.additions);
+    delta_.spends.swap(other.delta_.spends);
+    other.closed_ = true;
+}
+
 bool UTXOBatch::IsOpen() const noexcept
 {
-    return !closed_ &&
-           (parent_ == nullptr || (parent_->IsOpen() && parent_->revision_ == parent_revision_));
+    if (closed_)
+        return false;
+    if (parent_ != nullptr)
+        return parent_->IsOpen() && parent_->revision_ == parent_revision_;
+    return base_set_ != nullptr && base_set_->revision_ == base_revision_ &&
+           base_set_->revision_ != std::numeric_limits<std::uint64_t>::max();
 }
 
 ApplyTransactionResult
@@ -272,6 +303,7 @@ bool UTXOBatch::Commit() noexcept
             return false;
         }
     }
+    base_set_->InvalidateBatches();
     closed_ = true;
     return true;
 }
@@ -280,7 +312,11 @@ std::optional<UTXOBatch> UTXOBatch::BeginBatch() noexcept
 {
     if (!IsOpen() || revision_ == std::numeric_limits<std::uint64_t>::max())
         return std::nullopt;
-    return UTXOBatch{*this};
+    try {
+        return UTXOBatch{*this};
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 UTXOError UTXOBatch::UndoBlock(const BlockUndo& undo) noexcept
@@ -307,6 +343,41 @@ std::size_t UTXOBatch::overlay_entry_count() const noexcept
     return delta_.additions.size() + delta_.spends.size();
 }
 
+void UTXOSet::InvalidateBatches() noexcept
+{
+    revision_ = NextRevision(revision_);
+}
+
+UTXOSet::UTXOSet(const UTXOSet& other) : coins_(other.coins_) {}
+
+UTXOSet& UTXOSet::operator=(const UTXOSet& other)
+{
+    if (this != &other) {
+        auto proposed = other.coins_;
+        coins_.swap(proposed);
+        InvalidateBatches();
+    }
+    return *this;
+}
+
+UTXOSet::UTXOSet(UTXOSet&& other)
+{
+    static_assert(std::is_nothrow_swappable_v<Coins>);
+    coins_.swap(other.coins_);
+    other.InvalidateBatches();
+}
+
+UTXOSet& UTXOSet::operator=(UTXOSet&& other) noexcept
+{
+    static_assert(std::is_nothrow_move_assignable_v<Coins>);
+    if (this != &other) {
+        coins_ = std::move(other.coins_);
+        InvalidateBatches();
+        other.InvalidateBatches();
+    }
+    return *this;
+}
+
 std::optional<Coin> UTXOSet::GetCoin(const UTXOKey& key) const
 {
     const auto found = coins_.find(key);
@@ -327,8 +398,13 @@ bool UTXOSet::HaveCoin(const UTXOKey& key) const noexcept
 
 bool UTXOSet::AddCoin(const UTXOKey& key, const Coin& coin) noexcept
 {
+    if (revision_ == std::numeric_limits<std::uint64_t>::max())
+        return false;
     try {
-        return coins_.emplace(key, coin).second;
+        const auto inserted = coins_.emplace(key, coin).second;
+        if (inserted)
+            InvalidateBatches();
+        return inserted;
     } catch (...) {
         return false;
     }
@@ -336,17 +412,22 @@ bool UTXOSet::AddCoin(const UTXOKey& key, const Coin& coin) noexcept
 
 std::optional<Coin> UTXOSet::SpendCoin(const UTXOKey& key) noexcept
 {
+    if (revision_ == std::numeric_limits<std::uint64_t>::max())
+        return std::nullopt;
     const auto found = coins_.find(key);
     if (found == coins_.end()) {
         return std::nullopt;
     }
     Coin coin = std::move(found->second);
     coins_.erase(found);
+    InvalidateBatches();
     return coin;
 }
 
 std::optional<UTXOBatch> UTXOSet::BeginBatch() noexcept
 {
+    if (revision_ == std::numeric_limits<std::uint64_t>::max())
+        return std::nullopt;
     try {
         return UTXOBatch{*this};
     } catch (...) {
