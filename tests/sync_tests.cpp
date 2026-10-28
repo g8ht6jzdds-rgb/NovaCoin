@@ -268,6 +268,58 @@ TEST_F(SyncProgress, MissingTestnetRecoveryContextRollsBackPendingBatch)
     EXPECT_EQ(controlled_utxos.size(), 0U);
 }
 
+TEST_F(SyncProgress, SelfLinkedTestnetDifficultyAncestryIsUnavailableContext)
+{
+    const auto& testnet = nova::consensus::TestnetNetworkParams();
+    const auto target =
+        nova::consensus::TargetFromCompact(testnet.pow.pow_limit_compact, testnet.pow);
+    ASSERT_TRUE(target.target.has_value());
+    const auto work = nova::consensus::CalculateWork(*target.target);
+    ASSERT_TRUE(work.has_value());
+    Hash256::Bytes anchor_bytes{};
+    anchor_bytes.back() = 0xB9U;
+    const Hash256 anchor_hash{anchor_bytes};
+    const auto anchor_time =
+        testnet.genesis_block.header.time + testnet.difficulty.target_spacing_seconds;
+    auto controlled_params = params;
+    controlled_params.validation = nova::chain::NetworkValidationParams(testnet);
+    controlled_params.difficulty = testnet.difficulty;
+    for (const auto anchor_height : {1U, testnet.difficulty.retarget_interval - 1U}) {
+        nova::chain::UTXOSet controlled_utxos;
+        auto controlled = nova::chain::ChainState::Create(
+            {controlled_params.validation, testnet.difficulty, 11U,
+             std::make_shared<nova::chain::FixedValidationTimeSource>(anchor_time + 100'000U)},
+            {anchor_hash, anchor_hash, anchor_height, anchor_time, *target.target, *work,
+             nova::chain::ChainWork::FromPerBlockWork(*work)},
+            controlled_utxos);
+        ASSERT_NE(controlled, nullptr);
+        nova::node::Synchronizer sync{controlled_params, *controlled};
+        const auto header = [&](const Hash256& parent, const std::uint32_t height,
+                                const std::uint32_t time) {
+            auto block = Make(parent, height);
+            block.header.time = time;
+            block.header.bits = testnet.pow.pow_limit_compact;
+            for (std::uint32_t nonce = 0U; nonce < 4096U; ++nonce) {
+                block.header.nonce = nonce;
+                if (nova::consensus::CheckProofOfWork(Hash(block), *target.target))
+                    return block;
+            }
+            throw std::runtime_error{"bounded context-fixture header mining failed"};
+        };
+        const auto spacing = testnet.difficulty.target_spacing_seconds;
+        for (const auto delay : {spacing, spacing * 2U}) {
+            const auto result =
+                Headers(sync, {header(anchor_hash, anchor_height + 1U, anchor_time + delay)});
+            EXPECT_EQ(result.error, SyncError::kChainStateUnavailable);
+            EXPECT_TRUE(result.requests.empty());
+            EXPECT_EQ(sync.header_count(), 0U);
+            EXPECT_EQ(sync.best_header_tip(), anchor_hash);
+        }
+        EXPECT_EQ(controlled->active_tip(), anchor_hash);
+        EXPECT_EQ(controlled_utxos.size(), 0U);
+    }
+}
+
 TEST_F(SyncProgress, ReconcilesLocalAdvanceAndReorgThenRequestsExactMissingBody)
 {
     const auto first = Make(state->active_tip(), 1U);

@@ -277,7 +277,7 @@ Synchronizer::ExpectedBits(const HeaderIndex& parent,
         auto current = parent;
         while (current.height % difficulty.retarget_interval != 0U && current.bits == pow_limit) {
             const auto previous = FindHeader(current.previous_hash);
-            if (!previous.has_value())
+            if (!previous.has_value() || previous->height != current.height - 1U)
                 return std::nullopt;
             const auto is_delayed =
                 current.time > previous->time &&
@@ -294,7 +294,7 @@ Synchronizer::ExpectedBits(const HeaderIndex& parent,
     auto first = parent;
     while (first.height > first_height) {
         const auto previous = FindHeader(first.previous_hash);
-        if (!previous.has_value())
+        if (!previous.has_value() || previous->height != first.height - 1U)
             return std::nullopt;
         first = *previous;
     }
