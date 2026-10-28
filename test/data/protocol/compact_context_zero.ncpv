@@ -1,0 +1,11 @@
+NCPV1
+bits=1d000000
+expected_result=zero
+id=compact_context_zero
+kind=compact_target
+network=REGTEST
+source_refs=PowCompactTarget.DecodesAndEncodesCanonicalTargets;PowCompactTarget.RejectsMalformedAndNonCanonicalEncodings
+spec_section=14
+status=TEST_ONLY
+target=none
+.

@@ -67,6 +67,13 @@ metadata, not wall-clock timestamps. Known sensitive suffixes/key armor are
 rejected before archiving; this is defense in depth, NOT a complete secret detector.
 Never commit credentials, wallet data or private release keys in the first place.
 
+Source export pins `core.autocrlf=false` and `core.eol=lf`, then checks every
+regular TAR member against the commit's blob identity, size and executable bit,
+and requires the complete committed file set. Export attributes that omit or
+rewrite content therefore fail preparation. A rejected TAR remains diagnostic
+evidence, not a successful release; do not normalize or replace it after hashing.
+Historical archive mismatches remain failures even when a later export passes.
+
 `cmake --build <build-dir> --target release-metadata` emits the same application
 version as daemon/CLI. Metadata includes Git commit/tree/state, compiler, target,
 configuration and actual per-network protocol/minimum-peer versions. Wall-clock

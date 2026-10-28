@@ -765,6 +765,206 @@ TEST(ProtocolConformance, SubsidyAndCommittedGenesisVectors)
     EXPECT_EQ(parsed->header.merkle_root, *expected_merkle);
 }
 
+bool PureVectorSchema(const Record& record)
+{
+    const auto kind = record.find("kind");
+    if (kind == record.end())
+        return false;
+    std::vector<std::string_view> names{"expected_result", "id",           "kind",  "network",
+                                        "source_refs",     "spec_section", "status"};
+    if (kind->second == "sighash_context") {
+        for (const auto name : {"expected_digest", "expected_preimage", "input_index",
+                                "referenced_output_script", "sighash_selector", "transaction"})
+            names.emplace_back(name);
+    } else if (kind->second == "compact_target") {
+        names.emplace_back("bits");
+        names.emplace_back("target");
+    } else if (kind->second == "block_work") {
+        names.emplace_back("target");
+        names.emplace_back("expected_work");
+    } else if (kind->second == "pow_compare") {
+        names.emplace_back("target");
+        names.emplace_back("block_hash");
+    } else {
+        return false;
+    }
+    if (record.size() != names.size())
+        return false;
+    for (const auto name : names) {
+        const auto found = record.find(std::string{name});
+        if (found == record.end() || found->second.empty())
+            return false;
+    }
+    return record.at("network") == "REGTEST" && record.at("status") == "TEST_ONLY" &&
+           record.at("spec_section") == (kind->second == "sighash_context" ? "8"
+                                         : kind->second == "block_work"    ? "19"
+                                                                           : "14");
+}
+
+bool ReplayPureVector(const Record& record)
+{
+    if (!PureVectorSchema(record))
+        return false;
+    const auto& kind = record.at("kind");
+    const auto& result = record.at("expected_result");
+    const auto& network = nova::consensus::RegtestNetworkParams();
+    if (kind == "sighash_context") {
+        const auto index = ParseCanonicalUnsigned<std::uint64_t>(record.at("input_index"));
+        const auto selector = ParseCanonicalUnsigned<std::uint32_t>(record.at("sighash_selector"));
+        const auto bytes = HexBytes(record.at("transaction"));
+        const auto script = HexBytes(record.at("referenced_output_script"));
+        if (!index || *index > std::numeric_limits<std::size_t>::max() || !selector || !bytes ||
+            !script)
+            return false;
+        const auto& limits = network.block_limits.transaction_limits;
+        const auto transaction = nova::primitives::Transaction::Deserialize(*bytes, limits);
+        if (!transaction)
+            return false;
+        const auto digest = nova::chain::ComputeSignatureHash(
+            *transaction, static_cast<std::size_t>(*index), *script, limits, *selector);
+        if (result == "unavailable")
+            return !digest && record.at("expected_digest") == "none" &&
+                   record.at("expected_preimage") == "none";
+        if (result != "accept" || !digest || *index >= transaction->inputs.size())
+            return false;
+        const auto expected = HexBytes(record.at("expected_digest"));
+        const auto preimage = HexBytes(record.at("expected_preimage"));
+        if (!expected || expected->size() != 32U || !preimage)
+            return false;
+        auto unsigned_transaction = *transaction;
+        for (auto& input : unsigned_transaction.inputs)
+            input.script_sig.clear();
+        unsigned_transaction.inputs.at(static_cast<std::size_t>(*index)).script_sig = *script;
+        nova::primitives::BinaryWriter writer;
+        if (!unsigned_transaction.Serialize(writer, limits) || !writer.WriteU32(*selector))
+            return false;
+        return HexText(writer.bytes()) == record.at("expected_preimage") &&
+               HexText(digest->bytes()) == record.at("expected_digest");
+    }
+    if (kind == "compact_target") {
+        const auto bytes = HexBytes(record.at("bits"));
+        if (!bytes || bytes->size() != 4U)
+            return false;
+        std::uint32_t bits = 0U;
+        for (const auto byte : *bytes)
+            bits = (bits << 8U) | byte;
+        const auto decoded = nova::consensus::TargetFromCompact(bits, network.pow);
+        using Error = nova::consensus::TargetError;
+        std::optional<Error> expected;
+        for (const auto& [name, error] :
+             {std::pair{"accept", Error::kNone}, std::pair{"negative", Error::kNegative},
+              std::pair{"zero", Error::kZero}, std::pair{"overflow", Error::kOverflow},
+              std::pair{"noncanonical", Error::kNonCanonical},
+              std::pair{"above_pow_limit", Error::kAbovePowLimit}}) {
+            if (result == name)
+                expected = error;
+        }
+        if (!expected || decoded.error != *expected)
+            return false;
+        if (*expected != Error::kNone)
+            return !decoded.target && record.at("target") == "none";
+        const auto target_bytes = HexBytes(record.at("target"));
+        if (!target_bytes || target_bytes->size() != 32U || !decoded.target)
+            return false;
+        return HexText(decoded.target->bytes()) == record.at("target") &&
+               nova::consensus::CompactFromTarget(*decoded.target) == bits;
+    }
+    const auto bytes = HexBytes(record.at("target"));
+    if (!bytes || bytes->size() != 32U)
+        return false;
+    const auto target = nova::consensus::Target256::FromBigEndian(*bytes);
+    if (!target)
+        return false;
+    if (kind == "block_work") {
+        const auto work = nova::consensus::CalculateWork(*target);
+        if (result == "unavailable")
+            return !work && record.at("expected_work") == "none";
+        const auto expected = HexBytes(record.at("expected_work"));
+        return result == "accept" && work && expected && expected->size() == 32U &&
+               HexText(work->bytes()) == record.at("expected_work");
+    }
+    const auto hash_bytes = HexBytes(record.at("block_hash"));
+    if (!hash_bytes || hash_bytes->size() != 32U || (result != "accept" && result != "reject"))
+        return false;
+    const auto hash = nova::crypto::Hash256::FromHex(record.at("block_hash"));
+    return hash && nova::consensus::CheckProofOfWork(*hash, *target) == (result == "accept");
+}
+
+TEST(ProtocolConformance, PureConsensusVectorTriads)
+{
+    std::size_t count = 0U;
+    for (const auto& entry : std::filesystem::directory_iterator{VectorDirectory()}) {
+        if (!entry.path().filename().string().starts_with("sighash_context_") &&
+            !entry.path().filename().string().starts_with("compact_context_") &&
+            !entry.path().filename().string().starts_with("work_context_") &&
+            !entry.path().filename().string().starts_with("pow_context_"))
+            continue;
+        SCOPED_TRACE(entry.path().filename().string());
+        const auto record = ReadRecord(entry.path().filename().string());
+        ASSERT_TRUE(record.has_value());
+        const auto raw = ReadFile(entry.path());
+        EXPECT_EQ(std::string(raw.begin(), raw.end()), EncodeRecord(*record));
+        EXPECT_TRUE(ReplayPureVector(*record));
+        ++count;
+    }
+    EXPECT_EQ(count, 18U);
+}
+
+TEST(ProtocolConformance, PureVectorSchemaAndExpectedResultsFailClosed)
+{
+    for (const auto filename :
+         {"compact_context_valid.ncpv", "work_context_valid.ncpv", "pow_context_equal.ncpv"}) {
+        const auto fixture = ReadRecord(filename);
+        ASSERT_TRUE(fixture.has_value());
+        ASSERT_TRUE(ReplayPureVector(*fixture));
+        auto unknown = *fixture;
+        unknown["expected_result"] = "unknown";
+        EXPECT_FALSE(ReplayPureVector(unknown));
+        unknown = *fixture;
+        unknown["unexpected"] = "1";
+        EXPECT_FALSE(ReplayPureVector(unknown));
+        unknown = *fixture;
+        unknown["target"] = "00";
+        EXPECT_FALSE(ReplayPureVector(unknown));
+        for (const auto& [name, value] : *fixture) {
+            static_cast<void>(value);
+            auto missing = *fixture;
+            missing.erase(name);
+            EXPECT_FALSE(ReplayPureVector(missing)) << filename << ':' << name;
+        }
+    }
+    const auto record = ReadRecord("sighash_context_valid.ncpv");
+    ASSERT_TRUE(record.has_value());
+    ASSERT_TRUE(ReplayPureVector(*record));
+    for (const auto& [name, value] :
+         {std::pair{"unknown", "1"}, std::pair{"kind", "unknown"},
+          std::pair{"expected_result", "unknown"}, std::pair{"expected_digest", "00"},
+          std::pair{"input_index", "18446744073709551616"}, std::pair{"input_index", "01"},
+          std::pair{"network", "MAINNET"}, std::pair{"sighash_selector", "4294967296"}}) {
+        auto malformed = *record;
+        malformed[name] = value;
+        EXPECT_FALSE(ReplayPureVector(malformed)) << name << '=' << value;
+    }
+    for (const auto& [name, value] : *record) {
+        static_cast<void>(value);
+        auto missing = *record;
+        missing.erase(name);
+        EXPECT_FALSE(ReplayPureVector(missing)) << name;
+    }
+    auto wrong_preimage = *record;
+    wrong_preimage["expected_preimage"].back() = '2';
+    EXPECT_FALSE(ReplayPureVector(wrong_preimage));
+    auto maximum_index = *record;
+    maximum_index["input_index"] = "18446744073709551615";
+    maximum_index["expected_result"] = "unavailable";
+    maximum_index["expected_digest"] = "none";
+    maximum_index["expected_preimage"] = "none";
+    if constexpr (sizeof(std::size_t) == sizeof(std::uint64_t))
+        EXPECT_TRUE(ReplayPureVector(maximum_index));
+    else
+        EXPECT_FALSE(ReplayPureVector(maximum_index));
+}
+
 TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)
 {
     nova::crypto::Hash256::Bytes nonzero{};

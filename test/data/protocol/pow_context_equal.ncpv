@@ -1,0 +1,11 @@
+NCPV1
+block_hash=0001000000000000000000000000000000000000000000000000000000000000
+expected_result=accept
+id=pow_context_equal
+kind=pow_compare
+network=REGTEST
+source_refs=PowValidation.UsesAnInclusiveLittleEndianHashComparison
+spec_section=14
+status=TEST_ONLY
+target=0000000000000000000000000000000000000000000000000000000000000100
+.

@@ -1,0 +1,11 @@
+NCPV1
+expected_result=accept
+expected_work=8000000000000000000000000000000000000000000000000000000000000000
+id=work_context_valid
+kind=block_work
+network=REGTEST
+source_refs=PowWork.CalculatesExactWorkWithoutFloatingPoint;PowWork.DistinguishesWorkEquationAtNonDividingTarget
+spec_section=19
+status=TEST_ONLY
+target=0000000000000000000000000000000000000000000000000000000000000001
+.
