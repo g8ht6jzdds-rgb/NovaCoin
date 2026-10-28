@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "chain/network_chainstate.hpp"
 #include "node/sync.hpp"
 
 #include <limits>
@@ -199,6 +200,72 @@ TEST_F(SyncProgress, NoRetargetingInheritsValidatedAndPendingParentBits)
         EXPECT_EQ(controlled->active_height(), 0U);
         EXPECT_EQ(controlled_utxos.size(), 0U);
     }
+}
+
+TEST_F(SyncProgress, MissingTestnetRecoveryContextRollsBackPendingBatch)
+{
+    const auto& testnet = nova::consensus::TestnetNetworkParams();
+    const auto target =
+        nova::consensus::TargetFromCompact(testnet.pow.pow_limit_compact, testnet.pow);
+    ASSERT_TRUE(target.target.has_value());
+    const auto work = nova::consensus::CalculateWork(*target.target);
+    ASSERT_TRUE(work.has_value());
+    Hash256::Bytes anchor_bytes{};
+    anchor_bytes.back() = 0xB9U;
+    const Hash256 anchor_hash{anchor_bytes};
+    const auto anchor_time =
+        testnet.genesis_block.header.time + testnet.difficulty.target_spacing_seconds;
+    auto controlled_params = params;
+    controlled_params.validation = nova::chain::NetworkValidationParams(testnet);
+    controlled_params.difficulty = testnet.difficulty;
+    nova::chain::UTXOSet controlled_utxos;
+    auto controlled = nova::chain::ChainState::Create(
+        {controlled_params.validation, testnet.difficulty, 11U,
+         std::make_shared<nova::chain::FixedValidationTimeSource>(anchor_time + 100'000U)},
+        {anchor_hash,
+         {},
+         1U,
+         anchor_time,
+         *target.target,
+         *work,
+         nova::chain::ChainWork::FromPerBlockWork(*work)},
+        controlled_utxos);
+    ASSERT_NE(controlled, nullptr);
+    nova::node::Synchronizer sync{controlled_params, *controlled};
+    const auto header = [&](const Hash256& parent, const std::uint32_t height,
+                            const std::uint32_t time) {
+        auto block = Make(parent, height);
+        block.header.time = time;
+        block.header.bits = testnet.pow.pow_limit_compact;
+        for (std::uint32_t nonce = 0U; nonce < 4096U; ++nonce) {
+            block.header.nonce = nonce;
+            if (nova::consensus::CheckProofOfWork(Hash(block), *target.target))
+                return block;
+        }
+        throw std::runtime_error{"bounded context-fixture header mining failed"};
+    };
+    const auto spacing = testnet.difficulty.target_spacing_seconds;
+    for (const auto delay : {spacing, spacing * 2U}) {
+        const auto result = Headers(sync, {header(anchor_hash, 2U, anchor_time + delay)});
+        EXPECT_EQ(result.error, SyncError::kChainStateUnavailable);
+        EXPECT_TRUE(result.requests.empty());
+        EXPECT_EQ(sync.header_count(), 0U);
+        EXPECT_EQ(sync.best_header_tip(), anchor_hash);
+    }
+    const auto delayed = header(anchor_hash, 2U, anchor_time + spacing * 2U + 1U);
+    const auto recovery = header(Hash(delayed), 3U, delayed.header.time + spacing);
+    const auto batch = Headers(sync, {delayed, recovery});
+    EXPECT_EQ(batch.error, SyncError::kChainStateUnavailable);
+    EXPECT_TRUE(batch.requests.empty());
+    EXPECT_EQ(sync.header_count(), 0U);
+    EXPECT_EQ(sync.best_header_tip(), anchor_hash);
+    EXPECT_EQ(Requests(Headers(sync, {delayed})), (std::vector<Hash256>{Hash(delayed)}));
+    EXPECT_EQ(Headers(sync, {recovery}).error, SyncError::kChainStateUnavailable);
+    EXPECT_EQ(sync.header_count(), 1U);
+    EXPECT_EQ(sync.best_header_tip(), Hash(delayed));
+    EXPECT_EQ(controlled->active_tip(), anchor_hash);
+    EXPECT_EQ(controlled->active_height(), 1U);
+    EXPECT_EQ(controlled_utxos.size(), 0U);
 }
 
 TEST_F(SyncProgress, ReconcilesLocalAdvanceAndReorgThenRequestsExactMissingBody)

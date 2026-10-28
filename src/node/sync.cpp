@@ -212,7 +212,10 @@ SyncResult Synchronizer::AcceptHeaders(const net::HeadersMessage& headers) noexc
                 return {SyncError::kWorkOverflow, {}, {}};
             }
             const auto expected_bits = ExpectedBits(*parent, header.time);
-            if (!expected_bits.has_value() || header.bits != *expected_bits) {
+            if (!expected_bits.has_value()) {
+                return {SyncError::kChainStateUnavailable, {}, {}};
+            }
+            if (header.bits != *expected_bits) {
                 return {SyncError::kInvalidTarget, {}, {}};
             }
             const auto target =
