@@ -204,10 +204,12 @@ ChainResult ChainState::ApplyAtomically(Operation&& operation,
     try {
         if (failure == FailurePoint::kBeforeStaging)
             throw std::bad_alloc{};
-        UTXOSet staged_utxos;
-        staged_utxos.coins_ = utxos_.coins_;
-        ChainState staged{parameters_, staged_utxos, indexes_, active_chain_.tip(),
+        auto transition_utxos = utxos_.BeginBatch();
+        if (!transition_utxos.has_value())
+            return {ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash};
+        ChainState staged{parameters_, utxos_, indexes_, active_chain_.tip(),
                           active_chain_.height()};
+        staged.transition_utxos_ = &*transition_utxos;
         if (failure == FailurePoint::kAfterCopy)
             throw std::bad_alloc{};
         const auto result = operation(staged);
@@ -218,10 +220,11 @@ ChainResult ChainState::ApplyAtomically(Operation&& operation,
         // Stable component addresses and the live UTXO reference are retained.
         // No allocation, callbacks or I/O may occur within publication.
         static_assert(std::is_nothrow_swappable_v<Indexes>);
-        static_assert(std::is_nothrow_swappable_v<UTXOSet::Coins>);
         static_assert(std::is_nothrow_copy_assignable_v<Chain>);
+        if (!transition_utxos->Commit())
+            return {ChainError::kStateConnectFailure,
+                    BlockValidationError::kStateApplicationFailure, failure_hash};
         indexes_.swap(staged.indexes_);
-        utxos_.coins_.swap(staged_utxos.coins_);
         active_chain_ = staged.active_chain_;
         return result;
     } catch (...) {
@@ -736,7 +739,10 @@ ChainResult ChainState::ConnectIndexedBlock(BlockIndex& index) noexcept
         return {ChainError::kBlockValidationFailure, BlockValidationError::kUnexpectedBits,
                 index.hash};
     }
-    auto connected = ConnectBlock(*index.block, *context, parameters_.block_validation, utxos_);
+    auto connected =
+        transition_utxos_ != nullptr
+            ? ConnectBlock(*index.block, *context, parameters_.block_validation, *transition_utxos_)
+            : ConnectBlock(*index.block, *context, parameters_.block_validation, utxos_);
     if (connected.error != BlockValidationError::kNone || !connected.connected.has_value()) {
         return {ChainError::kBlockValidationFailure, connected.error, index.hash};
     }
@@ -750,7 +756,9 @@ ChainError ChainState::DisconnectIndexedBlock(BlockIndex& index) noexcept
     if (!index.connected.has_value()) {
         return ChainError::kStateDisconnectFailure;
     }
-    const auto error = DisconnectBlock(*index.connected, utxos_);
+    const auto error = transition_utxos_ != nullptr
+                           ? DisconnectBlock(*index.connected, *transition_utxos_)
+                           : DisconnectBlock(*index.connected, utxos_);
     if (error != BlockValidationError::kNone) {
         return ChainError::kStateDisconnectFailure;
     }

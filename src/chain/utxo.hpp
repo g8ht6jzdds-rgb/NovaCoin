@@ -98,15 +98,25 @@ class UTXOBatch final : public UTXOView
     [[nodiscard]] std::optional<Coin> GetCoin(const UTXOKey& key) const override;
     [[nodiscard]] bool HaveCoin(const UTXOKey& key) const noexcept override;
     [[nodiscard]] UTXOError UndoTransaction(const TransactionUndo& undo) noexcept;
+    // Parent must outlive and remain at its address while a child exists.
+    // A closed or changed parent cannot publish child changes.
+    [[nodiscard]] std::optional<UTXOBatch> BeginBatch() noexcept;
+    [[nodiscard]] UTXOError UndoBlock(const BlockUndo& undo) noexcept;
     [[nodiscard]] bool Commit() noexcept;
     void Rollback() noexcept;
     [[nodiscard]] std::size_t overlay_entry_count() const noexcept;
 
   private:
     explicit UTXOBatch(UTXOSet& base) noexcept;
+    explicit UTXOBatch(UTXOBatch& parent) noexcept;
+    [[nodiscard]] bool IsOpen() const noexcept;
 
-    UTXOSet& base_;
+    const UTXOView& base_;
+    UTXOSet* base_set_{};
+    UTXOBatch* parent_{};
     UTXODelta delta_;
+    std::uint64_t revision_{};
+    std::uint64_t parent_revision_{};
     bool closed_{};
 
     friend class UTXOSet;
@@ -138,7 +148,6 @@ class UTXOSet final : public UTXOView
     Coins coins_;
 
     friend class UTXOBatch;
-    friend class ChainState;
 };
 
 } // namespace nova::chain

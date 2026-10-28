@@ -346,9 +346,10 @@ TransactionValidationResult ValidateTransactionAgainstUTXOSet(
     }
 }
 
-BlockValidationResult ConnectBlock(const primitives::Block& block,
-                                   const BlockValidationContext& context,
-                                   const BlockValidationParams& parameters, UTXOSet& utxos) noexcept
+template <typename View>
+BlockValidationResult
+ConnectBlockInto(const primitives::Block& block, const BlockValidationContext& context,
+                 const BlockValidationParams& parameters, View& utxos) noexcept
 {
     const auto block_error = CheckBlock(block, context, parameters);
     if (block_error != BlockValidationError::kNone) {
@@ -423,7 +424,9 @@ BlockValidationResult ConnectBlock(const primitives::Block& block,
     }
 }
 
-BlockValidationError DisconnectBlock(const ConnectedBlock& connected_block, UTXOSet& utxos) noexcept
+template <typename View>
+BlockValidationError DisconnectBlockFrom(const ConnectedBlock& connected_block,
+                                         View& utxos) noexcept
 {
     const auto undo_error = utxos.UndoBlock(connected_block.undo);
     if (undo_error == UTXOError::kNone) {
@@ -433,6 +436,31 @@ BlockValidationError DisconnectBlock(const ConnectedBlock& connected_block, UTXO
         return BlockValidationError::kAllocationFailure;
     }
     return BlockValidationError::kDisconnectFailure;
+}
+
+BlockValidationResult ConnectBlock(const primitives::Block& block,
+                                   const BlockValidationContext& context,
+                                   const BlockValidationParams& parameters, UTXOSet& utxos) noexcept
+{
+    return ConnectBlockInto(block, context, parameters, utxos);
+}
+
+BlockValidationResult ConnectBlock(const primitives::Block& block,
+                                   const BlockValidationContext& context,
+                                   const BlockValidationParams& parameters,
+                                   UTXOBatch& utxos) noexcept
+{
+    return ConnectBlockInto(block, context, parameters, utxos);
+}
+
+BlockValidationError DisconnectBlock(const ConnectedBlock& connected, UTXOSet& utxos) noexcept
+{
+    return DisconnectBlockFrom(connected, utxos);
+}
+
+BlockValidationError DisconnectBlock(const ConnectedBlock& connected, UTXOBatch& utxos) noexcept
+{
+    return DisconnectBlockFrom(connected, utxos);
 }
 
 } // namespace nova::chain

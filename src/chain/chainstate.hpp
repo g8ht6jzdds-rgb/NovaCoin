@@ -241,6 +241,7 @@ class ChainState final
 
     ChainStateParams parameters_;
     UTXOSet& utxos_;
+    UTXOBatch* transition_utxos_{};
     Indexes indexes_;
     Chain active_chain_;
     FailurePoint failure_point_{FailurePoint::kNone};
