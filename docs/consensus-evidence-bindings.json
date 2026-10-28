@@ -32,9 +32,9 @@
           "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 676,
+            "line": 793,
             "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "negative": {
@@ -42,9 +42,9 @@
           "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 676,
+            "line": 793,
             "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "boundary": {
@@ -52,9 +52,9 @@
           "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 676,
+            "line": 793,
             "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         }
       },
@@ -153,9 +153,9 @@
           "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 651,
+            "line": 768,
             "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "negative": {
@@ -163,9 +163,9 @@
           "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 651,
+            "line": 768,
             "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "boundary": {
@@ -173,9 +173,9 @@
           "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 651,
+            "line": 768,
             "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         }
       },
@@ -263,9 +263,9 @@
           "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 691,
+            "line": 808,
             "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "negative": {
@@ -273,9 +273,9 @@
           "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 691,
+            "line": 808,
             "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "boundary": {
@@ -283,9 +283,9 @@
           "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 691,
+            "line": 808,
             "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         }
       },
@@ -343,9 +343,9 @@
           "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 766,
+            "line": 883,
             "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "negative": {
@@ -353,9 +353,9 @@
           "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 766,
+            "line": 883,
             "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "boundary": {
@@ -363,9 +363,9 @@
           "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 766,
+            "line": 883,
             "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         }
       },
@@ -403,9 +403,9 @@
           "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 738,
+            "line": 855,
             "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "negative": {
@@ -413,9 +413,9 @@
           "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 738,
+            "line": 855,
             "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         },
         "boundary": {
@@ -423,9 +423,9 @@
           "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 738,
+            "line": 855,
             "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
-            "sha256": "7a2b574364f9600763893d365d64021caafbd70f04f8e54b6c5d1c776761c64d"
+            "sha256": "5326df8afdcb1c469837dab3cf21c3313a4f9f9b6e0aef22dfaaff41c22b5e0d"
           }
         }
       },

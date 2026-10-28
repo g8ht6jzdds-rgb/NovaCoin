@@ -148,3 +148,32 @@ triads, independent review or freeze acceptance. CFD07 scaling-failure
 classification, CFD09 ancestry, CFD12 atomicity, CFD13 caller safety and CFD14
 Synchronizer alignment remain open. Gate 1 **FAIL / NOT FROZEN**, Gate 2
 incomplete, MAINNET locked.
+
+## Scoped public signature-fixture additions
+
+Base: `1b83e00f0e49a8703d0a6fef1291ccc538ca732e`. Protocol section references
+below identify normative clauses; NCV0 IDs identify existing ledger families,
+not claims of complete family coverage. Production behavior is unchanged.
+
+| Protocol / ledger clause | Valid control | Rejection case | Boundary evidence / limitation |
+| --- | --- | --- | --- |
+| §3 compressed key; NCV0-022 | Original valid public-key authorization | `signature_auth_key_prefix.ncpv`, exact 33-byte prefix04 | `OwnerCompressedKeyBoundaries` checks 32/33/34-byte key parsing; complete curve-point corpus remains partial |
+| §3 strict DER; NCV0-022 | Original valid signature | `signature_auth_der_tag.ncpv`, sequence tag31 | `OwnerDerScalarAndLowSBoundaries` covers public scalar/low-S boundaries; parser acceptance is not ECDSA validity |
+| §8 exactly two pushes; NCV0-017/022 | Original valid authorization | `signature_auth_trailing.ncpv`, one extra byte | `SignatureAuthorizationBindsSingleFaultMutations` checks exact mutation and restored transaction |
+| §8 signature push9..73; NCV0-017/022 | Original valid push71 | `signature_auth_push_below.ncpv` and `signature_auth_push_above.ncpv` | `SignatureAuthorizationRejectsAdjacentPushLengths` checks8/74; existing `CorpusPushBoundaries` covers rejecting9/73, not maximum-valid ECDSA |
+| §§7–8 supported locking condition; NCV0-017 | Original P2PKH fixture | `signature_auth_unsupported_lock.ncpv`, lock51 | Existing storage-then-spend test distinguishes output admission from spend authorization; zero-valued-output retention remains separately incomplete |
+| §§8–9 conservation and fee; NCV0-016 | Original input5,000,000,000/output4,900,000,000, fee100,000,000 | `signature_auth_amount_insufficient.ncpv`, input below output by1 | `signature_auth_amount_equal.ncpv` accepts equality/fee0; `SignatureAuthorizationPreimageAndReferencedAmount` checks exact golden preimage/digest and unchanged transaction/signature |
+
+All fourteen signature records replay in `SignatureAuthorizationCorpus` through
+the existing public validator and check a controlled two-coin view for mutation.
+The eight additional records preserve every original corpus hash. Amount-only
+records are supplied API coin contexts, not independently valid chain histories.
+No input-amount field is added to sighash; no script interpreter or selector is
+introduced. Full multi-input, maximum-valid signature, production-limit and
+failure-model evidence remain incomplete.
+
+Approved integer difficulty calculations still require reviewed complete
+ancestry/header fixtures before full adapter replay. Scaling-failure, ancestry,
+Synchronizer inheritance and atomicity contradictions remain open. No copied
+arithmetic helper or unreviewed profile substitutes for that evidence. Gate 1
+remains FAIL / NOT FROZEN; Gate 2 remains incomplete; MAINNET remains locked.
