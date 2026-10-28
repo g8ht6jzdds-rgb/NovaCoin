@@ -117,6 +117,67 @@ class SyncProgress : public testing::Test
     }
 };
 
+TEST_F(SyncProgress, NoRetargetingInheritsValidatedAndPendingParentBits)
+{
+    // In-memory anchors distinguish inheritance from a powLimit fallback.
+    // No immutable network or genesis fixture is changed by these anchors.
+    for (const auto bits : {0x206F'FFFFU, 0x2070'FFFEU, network.pow.pow_limit_compact}) {
+        SCOPED_TRACE(bits);
+        const auto target = nova::consensus::TargetFromCompact(bits, network.pow);
+        ASSERT_TRUE(target.target.has_value());
+        const auto work = nova::consensus::CalculateWork(*target.target);
+        ASSERT_TRUE(work.has_value());
+        Hash256::Bytes anchor_bytes{};
+        anchor_bytes.back() = 0xA7U;
+        const Hash256 anchor_hash{anchor_bytes};
+        nova::chain::UTXOSet controlled_utxos;
+        auto controlled = nova::chain::ChainState::Create(
+            {params.validation, network.difficulty, 11U,
+             std::make_shared<nova::chain::FixedValidationTimeSource>(
+                 network.genesis_block.header.time + 100'000U)},
+            {anchor_hash,
+             {},
+             0U,
+             network.genesis_block.header.time,
+             *target.target,
+             *work,
+             nova::chain::ChainWork::FromPerBlockWork(*work)},
+            controlled_utxos);
+        ASSERT_NE(controlled, nullptr);
+        nova::node::Synchronizer sync{params, *controlled};
+
+        auto wrong = Make(anchor_hash, 1U);
+        wrong.header.bits =
+            bits == network.pow.pow_limit_compact ? 0x206F'FFFFU : network.pow.pow_limit_compact;
+        const auto rejected = Headers(sync, {wrong});
+        EXPECT_EQ(rejected.error, SyncError::kInvalidTarget);
+        EXPECT_TRUE(rejected.requests.empty());
+        EXPECT_EQ(sync.header_count(), 0U);
+        EXPECT_EQ(sync.best_header_tip(), anchor_hash);
+
+        const auto inherited = [&](const Hash256& parent, const std::uint32_t height) {
+            auto block = Make(parent, height);
+            block.header.bits = bits;
+            for (std::uint32_t nonce = 0U; nonce < 4096U; ++nonce) {
+                block.header.nonce = nonce;
+                if (nova::consensus::CheckProofOfWork(Hash(block), *target.target)) {
+                    return block;
+                }
+            }
+            throw std::runtime_error{"bounded inherited-target mining failed"};
+        };
+        const auto first = inherited(anchor_hash, 1U);
+        EXPECT_EQ(Requests(Headers(sync, {first})), (std::vector<Hash256>{Hash(first)}));
+        const auto second = inherited(Hash(first), 2U);
+        EXPECT_EQ(Headers(sync, {second}).error, SyncError::kNone);
+        EXPECT_EQ(sync.header_count(), 2U);
+        EXPECT_EQ(sync.best_header_tip(), Hash(second));
+        EXPECT_EQ(controlled->active_tip(), anchor_hash);
+        EXPECT_EQ(controlled->active_height(), 0U);
+        EXPECT_EQ(controlled_utxos.size(), 0U);
+    }
+}
+
 TEST_F(SyncProgress, ReconcilesLocalAdvanceAndReorgThenRequestsExactMissingBody)
 {
     const auto first = Make(state->active_tip(), 1U);
