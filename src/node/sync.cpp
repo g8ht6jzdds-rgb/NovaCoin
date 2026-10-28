@@ -15,6 +15,7 @@ DifficultyParametersAreSafe(const consensus::DifficultyParameters& parameters) n
 {
     return parameters.target_spacing_seconds != 0U && parameters.retarget_interval != 0U &&
            parameters.target_timespan_seconds != 0U &&
+           (parameters.no_retargeting || parameters.target_timespan_seconds >= 4U) &&
            parameters.target_spacing_seconds <= std::numeric_limits<std::uint32_t>::max() / 2U &&
            parameters.target_timespan_seconds <= std::numeric_limits<std::uint32_t>::max() / 4U &&
            static_cast<std::uint64_t>(parameters.target_spacing_seconds) *
