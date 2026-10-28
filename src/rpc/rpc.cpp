@@ -5,6 +5,7 @@
 
 #include "consensus/network_params.hpp"
 #include "consensus/pow.hpp"
+#include "node/network_selection.hpp"
 #include "primitives/serialization.hpp"
 
 #include <algorithm>
@@ -469,6 +470,17 @@ RpcService::RpcService(RpcConfig config, RpcDependencies dependencies) noexcept
 std::unique_ptr<RpcService> RpcService::Create(RpcConfig config,
                                                RpcDependencies dependencies) noexcept
 {
+    if ((config.network != consensus::NetworkId::kRegtest &&
+         config.network != consensus::NetworkId::kTestnet &&
+         config.network != consensus::NetworkId::kMainnet) ||
+        (config.network == consensus::NetworkId::kMainnet && node::MAINNET_LOCKED)) {
+        return nullptr;
+    }
+    const auto& network = consensus::GetNetworkParams(config.network);
+    if (!network.enabled ||
+        consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
+        return nullptr;
+    }
     if (!IsLoopback(config.bind_address) || config.username.empty() || config.password.empty() ||
         config.limits.max_header_bytes == 0U || config.limits.max_body_bytes == 0U ||
         config.limits.max_mining_attempts == 0U || config.restricted_principals.size() > 2U) {
