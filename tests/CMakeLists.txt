@@ -38,6 +38,9 @@ find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
 add_test(NAME nova.release_policy
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_release.py)
 set_tests_properties(nova.release_policy PROPERTIES TIMEOUT 60 LABELS "unit;release;policy")
+add_test(NAME nova.reorg_rpc_deadlines
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_reorg_rpc_deadlines.py)
+set_tests_properties(nova.reorg_rpc_deadlines PROPERTIES TIMEOUT 5 LABELS "unit;regtest;evidence")
 add_test(NAME nova.build_metadata
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_build_metadata.py
         $<TARGET_FILE:nova-build-info> $<TARGET_FILE:novacoind> $<TARGET_FILE:novacoin-cli>

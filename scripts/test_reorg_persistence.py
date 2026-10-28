@@ -24,6 +24,13 @@ def require(condition, description):
         raise RuntimeError(description)
 
 
+def remaining_seconds(deadline):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError('RPC timeout')
+    return left
+
+
 def chain(value):
     require(type(value['height']) is int and value['height'] >= 0, 'invalid height')
     require(re.fullmatch('[0-9a-f]{64}', value['bestblockhash']), 'invalid tip')
@@ -104,9 +111,7 @@ class Exercise:
             transport = connection.sock
 
             def remaining():
-                left = deadline - time.monotonic()
-                require(left > 0, 'RPC timeout')
-                transport.settimeout(left)
+                transport.settimeout(remaining_seconds(deadline))
 
             auth = base64.b64encode(('novacoin:' + os.environ['NOVACOIN_RPC_PASSWORD']).encode()).decode()
             remaining()
@@ -117,7 +122,8 @@ class Exercise:
             response = connection.getresponse()
             remaining()
             raw = response.read(65537)
-            require(time.monotonic() <= deadline and len(raw) <= 65536 and
+            remaining_seconds(deadline)
+            require(len(raw) <= 65536 and
                     response.status == 200, 'invalid/budget-exceeding RPC response')
             value = json.loads(raw)
             if absent:
