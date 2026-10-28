@@ -225,7 +225,10 @@ ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
             return {ChainError::kContextFailure, BlockValidationError::kInvalidContext, *hash};
         }
         const auto expected_bits = ExpectedBits(parent_iterator->second, block.header.time);
-        if (!expected_bits.has_value() || block.header.bits != *expected_bits) {
+        if (!expected_bits.has_value()) {
+            return {ChainError::kContextFailure, BlockValidationError::kInvalidContext, *hash};
+        }
+        if (block.header.bits != *expected_bits) {
             return {ChainError::kBlockValidationFailure, BlockValidationError::kUnexpectedBits,
                     *hash};
         }
@@ -605,7 +608,7 @@ ChainState::ExpectedBits(const BlockIndex& parent,
                current->expected_bits == pow_limit) {
             const auto previous = indexes_.find(current->previous_hash);
             if (previous == indexes_.end()) {
-                break;
+                return std::nullopt;
             }
             const auto is_delayed =
                 current->time > previous->second.time &&
