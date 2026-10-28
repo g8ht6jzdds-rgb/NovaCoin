@@ -306,6 +306,23 @@ class ReleaseTests(unittest.TestCase):
             self.assertTrue(archive.getmember('NovaCoin-0.1.0/tool.sh').mode & 0o111)
             self.assertFalse(archive.getmember('NovaCoin-0.1.0/VERSION').mode & 0o111)
 
+    def test_archive_pins_permissions_independently_of_local_tar_umask(self):
+        (self.source / 'tool.sh').write_bytes(b'#!/bin/sh\nexit 0\n')
+        release.git(self.source, 'add', 'tool.sh')
+        release.git(self.source, 'update-index', '--chmod=+x', 'tool.sh')
+        release.git(self.source, '-c', 'commit.gpgsign=false', 'commit', '-m', 'mode fixture')
+        commit = release.identity(self.source)
+        hashes = []
+        for index, mask in enumerate(('0002', '0077', '0000', 'user')):
+            release.git(self.source, 'config', 'tar.umask', mask)
+            path = self.root / f'permission-{index}.tar'
+            hashes.append(release.source_archive(self.source, commit, '0.1.0', path))
+            with tarfile.open(path) as archive:
+                self.assertEqual(archive.getmember('NovaCoin-0.1.0/tool.sh').mode, 0o755)
+                self.assertEqual(archive.getmember('NovaCoin-0.1.0/VERSION').mode, 0o644)
+                self.assertEqual(archive.getmember('NovaCoin-0.1.0').mode, 0o755)
+        self.assertEqual(len(set(hashes)), 1)
+
     def test_signing_never_runs_in_ci_or_for_modified_payload(self):
         payload = self.root / 'payload.txt'
         payload.write_text('synthetic\n', encoding='utf-8')

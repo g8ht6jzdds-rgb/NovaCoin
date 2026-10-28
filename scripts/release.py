@@ -204,7 +204,7 @@ def source_archive(source, commit, release_version, output):
         raise ValueError('private-key material or unavailable secret scan blocks the source archive')
     with output.open('xb') as destination:
         subprocess.run(['git', '-C', str(source), '-c', 'core.autocrlf=false',
-                        '-c', 'core.eol=lf', 'archive', '--format=tar',
+                        '-c', 'core.eol=lf', '-c', 'tar.umask=0022', 'archive', '--format=tar',
                         f'--prefix=NovaCoin-{release_version}/', commit], stdout=destination,
                        stderr=subprocess.DEVNULL, check=True, timeout=30, env=git_environment())
     # Export attributes can still omit/substitute/convert committed content.
@@ -225,8 +225,9 @@ def source_archive(source, commit, release_version, output):
             if name not in expected or name in seen:
                 raise ValueError('source archive file set differs from commit')
             mode, object_id, size = expected[name]
-            if member.size != size or bool(member.mode & 0o111) != (mode == b'100755'):
-                raise ValueError('source archive size or executable mode differs from commit')
+            permissions = 0o755 if mode == b'100755' else 0o644
+            if member.size != size or member.mode != permissions:
+                raise ValueError('source archive size or permissions differ from canonical mode')
             stream = archive.extractfile(member)
             if stream is None:
                 raise ValueError('source archive member unavailable')
