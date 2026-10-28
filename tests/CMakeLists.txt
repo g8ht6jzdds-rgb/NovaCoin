@@ -53,6 +53,9 @@ set_tests_properties(nova.mainnet_lock PROPERTIES TIMEOUT 30 LABELS "unit;readin
 add_test(NAME nova.readiness_policy
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_readiness_policy.py)
 set_tests_properties(nova.readiness_policy PROPERTIES TIMEOUT 20 LABELS "unit;readiness;policy")
+add_test(NAME nova.consensus_evidence
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_consensus_evidence.py)
+set_tests_properties(nova.consensus_evidence PROPERTIES TIMEOUT 20 LABELS "unit;readiness;evidence")
 add_test(NAME nova.executable_version
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_version.py
         --cmake ${CMAKE_COMMAND} --source ${CMAKE_SOURCE_DIR}

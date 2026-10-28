@@ -145,6 +145,23 @@ alignment remain open. The latter is a known conformance gap, not waived by
 ordinary REGTEST outcomes. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
 Historical failures and unavailable checks are not converted to passes.
 
+## Current clarification evidence bindings
+
+The documentation-only binding batch starts at
+`1b83e00f0e49a8703d0a6fef1291ccc538ca732e`; earlier revision references remain
+historical. [Machine-readable bindings](consensus-evidence-bindings.json) cover
+CFD01–CFD06, CFD10, CFD15 and CFP01 using existing assertion bodies and vector
+bytes. Each case identifies its exact protocol token, source/test file hash and
+location, role and remaining gap. No new NCPV1 records or result vocabulary
+are added; PR44 pure vectors remain separate until merged and validated.
+
+The checker rejects stale references, modified bound bytes and malformed records.
+It does not establish assertion adequacy, decoder allocation ordering, complete
+triads, independent review or freeze acceptance. CFD07 scaling-failure
+classification, CFD09 ancestry, CFD12 atomicity, CFD13 caller safety and CFD14
+Synchronizer alignment remain open. Gate 1 **FAIL / NOT FROZEN**, Gate 2
+incomplete, MAINNET locked.
+
 ## Scoped public signature-fixture additions
 
 Base: `1b83e00f0e49a8703d0a6fef1291ccc538ca732e`. Protocol section references

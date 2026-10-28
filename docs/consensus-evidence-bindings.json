@@ -1,0 +1,553 @@
+{
+  "schema": 1,
+  "baseline": "1b83e00f0e49a8703d0a6fef1291ccc538ca732e",
+  "records": [
+    {
+      "id": "CFD01",
+      "section": "2",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 26,
+        "token": "Count, length, overflow and remaining-byte",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/primitives/serialization.cpp",
+          "line": 233,
+          "token": "BinaryReader::ReadBytes",
+          "sha256": "f3523c83fe042a3f2088e8d31388a2f882eb5368ef5796ff5805c677ef63ba54"
+        },
+        {
+          "path": "src/primitives/transaction.cpp",
+          "line": 137,
+          "token": "Transaction::Deserialize",
+          "sha256": "dce6af583aa6d99d6d7b62ff22cce905e9eb967f4f80612ba743a118436630e0"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "canonical transaction parses",
+          "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 993,
+            "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "negative": {
+          "description": "truncated and trailing-byte transactions reject",
+          "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 993,
+            "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "boundary": {
+          "description": "exact end versus one trailing byte",
+          "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 993,
+            "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        }
+      },
+      "gaps": [
+        "Allocation timing is uninstrumented; this is not proof for every decoder."
+      ],
+      "vectors": [
+        {
+          "path": "test/data/protocol/transactions.ncpv",
+          "sha256": "be35cacd81a830aa972c97620baf52fd753b06d870f2474475767c3c276452dc"
+        }
+      ]
+    },
+    {
+      "id": "CFD02",
+      "section": "6",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 87,
+        "token": "After structural validation, a transaction is final",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/chain/validation.cpp",
+          "line": 69,
+          "token": "IsFinal(",
+          "sha256": "5be920bf0fd033b72291f61dd5b86f48263ad285fa732d327b1db9ba19abff5f"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "zero locktime succeeds",
+          "assertion": "MainnetConsensusBoundary.OwnerFinalityZeroAndThresholdSwitch",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 746,
+            "token": "TEST(MainnetConsensusBoundary, OwnerFinalityZeroAndThresholdSwitch)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        },
+        "negative": {
+          "description": "equal comparison fails with nonfinal sequence",
+          "assertion": "MainnetConsensusBoundary.OwnerFinalityZeroAndThresholdSwitch",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 746,
+            "token": "TEST(MainnetConsensusBoundary, OwnerFinalityZeroAndThresholdSwitch)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        },
+        "boundary": {
+          "description": "499999999/500000000/500000001",
+          "assertion": "MainnetConsensusBoundary.OwnerFinalityZeroAndThresholdSwitch",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 746,
+            "token": "TEST(MainnetConsensusBoundary, OwnerFinalityZeroAndThresholdSwitch)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        }
+      },
+      "gaps": [
+        "Mixed-input sequence combinations remain incompletely traced."
+      ],
+      "vectors": []
+    },
+    {
+      "id": "CFD03",
+      "section": "6",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 81,
+        "token": "A null outpoint is exactly",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/primitives/transaction.cpp",
+          "line": 109,
+          "token": "OutPoint::IsNull",
+          "sha256": "dce6af583aa6d99d6d7b62ff22cce905e9eb967f4f80612ba743a118436630e0"
+        },
+        {
+          "path": "src/primitives/transaction.cpp",
+          "line": 114,
+          "token": "OutPoint::IsMalformed",
+          "sha256": "dce6af583aa6d99d6d7b62ff22cce905e9eb967f4f80612ba743a118436630e0"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "nonzero hash/index ffffffff is not malformed",
+          "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 968,
+            "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "negative": {
+          "description": "zero hash/index zero is malformed; absent coin rejects",
+          "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 968,
+            "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "boundary": {
+          "description": "zero hash/index ffffffff is null",
+          "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 968,
+            "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        }
+      },
+      "gaps": [
+        "Coinbase placement/reward and complete shape/existence cross-product remain separate."
+      ],
+      "vectors": []
+    },
+    {
+      "id": "CFD04",
+      "section": "10",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 129,
+        "token": "the minimally encoded direct-push current height",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/chain/validation.cpp",
+          "line": 88,
+          "token": "HasMinimalCoinbaseHeight",
+          "sha256": "5be920bf0fd033b72291f61dd5b86f48263ad285fa732d327b1db9ba19abff5f"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "minimal ordinary prefix with bounded suffix accepted",
+          "assertion": "MainnetConsensusBoundary.OwnerCoinbaseHeightSuffixAndSizeBounds",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 769,
+            "token": "TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        },
+        "negative": {
+          "description": "script lengths 1/101 and wrong height reject",
+          "assertion": "MainnetConsensusBoundary.OwnerCoinbaseHeightSuffixAndSizeBounds",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 769,
+            "token": "TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        },
+        "boundary": {
+          "description": "script lengths 2/100; height zero and u32 maximum",
+          "assertion": "MainnetConsensusBoundary.OwnerCoinbaseHeightSuffixAndSizeBounds",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 769,
+            "token": "TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        }
+      },
+      "gaps": [
+        "Genesis exceptions and other block predicates require their own bindings."
+      ],
+      "vectors": []
+    },
+    {
+      "id": "CFD05",
+      "section": "3",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 44,
+        "token": "A signature MUST be 8..72 bytes of DER",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/crypto/keys.cpp",
+          "line": 271,
+          "token": "std::optional<Signature> Signature::FromDer",
+          "sha256": "8a7bf3b5004a2b4e56dac1a89e1738b72e130f6fed5cf0577160563412847c4f"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "strict DER R=1 S=1 parses; not a claim of ECDSA validity",
+          "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1008,
+            "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "negative": {
+          "description": "zero/order/high-S scalars reject",
+          "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1008,
+            "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "boundary": {
+          "description": "S=floor(n/2) versus plus one",
+          "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1008,
+            "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        }
+      },
+      "gaps": [
+        "Key/template/ECDSA predicates and multi-input authorization remain partial."
+      ],
+      "vectors": [
+        {
+          "path": "test/data/protocol/signature_auth_valid.ncpv",
+          "sha256": "56513cf9bec46078a2506715799d33f06199bd5d16a665ed955aedc5281c88e7"
+        },
+        {
+          "path": "test/data/protocol/signature_auth_malformed.ncpv",
+          "sha256": "5658f3680b830a6d56918923f56117204951a47f164d29d9b1e3a0a5444201f9"
+        },
+        {
+          "path": "test/data/protocol/signature_auth_keyhash_mismatch.ncpv",
+          "sha256": "ad0b9bb18f5a7db93c11da961f38e17246aab0693ddd6aee2b8b7dd428d7c94d"
+        },
+        {
+          "path": "test/data/protocol/signature_auth_digest_mismatch.ncpv",
+          "sha256": "3be17241baebd23ba7b1c5c7735e03bf18620172f87ca71eaf770b11b1e84a29"
+        },
+        {
+          "path": "test/data/protocol/signature_auth_boundary.ncpv",
+          "sha256": "ce3fc212ba8fc272fdb605c9787b86c954c16505e403695d99bf05a66d917d57"
+        },
+        {
+          "path": "test/data/protocol/signature_auth_boundary_max.ncpv",
+          "sha256": "f14622e8d59188d3a9662e8055a31b97650da665c3c4794ad047fd4ef787c1ef"
+        }
+      ]
+    },
+    {
+      "id": "CFD06",
+      "section": "14",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 177,
+        "token": "Return `(e<<24)|mantissa`.",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/consensus/pow.cpp",
+          "line": 193,
+          "token": "CompactFromTarget",
+          "sha256": "f57a00b05e9d6fc0f9fa8ac838a455f43547caeb47daedca65d190c6074c801b"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "target 1 encodes 01010000",
+          "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1083,
+            "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "negative": {
+          "description": "noncanonical 01010001 and negative 00800001 reject",
+          "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1083,
+            "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "boundary": {
+          "description": "1234567 and 12345ff truncate to 04012345",
+          "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1083,
+            "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        }
+      },
+      "gaps": [
+        "Inclusive PoW comparison and full target-context triads are separate; PR44 remains unmerged."
+      ],
+      "vectors": [
+        {
+          "path": "test/data/protocol/target_pow.ncpv",
+          "sha256": "03a559652bb11859dfb069bd22d277844308244f0bad6b6451c7295008e88f2f"
+        }
+      ]
+    },
+    {
+      "id": "CFD10",
+      "section": "17",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 239,
+        "token": "The integer sum `sum(k=0..63",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/consensus/monetary.cpp",
+          "line": 70,
+          "token": "CalculateTheoreticalIssuance",
+          "sha256": "6279a84908f9f9cbe3a5cc8dfce3514575bf0e91e9223d776fd2753f2207a9df"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "exact REGTEST/TESTNET full-schedule totals",
+          "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1055,
+            "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "negative": {
+          "description": "zero halving interval yields no result",
+          "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1055,
+            "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        },
+        "boundary": {
+          "description": "32*I and 33*I-1 subsidy one; 33*I zero",
+          "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
+          "binding": {
+            "path": "tests/protocol_conformance_tests.cpp",
+            "line": 1055,
+            "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
+            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+          }
+        }
+      },
+      "gaps": [
+        "These are theoretical totals, not actual-chain issuance or complete monetary overflow proof."
+      ],
+      "vectors": [
+        {
+          "path": "test/data/protocol/subsidy.ncpv",
+          "sha256": "78a33f8f03ad84f33ab165a2602779eac5e7f4c4cf55a8d73e25abb33b2e69fe"
+        }
+      ]
+    },
+    {
+      "id": "CFD15",
+      "section": "16",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 222,
+        "token": "Before addition, `validation_time",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/chain/validation.cpp",
+          "line": 258,
+          "token": "CheckBlockHeader",
+          "sha256": "5be920bf0fd033b72291f61dd5b86f48263ad285fa732d327b1db9ba19abff5f"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "largest safe validation clock permits representable bound",
+          "assertion": "MainnetConsensusBoundary.OwnerFutureClockExactOverflowThreshold",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 816,
+            "token": "TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        },
+        "negative": {
+          "description": "first unsafe clock rejects context without mutation",
+          "assertion": "MainnetConsensusBoundary.OwnerFutureClockExactOverflowThreshold",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 816,
+            "token": "TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        },
+        "boundary": {
+          "description": "UINT32_MAX-future_limit equality and plus one",
+          "assertion": "MainnetConsensusBoundary.OwnerFutureClockExactOverflowThreshold",
+          "binding": {
+            "path": "tests/validation_tests.cpp",
+            "line": 816,
+            "token": "TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)",
+            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+          }
+        }
+      },
+      "gaps": [
+        "Actual MTP history and other callers remain separately incomplete."
+      ],
+      "vectors": []
+    },
+    {
+      "id": "CFP01",
+      "section": "22",
+      "protocol": {
+        "path": "docs/protocol.md",
+        "line": 298,
+        "token": "MAY be buffered within existing bounds",
+        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+      },
+      "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
+      "sources": [
+        {
+          "path": "src/net/p2p.cpp",
+          "line": 428,
+          "token": "MessageParser::PushBytes",
+          "sha256": "16409eace3ab2160f39b50cedf3d3d37bd07b6a2182cfc718489954543de06c7"
+        }
+      ],
+      "cases": {
+        "positive": {
+          "description": "canonical complete frame dispatches once",
+          "assertion": "P2PFraming.OwnerEveryFragmentBoundaryWaitsForCompleteFrame",
+          "binding": {
+            "path": "tests/p2p_tests.cpp",
+            "line": 225,
+            "token": "TEST(P2PFraming, OwnerEveryFragmentBoundaryWaitsForCompleteFrame)",
+            "sha256": "82e27976bc8f1893661aa7ac78b77fab1647037067ac2c3e05b3880299e8bdff"
+          }
+        },
+        "negative": {
+          "description": "complete checksum corruption rejects",
+          "assertion": "P2PFraming.OwnerEveryFragmentBoundaryWaitsForCompleteFrame",
+          "binding": {
+            "path": "tests/p2p_tests.cpp",
+            "line": 225,
+            "token": "TEST(P2PFraming, OwnerEveryFragmentBoundaryWaitsForCompleteFrame)",
+            "sha256": "82e27976bc8f1893661aa7ac78b77fab1647037067ac2c3e05b3880299e8bdff"
+          }
+        },
+        "boundary": {
+          "description": "every split including empty prefix and last byte",
+          "assertion": "P2PFraming.OwnerEveryFragmentBoundaryWaitsForCompleteFrame",
+          "binding": {
+            "path": "tests/p2p_tests.cpp",
+            "line": 225,
+            "token": "TEST(P2PFraming, OwnerEveryFragmentBoundaryWaitsForCompleteFrame)",
+            "sha256": "82e27976bc8f1893661aa7ac78b77fab1647037067ac2c3e05b3880299e8bdff"
+          }
+        }
+      },
+      "gaps": [
+        "Transport timeout/close and full allocation/fuzz coverage remain incomplete."
+      ],
+      "vectors": []
+    }
+  ]
+}
