@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace nova::chain
@@ -89,7 +90,7 @@ class UTXOBatch final : public UTXOView
   public:
     UTXOBatch(const UTXOBatch&) = delete;
     UTXOBatch& operator=(const UTXOBatch&) = delete;
-    UTXOBatch(UTXOBatch&& other);
+    UTXOBatch(UTXOBatch&& other) noexcept(std::is_nothrow_default_constructible_v<UTXODelta>);
     UTXOBatch& operator=(UTXOBatch&&) noexcept = delete;
 
     [[nodiscard]] ApplyTransactionResult
@@ -125,11 +126,14 @@ class UTXOBatch final : public UTXOView
 
 class UTXOSet final : public UTXOView
 {
+  private:
+    using Coins = std::map<UTXOKey, Coin>;
+
   public:
     UTXOSet() = default;
     UTXOSet(const UTXOSet& other);
     UTXOSet& operator=(const UTXOSet& other);
-    UTXOSet(UTXOSet&& other);
+    UTXOSet(UTXOSet&& other) noexcept(std::is_nothrow_default_constructible_v<Coins>);
     UTXOSet& operator=(UTXOSet&& other) noexcept;
 
     [[nodiscard]] std::optional<Coin> GetCoin(const UTXOKey& key) const override;
@@ -152,8 +156,6 @@ class UTXOSet final : public UTXOView
     [[nodiscard]] std::size_t size() const noexcept;
 
   private:
-    using Coins = std::map<UTXOKey, Coin>;
-
     void InvalidateBatches() noexcept;
     Coins coins_;
     std::uint64_t revision_{};

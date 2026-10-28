@@ -159,7 +159,7 @@ UTXOBatch::UTXOBatch(UTXOBatch& parent)
 {
 }
 
-UTXOBatch::UTXOBatch(UTXOBatch&& other)
+UTXOBatch::UTXOBatch(UTXOBatch&& other) noexcept(std::is_nothrow_default_constructible_v<UTXODelta>)
     : base_(other.base_), base_set_(other.base_set_), parent_(other.parent_),
       revision_(other.revision_), parent_revision_(other.parent_revision_),
       base_revision_(other.base_revision_), closed_(other.closed_)
@@ -360,7 +360,7 @@ UTXOSet& UTXOSet::operator=(const UTXOSet& other)
     return *this;
 }
 
-UTXOSet::UTXOSet(UTXOSet&& other)
+UTXOSet::UTXOSet(UTXOSet&& other) noexcept(std::is_nothrow_default_constructible_v<Coins>)
 {
     static_assert(std::is_nothrow_swappable_v<Coins>);
     coins_.swap(other.coins_);
