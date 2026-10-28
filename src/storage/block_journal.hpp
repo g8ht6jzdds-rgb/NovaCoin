@@ -23,6 +23,15 @@ enum class BlockJournalError : std::uint8_t {
     kMalformedRecord,
     kAllocationFailure,
     kResourceLimit,
+    kHashFailure,
+};
+
+enum class CommitRecordState : std::uint8_t { kPresent, kAbsent, kUnavailable };
+
+struct CommitRecordObservation final {
+    CommitRecordState state{CommitRecordState::kUnavailable};
+    BlockJournalError error{BlockJournalError::kNone};
+    bool recovery_required{};
 };
 
 // A one-shot test seam for deterministic crash/recovery regression tests. It
@@ -72,6 +81,11 @@ class BlockJournal final
     [[nodiscard]] BlockJournalError Prepare(const primitives::Block& block) const noexcept;
     [[nodiscard]] BlockJournalError Commit(const crypto::Hash256& block_hash) const noexcept;
     [[nodiscard]] BlockJournalLoadResult Load() const noexcept;
+    // Read-only record presence, not proof of physical durability/consensus.
+    // An unrecovered tail cannot establish absence; this never repairs it.
+    // Callers coordinate writers; this observation is not a commit lease.
+    [[nodiscard]] CommitRecordObservation
+    ObserveCommitRecord(const crypto::Hash256& block_hash) const noexcept;
     [[nodiscard]] bool IsCommitted(const crypto::Hash256& block_hash) const noexcept;
     [[nodiscard]] const std::filesystem::path& path() const noexcept;
 
