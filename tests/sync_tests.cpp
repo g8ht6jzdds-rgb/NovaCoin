@@ -117,6 +117,29 @@ class SyncProgress : public testing::Test
     }
 };
 
+TEST_F(SyncProgress, RetargetContextRequiresPositiveQuarterTimespan)
+{
+    const auto tip = state->active_tip();
+    for (const auto no_retargeting : {false, true}) {
+        for (std::uint32_t timespan = 0U; timespan <= 4U; ++timespan) {
+            SCOPED_TRACE(timespan);
+            SCOPED_TRACE(no_retargeting);
+            auto controlled = params;
+            controlled.difficulty = {timespan, 1U, timespan, false, no_retargeting};
+            nova::node::Synchronizer sync{controlled, *state};
+            const auto result = Headers(sync, {});
+            const auto admitted = timespan != 0U && (no_retargeting || timespan >= 4U);
+            EXPECT_EQ(result.error, admitted ? SyncError::kNone : SyncError::kInvalidParameters);
+            EXPECT_TRUE(result.requests.empty());
+            EXPECT_EQ(sync.header_count(), 0U);
+            EXPECT_EQ(sync.best_header_tip(), tip);
+            EXPECT_EQ(state->active_tip(), tip);
+            EXPECT_EQ(state->active_height(), 0U);
+            EXPECT_EQ(utxos.size(), 0U);
+        }
+    }
+}
+
 TEST_F(SyncProgress, ReconcilesLocalAdvanceAndReorgThenRequestsExactMissingBody)
 {
     const auto first = Make(state->active_tip(), 1U);

@@ -205,6 +205,34 @@ TEST(ChainStateDifficulty, NoRetargetingInheritsParentExpectedBits)
     EXPECT_EQ(utxos.size(), original_utxo_count);
 }
 
+TEST(ChainStateDifficulty, RetargetContextRequiresPositiveQuarterTimespan)
+{
+    const auto target = nova::consensus::TargetFromCompact(kRegularBits);
+    ASSERT_TRUE(target.target.has_value());
+    const auto work = nova::consensus::CalculateWork(*target.target);
+    ASSERT_TRUE(work.has_value());
+    for (const auto no_retargeting : {false, true}) {
+        for (std::uint32_t timespan = 0U; timespan <= 4U; ++timespan) {
+            SCOPED_TRACE(timespan);
+            SCOPED_TRACE(no_retargeting);
+            UTXOSet controlled;
+            auto parameters = TestParameters();
+            parameters.difficulty = {timespan, 1U, timespan, false, no_retargeting};
+            const auto state = ChainState::Create(parameters,
+                                                  {HashWithLastByte(0xA0U),
+                                                   {},
+                                                   0U,
+                                                   1'000U,
+                                                   *target.target,
+                                                   *work,
+                                                   ChainWork::FromPerBlockWork(*work)},
+                                                  controlled);
+            EXPECT_EQ(state != nullptr, timespan != 0U && (no_retargeting || timespan >= 4U));
+            EXPECT_EQ(controlled.size(), 0U);
+        }
+    }
+}
+
 TEST(ChainWork, AccumulatesExactRegtestPowLimitWork)
 {
     const auto work =
