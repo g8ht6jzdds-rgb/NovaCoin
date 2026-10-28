@@ -258,6 +258,54 @@ class ReleaseTests(unittest.TestCase):
             release.source_archive(self.source, release.identity(self.source), '0.1.0', archive)
         self.assertFalse(archive.exists())
 
+    def test_archive_bytes_ignore_local_line_ending_configuration(self):
+        # Pin committed fixture bytes independently of this host's defaults.
+        release.git(self.source, 'config', 'core.autocrlf', 'false')
+        (self.source / 'lines.txt').write_bytes(b'first\nsecond\n')
+        (self.source / 'empty.bin').write_bytes(b'')
+        (self.source / 'binary.bin').write_bytes(b'\x00\xff\r\n')
+        self.commit()
+        commit = release.identity(self.source)
+        hashes = []
+        for index, (autocrlf, eol) in enumerate((('false', 'lf'), ('true', 'crlf'),
+                                               ('input', 'native'))):
+            release.git(self.source, 'config', 'core.autocrlf', autocrlf)
+            release.git(self.source, 'config', 'core.eol', eol)
+            archive_path = self.root / f'config-{index}.tar'
+            hashes.append(release.source_archive(self.source, commit, '0.1.0', archive_path))
+            with tarfile.open(archive_path) as archive:
+                for name in ('lines.txt', 'empty.bin', 'binary.bin', 'README.md', 'VERSION'):
+                    self.assertEqual(archive.extractfile(f'NovaCoin-0.1.0/{name}').read(),
+                                     release.git(self.source, 'show', f'{commit}:{name}'))
+        self.assertEqual(len(set(hashes)), 1)
+
+    def test_archive_rejects_export_attributes_that_change_committed_content(self):
+        for index, (attribute, content) in enumerate((
+                ('export-ignore', b'committed but omitted\n'),
+                ('export-subst', b'$Format:%H$\n'),
+                ('text eol=crlf', b'committed LF\n'))):
+            with self.subTest(attribute=attribute):
+                release.git(self.source, 'config', 'core.autocrlf', 'false')
+                (self.source / '.gitattributes').write_bytes(f'example.txt {attribute}\n'.encode())
+                (self.source / 'example.txt').write_bytes(content)
+                self.commit()
+                archive = self.root / f'attribute-{index}.tar'
+                with self.assertRaises(ValueError):
+                    release.source_archive(self.source, release.identity(self.source),
+                                           '0.1.0', archive)
+                self.assertTrue(archive.is_file())  # Failed original retained, not repaired.
+
+    def test_archive_preserves_git_executable_bit(self):
+        (self.source / 'tool.sh').write_bytes(b'#!/bin/sh\nexit 0\n')
+        release.git(self.source, 'add', 'tool.sh')
+        release.git(self.source, 'update-index', '--chmod=+x', 'tool.sh')
+        release.git(self.source, '-c', 'commit.gpgsign=false', 'commit', '-m', 'executable fixture')
+        path = self.root / 'mode.tar'
+        release.source_archive(self.source, release.identity(self.source), '0.1.0', path)
+        with tarfile.open(path) as archive:
+            self.assertTrue(archive.getmember('NovaCoin-0.1.0/tool.sh').mode & 0o111)
+            self.assertFalse(archive.getmember('NovaCoin-0.1.0/VERSION').mode & 0o111)
+
     def test_signing_never_runs_in_ci_or_for_modified_payload(self):
         payload = self.root / 'payload.txt'
         payload.write_text('synthetic\n', encoding='utf-8')
