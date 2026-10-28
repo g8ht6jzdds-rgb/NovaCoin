@@ -130,3 +130,46 @@ Each family has positive, negative and boundary examples. See
 No signature generation or production changes are introduced. This does not
 close missing difficulty calculations/recovery, exhaustive signatures, full
 UTXO/reorg/failure-model evidence or human freeze acceptance.
+
+## CFD01–CFD15 / CFP01 approved clarification follow-up
+
+Baseline `0ecaec5ef299859cb76e90060cf17798aba6f711`; see
+[the decision-to-assertion trace](consensus-decision-coverage.md) for exact
+positive, negative and boundary bindings and explicit missing evidence.
+The original candidate references above are historical, not this follow-up's
+tested-head identity. No existing corpus hash or production behavior changes.
+
+Retarget exceptional-case proof, recovery adapter equivalence, unconditional
+failure atomicity, every-caller sentinel safety and Synchronizer no-retarget
+alignment remain open. The latter is a known conformance gap, not waived by
+ordinary REGTEST outcomes. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
+Historical failures and unavailable checks are not converted to passes.
+
+## Scoped public signature-fixture additions
+
+Base: `1b83e00f0e49a8703d0a6fef1291ccc538ca732e`. Protocol section references
+below identify normative clauses; NCV0 IDs identify existing ledger families,
+not claims of complete family coverage. Production behavior is unchanged.
+
+| Protocol / ledger clause | Valid control | Rejection case | Boundary evidence / limitation |
+| --- | --- | --- | --- |
+| §3 compressed key; NCV0-022 | Original valid public-key authorization | `signature_auth_key_prefix.ncpv`, exact 33-byte prefix04 | `OwnerCompressedKeyBoundaries` checks 32/33/34-byte key parsing; complete curve-point corpus remains partial |
+| §3 strict DER; NCV0-022 | Original valid signature | `signature_auth_der_tag.ncpv`, sequence tag31 | `OwnerDerScalarAndLowSBoundaries` covers public scalar/low-S boundaries; parser acceptance is not ECDSA validity |
+| §8 exactly two pushes; NCV0-017/022 | Original valid authorization | `signature_auth_trailing.ncpv`, one extra byte | `SignatureAuthorizationBindsSingleFaultMutations` checks exact mutation and restored transaction |
+| §8 signature push9..73; NCV0-017/022 | Original valid push71 | `signature_auth_push_below.ncpv` and `signature_auth_push_above.ncpv` | `SignatureAuthorizationRejectsAdjacentPushLengths` checks8/74; existing `CorpusPushBoundaries` covers rejecting9/73, not maximum-valid ECDSA |
+| §§7–8 supported locking condition; NCV0-017 | Original P2PKH fixture | `signature_auth_unsupported_lock.ncpv`, lock51 | Existing storage-then-spend test distinguishes output admission from spend authorization; zero-valued-output retention remains separately incomplete |
+| §§8–9 conservation and fee; NCV0-016 | Original input5,000,000,000/output4,900,000,000, fee100,000,000 | `signature_auth_amount_insufficient.ncpv`, input below output by1 | `signature_auth_amount_equal.ncpv` accepts equality/fee0; `SignatureAuthorizationPreimageAndReferencedAmount` checks exact golden preimage/digest and unchanged transaction/signature |
+
+All fourteen signature records replay in `SignatureAuthorizationCorpus` through
+the existing public validator and check a controlled two-coin view for mutation.
+The eight additional records preserve every original corpus hash. Amount-only
+records are supplied API coin contexts, not independently valid chain histories.
+No input-amount field is added to sighash; no script interpreter or selector is
+introduced. Full multi-input, maximum-valid signature, production-limit and
+failure-model evidence remain incomplete.
+
+Approved integer difficulty calculations still require reviewed complete
+ancestry/header fixtures before full adapter replay. Scaling-failure, ancestry,
+Synchronizer inheritance and atomicity contradictions remain open. No copied
+arithmetic helper or unreviewed profile substitutes for that evidence. Gate 1
+remains FAIL / NOT FROZEN; Gate 2 remains incomplete; MAINNET remains locked.

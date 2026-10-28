@@ -38,4 +38,19 @@ TEST(NetworkSelection, MainnetLockIsIndependentOfDeploymentParameterValidation)
     EXPECT_EQ(mainnet.parameters, nullptr);
 }
 
+TEST(NetworkSelection, OwnerUnknownNetworkNeverAdmitsFallback)
+{
+    for (const auto raw : {3U, 255U}) {
+        const auto selection =
+            nova::node::SelectNetwork(static_cast<nova::consensus::NetworkId>(raw));
+        EXPECT_NE(selection.error, nova::node::NetworkSelectionError::kNone);
+        EXPECT_EQ(selection.parameters, nullptr);
+    }
+    EXPECT_EQ(nova::node::SelectNetwork(nova::consensus::NetworkId::kRegtest).error,
+              nova::node::NetworkSelectionError::kNone);
+    EXPECT_EQ(nova::node::SelectNetwork(nova::consensus::NetworkId::kTestnet).error,
+              nova::node::NetworkSelectionError::kNone);
+    EXPECT_EQ(nova::node::SelectNetwork(nova::consensus::NetworkId::kMainnet).parameters, nullptr);
+}
+
 } // namespace
