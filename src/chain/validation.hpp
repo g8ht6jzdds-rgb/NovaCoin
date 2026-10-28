@@ -116,5 +116,11 @@ ComputeSignatureHash(const primitives::Transaction& transaction, std::size_t inp
                                                  UTXOSet& utxos) noexcept;
 [[nodiscard]] BlockValidationError DisconnectBlock(const ConnectedBlock& connected_block,
                                                    UTXOSet& utxos) noexcept;
+[[nodiscard]] BlockValidationResult ConnectBlock(const primitives::Block& block,
+                                                 const BlockValidationContext& context,
+                                                 const BlockValidationParams& parameters,
+                                                 UTXOBatch& utxos) noexcept;
+[[nodiscard]] BlockValidationError DisconnectBlock(const ConnectedBlock& connected_block,
+                                                   UTXOBatch& utxos) noexcept;
 
 } // namespace nova::chain

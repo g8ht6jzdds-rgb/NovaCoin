@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <set>
+#include <type_traits>
 #include <utility>
 
 namespace nova::chain
@@ -10,10 +11,20 @@ namespace nova::chain
 namespace
 {
 
+constexpr std::uint64_t NextRevision(const std::uint64_t value) noexcept
+{
+    return value == std::numeric_limits<std::uint64_t>::max() ? value : value + 1U;
+}
+static_assert(NextRevision(0U) == 1U);
+static_assert(NextRevision(std::numeric_limits<std::uint64_t>::max() - 1U) ==
+              std::numeric_limits<std::uint64_t>::max());
+static_assert(NextRevision(std::numeric_limits<std::uint64_t>::max()) ==
+              std::numeric_limits<std::uint64_t>::max());
+
 using Coins = std::map<UTXOKey, Coin>;
 using Delta = UTXODelta;
 
-[[nodiscard]] std::optional<Coin> GetCoinFromDelta(const Coins& base, const Delta& delta,
+[[nodiscard]] std::optional<Coin> GetCoinFromDelta(const UTXOView& base, const Delta& delta,
                                                    const UTXOKey& key)
 {
     const auto added = delta.additions.find(key);
@@ -23,17 +34,16 @@ using Delta = UTXODelta;
     if (delta.spends.contains(key)) {
         return std::nullopt;
     }
-    const auto found = base.find(key);
-    return found == base.end() ? std::nullopt : std::optional<Coin>{found->second};
+    return base.GetCoin(key);
 }
 
-[[nodiscard]] bool HaveCoinInDelta(const Coins& base, const Delta& delta,
+[[nodiscard]] bool HaveCoinInDelta(const UTXOView& base, const Delta& delta,
                                    const UTXOKey& key) noexcept
 {
-    return delta.additions.contains(key) || (!delta.spends.contains(key) && base.contains(key));
+    return delta.additions.contains(key) || (!delta.spends.contains(key) && base.HaveCoin(key));
 }
 
-[[nodiscard]] UTXOError ApplyToDelta(const Coins& base, Delta& delta,
+[[nodiscard]] UTXOError ApplyToDelta(const UTXOView& base, Delta& delta,
                                      const primitives::Transaction& transaction,
                                      const std::uint32_t height, const bool is_coinbase,
                                      const primitives::TransactionLimits& limits,
@@ -79,7 +89,7 @@ using Delta = UTXODelta;
         const UTXOKey key{*transaction_id, static_cast<std::uint32_t>(index)};
         // A transaction identifier must not recreate an output already present
         // in the base set, even if another transaction in this batch spends it.
-        if (base.contains(key) || delta.additions.contains(key)) {
+        if (base.HaveCoin(key) || delta.additions.contains(key)) {
             return UTXOError::kDuplicateCoin;
         }
         const auto inserted =
@@ -92,7 +102,7 @@ using Delta = UTXODelta;
     return UTXOError::kNone;
 }
 
-[[nodiscard]] UTXOError UndoOnDelta(const Coins& base, Delta& delta, const TransactionUndo& undo)
+[[nodiscard]] UTXOError UndoOnDelta(const UTXOView& base, Delta& delta, const TransactionUndo& undo)
 {
     for (const auto& key : undo.created_coins) {
         if (!GetCoinFromDelta(base, delta, key).has_value()) {
@@ -101,7 +111,7 @@ using Delta = UTXODelta;
         const auto added = delta.additions.find(key);
         if (added != delta.additions.end()) {
             delta.additions.erase(added);
-        } else if (!base.contains(key) || !delta.spends.emplace(key).second) {
+        } else if (!base.HaveCoin(key) || !delta.spends.emplace(key).second) {
             return UTXOError::kUndoMissingCreatedCoin;
         }
     }
@@ -109,7 +119,7 @@ using Delta = UTXODelta;
         if (GetCoinFromDelta(base, delta, spent.key).has_value()) {
             return UTXOError::kUndoExistingSpentCoin;
         }
-        if (base.contains(spent.key)) {
+        if (base.HaveCoin(spent.key)) {
             if (delta.spends.erase(spent.key) != 1U) {
                 return UTXOError::kUndoExistingSpentCoin;
             }
@@ -140,26 +150,58 @@ bool operator<(const UTXOKey& left, const UTXOKey& right) noexcept
     return left.output_index < right.output_index;
 }
 
-UTXOBatch::UTXOBatch(UTXOSet& base) noexcept : base_(base) {}
+UTXOBatch::UTXOBatch(UTXOSet& base) : base_(base), base_set_(&base), base_revision_(base.revision_)
+{
+}
+
+UTXOBatch::UTXOBatch(UTXOBatch& parent)
+    : base_(parent), parent_(&parent), parent_revision_(parent.revision_)
+{
+}
+
+UTXOBatch::UTXOBatch(UTXOBatch&& other) noexcept(std::is_nothrow_default_constructible_v<UTXODelta>)
+    : base_(other.base_), base_set_(other.base_set_), parent_(other.parent_),
+      revision_(other.revision_), parent_revision_(other.parent_revision_),
+      base_revision_(other.base_revision_), closed_(other.closed_)
+{
+    // Empty container construction can allocate (notably MSVC Debug).
+    // It finishes before touching the source; the following swaps cannot throw.
+    static_assert(std::is_nothrow_swappable_v<decltype(delta_.additions)>);
+    static_assert(std::is_nothrow_swappable_v<decltype(delta_.spends)>);
+    delta_.additions.swap(other.delta_.additions);
+    delta_.spends.swap(other.delta_.spends);
+    other.closed_ = true;
+}
+
+bool UTXOBatch::IsOpen() const noexcept
+{
+    if (closed_)
+        return false;
+    if (parent_ != nullptr)
+        return parent_->IsOpen() && parent_->revision_ == parent_revision_;
+    return base_set_ != nullptr && base_set_->revision_ == base_revision_ &&
+           base_set_->revision_ != std::numeric_limits<std::uint64_t>::max();
+}
 
 ApplyTransactionResult
 UTXOBatch::ApplyTransaction(const primitives::Transaction& transaction, const std::uint32_t height,
                             const bool is_coinbase,
                             const primitives::TransactionLimits& limits) noexcept
 {
-    if (closed_) {
+    if (!IsOpen() || revision_ == std::numeric_limits<std::uint64_t>::max()) {
         return ApplyTransactionResult{UTXOError::kBatchClosed, std::nullopt};
     }
     try {
         Delta proposed{delta_.additions, delta_.spends};
         TransactionUndo undo;
         const auto error =
-            ApplyToDelta(base_.coins_, proposed, transaction, height, is_coinbase, limits, undo);
+            ApplyToDelta(base_, proposed, transaction, height, is_coinbase, limits, undo);
         if (error != UTXOError::kNone) {
             return ApplyTransactionResult{error, std::nullopt};
         }
         delta_.additions.swap(proposed.additions);
         delta_.spends.swap(proposed.spends);
+        ++revision_;
         return ApplyTransactionResult{UTXOError::kNone, std::move(undo)};
     } catch (...) {
         return ApplyTransactionResult{UTXOError::kAllocationFailure, std::nullopt};
@@ -169,7 +211,7 @@ UTXOBatch::ApplyTransaction(const primitives::Transaction& transaction, const st
 std::optional<Coin> UTXOBatch::GetCoin(const UTXOKey& key) const
 {
     try {
-        return GetCoinFromDelta(base_.coins_, delta_, key);
+        return GetCoinFromDelta(base_, delta_, key);
     } catch (...) {
         return std::nullopt;
     }
@@ -177,22 +219,23 @@ std::optional<Coin> UTXOBatch::GetCoin(const UTXOKey& key) const
 
 bool UTXOBatch::HaveCoin(const UTXOKey& key) const noexcept
 {
-    return HaveCoinInDelta(base_.coins_, delta_, key);
+    return HaveCoinInDelta(base_, delta_, key);
 }
 
 UTXOError UTXOBatch::UndoTransaction(const TransactionUndo& undo) noexcept
 {
-    if (closed_) {
+    if (!IsOpen() || revision_ == std::numeric_limits<std::uint64_t>::max()) {
         return UTXOError::kBatchClosed;
     }
     try {
         Delta proposed{delta_.additions, delta_.spends};
-        const auto error = UndoOnDelta(base_.coins_, proposed, undo);
+        const auto error = UndoOnDelta(base_, proposed, undo);
         if (error != UTXOError::kNone) {
             return error;
         }
         delta_.additions.swap(proposed.additions);
         delta_.spends.swap(proposed.spends);
+        ++revision_;
         return UTXOError::kNone;
     } catch (...) {
         return UTXOError::kAllocationFailure;
@@ -201,35 +244,93 @@ UTXOError UTXOBatch::UndoTransaction(const TransactionUndo& undo) noexcept
 
 bool UTXOBatch::Commit() noexcept
 {
-    if (closed_) {
+    if (!IsOpen() || revision_ == std::numeric_limits<std::uint64_t>::max()) {
         return false;
     }
+    if (parent_ != nullptr) {
+        if (parent_->revision_ == std::numeric_limits<std::uint64_t>::max())
+            return false;
+        try {
+            for (const auto& key : delta_.spends)
+                if (!parent_->HaveCoin(key))
+                    return false;
+            for (const auto& [key, coin] : delta_.additions) {
+                (void)coin;
+                if (parent_->HaveCoin(key) && !delta_.spends.contains(key))
+                    return false;
+            }
+            // Copy only the accumulated transition delta, never the base set.
+            Delta proposed{parent_->delta_.additions, parent_->delta_.spends};
+            for (const auto& key : delta_.spends) {
+                proposed.additions.erase(key);
+                if (parent_->base_.HaveCoin(key))
+                    proposed.spends.emplace(key);
+            }
+            for (const auto& [key, coin] : delta_.additions) {
+                if (!proposed.additions.emplace(key, coin).second)
+                    return false;
+            }
+            parent_->delta_.additions.swap(proposed.additions);
+            parent_->delta_.spends.swap(proposed.spends);
+            ++parent_->revision_;
+            closed_ = true;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
     for (const auto& key : delta_.spends) {
-        if (!base_.coins_.contains(key)) {
+        if (!base_set_->coins_.contains(key)) {
             return false;
         }
     }
     for (const auto& [key, coin] : delta_.additions) {
         static_cast<void>(coin);
-        if (base_.coins_.contains(key) && !delta_.spends.contains(key)) {
+        if (base_set_->coins_.contains(key) && !delta_.spends.contains(key)) {
             return false;
         }
     }
     Coins removed;
     for (const auto& key : delta_.spends) {
-        auto node = base_.coins_.extract(key);
+        auto node = base_set_->coins_.extract(key);
         if (node.empty() || !removed.insert(std::move(node)).inserted) {
             return false;
         }
     }
     for (auto iterator = delta_.additions.begin(); iterator != delta_.additions.end();) {
         auto node = delta_.additions.extract(iterator++);
-        if (!base_.coins_.insert(std::move(node)).inserted) {
+        if (!base_set_->coins_.insert(std::move(node)).inserted) {
             return false;
         }
     }
+    base_set_->InvalidateBatches();
     closed_ = true;
     return true;
+}
+
+std::optional<UTXOBatch> UTXOBatch::BeginBatch() noexcept
+{
+    if (!IsOpen() || revision_ == std::numeric_limits<std::uint64_t>::max())
+        return std::nullopt;
+    try {
+        return UTXOBatch{*this};
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+UTXOError UTXOBatch::UndoBlock(const BlockUndo& undo) noexcept
+{
+    auto child = BeginBatch();
+    if (!child.has_value())
+        return UTXOError::kBatchClosed;
+    for (auto iterator = undo.transaction_undos.rbegin(); iterator != undo.transaction_undos.rend();
+         ++iterator) {
+        const auto error = child->UndoTransaction(*iterator);
+        if (error != UTXOError::kNone)
+            return error;
+    }
+    return child->Commit() ? UTXOError::kNone : UTXOError::kBatchClosed;
 }
 
 void UTXOBatch::Rollback() noexcept
@@ -240,6 +341,41 @@ void UTXOBatch::Rollback() noexcept
 std::size_t UTXOBatch::overlay_entry_count() const noexcept
 {
     return delta_.additions.size() + delta_.spends.size();
+}
+
+void UTXOSet::InvalidateBatches() noexcept
+{
+    revision_ = NextRevision(revision_);
+}
+
+UTXOSet::UTXOSet(const UTXOSet& other) : coins_(other.coins_) {}
+
+UTXOSet& UTXOSet::operator=(const UTXOSet& other)
+{
+    if (this != &other) {
+        auto proposed = other.coins_;
+        coins_.swap(proposed);
+        InvalidateBatches();
+    }
+    return *this;
+}
+
+UTXOSet::UTXOSet(UTXOSet&& other) noexcept(std::is_nothrow_default_constructible_v<Coins>)
+{
+    static_assert(std::is_nothrow_swappable_v<Coins>);
+    coins_.swap(other.coins_);
+    other.InvalidateBatches();
+}
+
+UTXOSet& UTXOSet::operator=(UTXOSet&& other) noexcept
+{
+    static_assert(std::is_nothrow_move_assignable_v<Coins>);
+    if (this != &other) {
+        coins_ = std::move(other.coins_);
+        InvalidateBatches();
+        other.InvalidateBatches();
+    }
+    return *this;
 }
 
 std::optional<Coin> UTXOSet::GetCoin(const UTXOKey& key) const
@@ -262,8 +398,13 @@ bool UTXOSet::HaveCoin(const UTXOKey& key) const noexcept
 
 bool UTXOSet::AddCoin(const UTXOKey& key, const Coin& coin) noexcept
 {
+    if (revision_ == std::numeric_limits<std::uint64_t>::max())
+        return false;
     try {
-        return coins_.emplace(key, coin).second;
+        const auto inserted = coins_.emplace(key, coin).second;
+        if (inserted)
+            InvalidateBatches();
+        return inserted;
     } catch (...) {
         return false;
     }
@@ -271,17 +412,22 @@ bool UTXOSet::AddCoin(const UTXOKey& key, const Coin& coin) noexcept
 
 std::optional<Coin> UTXOSet::SpendCoin(const UTXOKey& key) noexcept
 {
+    if (revision_ == std::numeric_limits<std::uint64_t>::max())
+        return std::nullopt;
     const auto found = coins_.find(key);
     if (found == coins_.end()) {
         return std::nullopt;
     }
     Coin coin = std::move(found->second);
     coins_.erase(found);
+    InvalidateBatches();
     return coin;
 }
 
 std::optional<UTXOBatch> UTXOSet::BeginBatch() noexcept
 {
+    if (revision_ == std::numeric_limits<std::uint64_t>::max())
+        return std::nullopt;
     try {
         return UTXOBatch{*this};
     } catch (...) {

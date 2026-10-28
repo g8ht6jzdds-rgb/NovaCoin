@@ -47,6 +47,332 @@ Transaction SpendingTransaction(const UTXOKey& input, const std::int64_t output_
         std::vector<TxOutput>{TxOutput{output_value, {0x51U}}}, 0U};
 }
 
+TEST(UTXONestedBatch, ChildCommitIsPrivateUntilOuterCommit)
+{
+    UTXOSet base;
+    const auto original = Key(90U, 0U);
+    ASSERT_TRUE(base.AddCoin(original, CoinWithValue(50)));
+    auto outer = base.BeginBatch();
+    ASSERT_TRUE(outer.has_value());
+    auto child = outer->BeginBatch();
+    ASSERT_TRUE(child.has_value());
+    const auto first = SpendingTransaction(original, 40);
+    const auto first_key = UTXOKey{first.TxId(kLimits).value(), 0U};
+    const auto applied = child->ApplyTransaction(first, 101U, false, kLimits);
+    ASSERT_EQ(applied.error, UTXOError::kNone);
+    ASSERT_TRUE(child->Commit());
+    EXPECT_TRUE(base.HaveCoin(original));
+    EXPECT_FALSE(base.HaveCoin(first_key));
+    EXPECT_FALSE(outer->HaveCoin(original));
+    EXPECT_TRUE(outer->HaveCoin(first_key));
+    auto next = outer->BeginBatch();
+    ASSERT_TRUE(next.has_value());
+    const auto second = SpendingTransaction(first_key, 30);
+    const auto last_key = UTXOKey{second.TxId(kLimits).value(), 0U};
+    ASSERT_EQ(next->ApplyTransaction(second, 102U, false, kLimits).error, UTXOError::kNone);
+    ASSERT_TRUE(next->Commit());
+    EXPECT_FALSE(outer->HaveCoin(first_key));
+    EXPECT_EQ(outer->overlay_entry_count(), 2U);
+    ASSERT_TRUE(outer->Commit());
+    EXPECT_EQ(base.size(), 1U);
+    EXPECT_FALSE(base.HaveCoin(original));
+    EXPECT_FALSE(base.HaveCoin(first_key));
+    const auto final = base.GetCoin(last_key);
+    ASSERT_TRUE(final.has_value());
+    EXPECT_EQ(final->output.value, 30);
+    EXPECT_EQ(final->height, 102U);
+    EXPECT_FALSE(outer->Commit());
+}
+
+TEST(UTXONestedBatch, AbortUndoAndStaleChildrenDoNotPublishPartialState)
+{
+    UTXOSet base;
+    const auto original = Key(91U, 0U);
+    ASSERT_TRUE(base.AddCoin(original, CoinWithValue(50)));
+    const auto transaction = SpendingTransaction(original, 40);
+    const auto created = UTXOKey{transaction.TxId(kLimits).value(), 0U};
+    auto outer = base.BeginBatch();
+    ASSERT_TRUE(outer.has_value());
+    auto child = outer->BeginBatch();
+    auto stale = outer->BeginBatch();
+    ASSERT_TRUE(child.has_value());
+    ASSERT_TRUE(stale.has_value());
+    const auto applied = child->ApplyTransaction(transaction, 101U, false, kLimits);
+    ASSERT_EQ(applied.error, UTXOError::kNone);
+    ASSERT_TRUE(applied.undo.has_value());
+    ASSERT_TRUE(child->Commit());
+    EXPECT_FALSE(stale->Commit());
+    EXPECT_EQ(stale->ApplyTransaction(transaction, 101U, false, kLimits).error,
+              UTXOError::kBatchClosed);
+    auto undo = outer->BeginBatch();
+    ASSERT_TRUE(undo.has_value());
+    ASSERT_EQ(undo->UndoTransaction(*applied.undo), UTXOError::kNone);
+    ASSERT_TRUE(undo->Commit());
+    EXPECT_TRUE(outer->HaveCoin(original));
+    EXPECT_FALSE(outer->HaveCoin(created));
+    ASSERT_TRUE(outer->Commit());
+    EXPECT_EQ(base.size(), 1U);
+    const auto restored = base.GetCoin(original);
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->output.value, 50);
+    EXPECT_EQ(restored->height, 100U);
+    auto aborted = base.BeginBatch();
+    ASSERT_TRUE(aborted.has_value());
+    auto nested = aborted->BeginBatch();
+    ASSERT_TRUE(nested.has_value());
+    ASSERT_EQ(nested->ApplyTransaction(transaction, 101U, false, kLimits).error, UTXOError::kNone);
+    aborted->Rollback();
+    EXPECT_FALSE(nested->Commit());
+    EXPECT_FALSE(aborted->BeginBatch().has_value());
+    EXPECT_TRUE(base.HaveCoin(original));
+    EXPECT_FALSE(base.HaveCoin(created));
+}
+
+TEST(UTXONestedBatch, SpendingBaseOutpointDoesNotPermitInBlockCollision)
+{
+    UTXOSet base;
+    const auto original = Key(92U, 0U);
+    ASSERT_TRUE(base.AddCoin(original, CoinWithValue(50)));
+    const auto creates_collision = SpendingTransaction(original, 40);
+    const auto collision = UTXOKey{creates_collision.TxId(kLimits).value(), 0U};
+    ASSERT_TRUE(base.AddCoin(collision, CoinWithValue(10)));
+    auto parent = base.BeginBatch();
+    ASSERT_TRUE(parent.has_value());
+    auto child = parent->BeginBatch();
+    ASSERT_TRUE(child.has_value());
+    const auto spends_collision = SpendingTransaction(collision, 9);
+    ASSERT_EQ(child->ApplyTransaction(spends_collision, 101U, false, kLimits).error,
+              UTXOError::kNone);
+    const auto entries = child->overlay_entry_count();
+    EXPECT_EQ(child->ApplyTransaction(creates_collision, 101U, false, kLimits).error,
+              UTXOError::kDuplicateCoin);
+    EXPECT_EQ(child->overlay_entry_count(), entries);
+    EXPECT_TRUE(child->HaveCoin(original));
+    EXPECT_FALSE(child->HaveCoin(collision));
+    child->Rollback();
+    EXPECT_EQ(parent->overlay_entry_count(), 0U);
+    ASSERT_TRUE(parent->Commit());
+    EXPECT_EQ(base.size(), 2U);
+    EXPECT_TRUE(base.HaveCoin(original));
+    EXPECT_TRUE(base.HaveCoin(collision));
+}
+
+TEST(UTXONestedBatch, MultilevelCompositionMatchesFlatApplyUndoAndAbort)
+{
+    for (const bool commit : {false, true}) {
+        UTXOSet published;
+        UTXOSet reference;
+        std::vector<UTXOKey> keys;
+        for (const auto marker : {100U, 101U, 102U, 103U}) {
+            const auto key = Key(static_cast<std::uint8_t>(marker), 0U);
+            ASSERT_TRUE(published.AddCoin(key, CoinWithValue(50)));
+            ASSERT_TRUE(reference.AddCoin(key, CoinWithValue(50)));
+            keys.push_back(key);
+        }
+        auto outer = published.BeginBatch();
+        ASSERT_TRUE(outer.has_value());
+        std::vector<nova::chain::TransactionUndo> undo_stack;
+        const auto compare_view = [&]() {
+            for (const auto& key : keys) {
+                const auto expected = reference.GetCoin(key);
+                const auto actual = outer->GetCoin(key);
+                ASSERT_EQ(actual.has_value(), expected.has_value());
+                EXPECT_EQ(outer->HaveCoin(key), reference.HaveCoin(key));
+                if (actual.has_value()) {
+                    EXPECT_EQ(actual->output.value, expected->output.value);
+                    EXPECT_EQ(actual->output.script_pubkey, expected->output.script_pubkey);
+                    EXPECT_EQ(actual->height, expected->height);
+                    EXPECT_EQ(actual->is_coinbase, expected->is_coinbase);
+                }
+            }
+        };
+        for (unsigned step = 0U; step < 24U; ++step) {
+            SCOPED_TRACE(step);
+            auto child = outer->BeginBatch();
+            ASSERT_TRUE(child.has_value());
+            auto nested = child->BeginBatch();
+            ASSERT_TRUE(nested.has_value());
+            if (step % 3U == 2U && !undo_stack.empty()) {
+                const nova::chain::BlockUndo undo{{undo_stack.back()}};
+                ASSERT_EQ(reference.UndoBlock(undo), UTXOError::kNone);
+                ASSERT_EQ(nested->UndoBlock(undo), UTXOError::kNone);
+                undo_stack.pop_back();
+            } else {
+                UTXOKey input = Key(255U, 0U); // deliberately missing every fifth step
+                if (step % 5U != 0U) {
+                    bool found = false;
+                    for (const auto& key : keys) {
+                        if (reference.HaveCoin(key)) {
+                            input = key;
+                            found = true;
+                            break;
+                        }
+                    }
+                    ASSERT_TRUE(found);
+                }
+                const auto coin = reference.GetCoin(input);
+                const auto value = coin.has_value() ? coin->output.value - 1 : 1;
+                const auto transaction = SpendingTransaction(input, value);
+                keys.push_back({transaction.TxId(kLimits).value(), 0U});
+                const auto expected =
+                    reference.ApplyTransaction(transaction, 101U + step, false, kLimits);
+                const auto actual =
+                    nested->ApplyTransaction(transaction, 101U + step, false, kLimits);
+                ASSERT_EQ(actual.error, expected.error);
+                if (expected.error != UTXOError::kNone) {
+                    EXPECT_EQ(expected.error, UTXOError::kMissingInput);
+                    nested->Rollback();
+                    child->Rollback();
+                    compare_view();
+                    continue;
+                }
+                ASSERT_TRUE(expected.undo.has_value());
+                undo_stack.push_back(*expected.undo);
+            }
+            ASSERT_TRUE(nested->Commit());
+            ASSERT_TRUE(child->Commit());
+            compare_view();
+            EXPECT_EQ(published.size(), 4U);
+            for (std::size_t i = 0U; i < 4U; ++i) {
+                const auto original = published.GetCoin(keys[i]);
+                ASSERT_TRUE(original.has_value());
+                EXPECT_EQ(original->output.value, 50);
+            }
+        }
+        if (commit) {
+            ASSERT_TRUE(outer->Commit());
+            EXPECT_EQ(published.size(), reference.size());
+            for (const auto& key : keys) {
+                const auto actual = published.GetCoin(key);
+                const auto expected = reference.GetCoin(key);
+                ASSERT_EQ(actual.has_value(), expected.has_value());
+                if (actual.has_value()) {
+                    EXPECT_EQ(actual->output.value, expected->output.value);
+                    EXPECT_EQ(actual->output.script_pubkey, expected->output.script_pubkey);
+                    EXPECT_EQ(actual->height, expected->height);
+                    EXPECT_EQ(actual->is_coinbase, expected->is_coinbase);
+                }
+            }
+        } else {
+            outer->Rollback();
+            EXPECT_EQ(published.size(), 4U);
+            for (std::size_t i = 0U; i < 4U; ++i)
+                EXPECT_TRUE(published.HaveCoin(keys[i]));
+        }
+    }
+}
+
+TEST(UTXOBatchGeneration, ReplacementOfLiveCoinInvalidatesStagedSpend)
+{
+    UTXOSet base;
+    const auto input = Key(93U, 0U);
+    ASSERT_TRUE(base.AddCoin(input, CoinWithValue(50)));
+    auto staged = base.BeginBatch();
+    ASSERT_TRUE(staged.has_value());
+    const auto transaction = SpendingTransaction(input, 40);
+    const auto created = UTXOKey{transaction.TxId(kLimits).value(), 0U};
+    ASSERT_EQ(staged->ApplyTransaction(transaction, 101U, false, kLimits).error, UTXOError::kNone);
+    auto nested = staged->BeginBatch();
+    ASSERT_TRUE(nested.has_value());
+    ASSERT_TRUE(base.SpendCoin(input).has_value());
+    ASSERT_TRUE(base.AddCoin(input, CoinWithValue(1)));
+    EXPECT_FALSE(staged->Commit());
+    EXPECT_FALSE(nested->Commit());
+    EXPECT_FALSE(staged->BeginBatch().has_value());
+    EXPECT_FALSE(base.HaveCoin(created));
+    ASSERT_EQ(base.size(), 1U);
+    const auto replacement = base.GetCoin(input);
+    ASSERT_TRUE(replacement.has_value());
+    EXPECT_EQ(replacement->output.value, 1);
+}
+
+TEST(UTXOBatchGeneration, SiblingCommitInvalidatesOtherOpenBatches)
+{
+    UTXOSet base;
+    const auto first_key = Key(94U, 0U);
+    const auto second_key = Key(95U, 0U);
+    ASSERT_TRUE(base.AddCoin(first_key, CoinWithValue(50)));
+    ASSERT_TRUE(base.AddCoin(second_key, CoinWithValue(50)));
+    auto first = base.BeginBatch();
+    auto stale = base.BeginBatch();
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(stale.has_value());
+    const auto first_tx = SpendingTransaction(first_key, 40);
+    const auto stale_tx = SpendingTransaction(second_key, 40);
+    ASSERT_EQ(first->ApplyTransaction(first_tx, 101U, false, kLimits).error, UTXOError::kNone);
+    ASSERT_EQ(stale->ApplyTransaction(stale_tx, 101U, false, kLimits).error, UTXOError::kNone);
+    ASSERT_TRUE(first->Commit());
+    EXPECT_FALSE(stale->Commit());
+    EXPECT_EQ(stale->ApplyTransaction(stale_tx, 102U, false, kLimits).error,
+              UTXOError::kBatchClosed);
+    EXPECT_TRUE(base.HaveCoin(second_key));
+    EXPECT_FALSE(base.HaveCoin({stale_tx.TxId(kLimits).value(), 0U}));
+}
+
+TEST(UTXOBatchGeneration, AssignmentAndMoveInvalidatePriorOwners)
+{
+    for (const bool move : {false, true}) {
+        UTXOSet base;
+        UTXOSet replacement;
+        const auto input = Key(96U, 0U);
+        ASSERT_TRUE(base.AddCoin(input, CoinWithValue(50)));
+        ASSERT_TRUE(replacement.AddCoin(input, CoinWithValue(1)));
+        auto stale = base.BeginBatch();
+        ASSERT_TRUE(stale.has_value());
+        const auto transaction = SpendingTransaction(input, 40);
+        ASSERT_EQ(stale->ApplyTransaction(transaction, 101U, false, kLimits).error,
+                  UTXOError::kNone);
+        if (move)
+            base = std::move(replacement);
+        else
+            base = replacement;
+        EXPECT_FALSE(stale->Commit());
+        const auto actual = base.GetCoin(input);
+        ASSERT_TRUE(actual.has_value());
+        EXPECT_EQ(actual->output.value, 1);
+        EXPECT_FALSE(base.HaveCoin({transaction.TxId(kLimits).value(), 0U}));
+    }
+    UTXOSet source;
+    const auto key = Key(97U, 0U);
+    ASSERT_TRUE(source.AddCoin(key, CoinWithValue(50)));
+    auto stale_source = source.BeginBatch();
+    ASSERT_TRUE(stale_source.has_value());
+    const auto transaction = SpendingTransaction(key, 40);
+    ASSERT_EQ(stale_source->ApplyTransaction(transaction, 101U, false, kLimits).error,
+              UTXOError::kNone);
+    UTXOSet moved{std::move(source)};
+    ASSERT_TRUE(source.AddCoin(key, CoinWithValue(1)));
+    EXPECT_FALSE(stale_source->Commit());
+    EXPECT_TRUE(source.HaveCoin(key));
+    const auto moved_coin = moved.GetCoin(key);
+    ASSERT_TRUE(moved_coin.has_value());
+    EXPECT_EQ(moved_coin->output.value, 50);
+}
+
+TEST(UTXOBatchGeneration, NoChangeAndMovedFromBatchesCannotInvalidateNewOwner)
+{
+    UTXOSet base;
+    const auto input = Key(98U, 0U);
+    ASSERT_TRUE(base.AddCoin(input, CoinWithValue(50)));
+    auto batch = base.BeginBatch();
+    ASSERT_TRUE(batch.has_value());
+    const auto transaction = SpendingTransaction(input, 40);
+    const auto created = UTXOKey{transaction.TxId(kLimits).value(), 0U};
+    ASSERT_EQ(batch->ApplyTransaction(transaction, 101U, false, kLimits).error, UTXOError::kNone);
+    EXPECT_FALSE(base.AddCoin(input, CoinWithValue(1)));
+    EXPECT_FALSE(base.SpendCoin(Key(99U, 0U)).has_value());
+    UTXOSet copy{base};
+    EXPECT_TRUE(copy.HaveCoin(input));
+    nova::chain::UTXOBatch owner{std::move(*batch)};
+    EXPECT_FALSE(batch->Commit());
+    EXPECT_FALSE(batch->BeginBatch().has_value());
+    ASSERT_TRUE(owner.Commit());
+    EXPECT_FALSE(base.HaveCoin(input));
+    EXPECT_TRUE(base.HaveCoin(created));
+    EXPECT_TRUE(copy.HaveCoin(input));
+    EXPECT_FALSE(copy.HaveCoin(created));
+}
+
 TEST(UTXOSetBasics, CreatesDeletesAndFindsCoins)
 {
     UTXOSet set;

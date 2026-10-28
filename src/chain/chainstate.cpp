@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <new>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -190,7 +191,142 @@ std::unique_ptr<ChainState> ChainState::Create(ChainStateParams parameters, Chai
     }
 }
 
+const BlockIndex* ChainState::FindIndex(const crypto::Hash256& hash) const noexcept
+{
+    if (erased_indexes_.contains(hash))
+        return nullptr;
+    const auto edited = indexes_.find(hash);
+    if (edited != indexes_.end())
+        return &edited->second;
+    if (base_indexes_ == nullptr)
+        return nullptr;
+    const auto original = base_indexes_->find(hash);
+    return original == base_indexes_->end() ? nullptr : &original->second;
+}
+
+BlockIndex* ChainState::EditIndex(const crypto::Hash256& hash)
+{
+    const auto edited = indexes_.find(hash);
+    if (edited != indexes_.end())
+        return &edited->second;
+    const auto* original = FindIndex(hash);
+    if (original == nullptr)
+        return nullptr;
+    return &indexes_.emplace(hash, *original).first->second;
+}
+
+void ChainState::EraseIndex(const crypto::Hash256& hash)
+{
+    if (base_indexes_ != nullptr && base_indexes_->contains(hash))
+        erased_indexes_.insert(hash);
+    indexes_.erase(hash);
+}
+
+template <typename Visitor> void ChainState::ForEachIndex(Visitor&& visitor) const
+{
+    if (base_indexes_ != nullptr) {
+        for (const auto& [hash, index] : *base_indexes_)
+            if (!erased_indexes_.contains(hash) && !indexes_.contains(hash))
+                visitor(hash, index);
+    }
+    for (const auto& [hash, index] : indexes_)
+        visitor(hash, index);
+}
+
+void ChainState::SetFailurePointForTesting(const FailurePoint point) noexcept
+{
+    failure_point_ = point;
+}
+
+template <typename Operation>
+ChainResult ChainState::ApplyAtomically(Operation&& operation,
+                                        const std::optional<crypto::Hash256> failure_hash) noexcept
+{
+    const auto failure = std::exchange(failure_point_, FailurePoint::kNone);
+    try {
+        if (failure == FailurePoint::kBeforeStaging)
+            throw std::bad_alloc{};
+        auto transition_utxos = utxos_.BeginBatch();
+        if (!transition_utxos.has_value())
+            return {ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash};
+        ChainState staged{parameters_, utxos_, {}, active_chain_.tip(), active_chain_.height()};
+        staged.base_indexes_ = &indexes_;
+        staged.transition_utxos_ = &*transition_utxos;
+        if (failure == FailurePoint::kAfterCopy)
+            throw std::bad_alloc{};
+        const auto result = operation(staged);
+        if (result.error != ChainError::kNone)
+            return result;
+        if (failure == FailurePoint::kAfterTransition)
+            throw std::bad_alloc{};
+        // Stable component addresses and the live UTXO reference are retained.
+        // No allocation, callbacks or I/O may occur within publication.
+        static_assert(std::is_nothrow_swappable_v<BlockIndex>);
+        static_assert(std::allocator_traits<Indexes::allocator_type>::is_always_equal::value);
+        static_assert(noexcept(HashLess{}(crypto::Hash256{}, crypto::Hash256{})));
+        static_assert(std::is_nothrow_copy_assignable_v<Chain>);
+        for (const auto& hash : staged.erased_indexes_) {
+            if (!indexes_.contains(hash) || staged.indexes_.contains(hash))
+                return {ChainError::kContextFailure, BlockValidationError::kInvalidContext,
+                        failure_hash};
+        }
+        if (!transition_utxos->Commit())
+            return {ChainError::kStateConnectFailure,
+                    BlockValidationError::kStateApplicationFailure, failure_hash};
+        for (const auto& hash : staged.erased_indexes_)
+            indexes_.erase(hash);
+        for (auto iterator = staged.indexes_.begin(); iterator != staged.indexes_.end();) {
+            const auto original = indexes_.find(iterator->first);
+            if (original != indexes_.end()) {
+                using std::swap;
+                swap(original->second, iterator->second);
+                ++iterator;
+            } else {
+                // Same allocator and unique staged keys: no allocation/collision.
+                auto node = staged.indexes_.extract(iterator++);
+                indexes_.insert(std::move(node));
+            }
+        }
+        active_chain_ = staged.active_chain_;
+        return result;
+    } catch (...) {
+        return {ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash};
+    }
+}
+
 ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
+{
+    const auto hash = primitives::ComputeBlockHash(block.header);
+    if (!hash.has_value())
+        return {ChainError::kBlockHashFailure, BlockValidationError::kBlockHashFailure,
+                std::nullopt};
+    // Common hostile/duplicate requests must not force a whole-state copy.
+    const auto parent = FindIndex(block.header.previous_block_id);
+    if (parent == nullptr || !IsUsableStatus(parent->status))
+        return {ChainError::kUnknownParent, BlockValidationError::kNone, *hash};
+    if (FindIndex(*hash) != nullptr)
+        return {ChainError::kDuplicateBlock, BlockValidationError::kNone, *hash};
+    return ApplyAtomically([&block](ChainState& staged) { return staged.AcceptBlockStaged(block); },
+                           hash);
+}
+
+ChainResult ChainState::ActivateBestChain() noexcept
+{
+    return ApplyAtomically([](ChainState& staged) { return staged.ActivateBestChainStaged(); },
+                           std::nullopt);
+}
+
+ChainResult ChainState::RollbackAcceptedBlock(const crypto::Hash256& block_hash,
+                                              const crypto::Hash256& previous_tip) noexcept
+{
+    return ApplyAtomically(
+        [&block_hash, &previous_tip](ChainState& staged) {
+            return staged.RollbackAcceptedBlockStaged(block_hash, previous_tip);
+        },
+        block_hash);
+}
+
+ChainResult ChainState::AcceptBlockStaged(const primitives::Block& block) noexcept
 {
     const auto hash = primitives::ComputeBlockHash(block.header);
     if (!hash.has_value()) {
@@ -198,14 +334,14 @@ ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
                 std::nullopt};
     }
     try {
-        const auto parent_iterator = indexes_.find(block.header.previous_block_id);
-        if (parent_iterator == indexes_.end() || !IsUsableStatus(parent_iterator->second.status)) {
+        const auto* parent = FindIndex(block.header.previous_block_id);
+        if (parent == nullptr || !IsUsableStatus(parent->status)) {
             return {ChainError::kUnknownParent, BlockValidationError::kNone, *hash};
         }
-        if (indexes_.contains(*hash)) {
+        if (FindIndex(*hash) != nullptr) {
             return {ChainError::kDuplicateBlock, BlockValidationError::kNone, *hash};
         }
-        if (parent_iterator->second.height == std::numeric_limits<std::uint32_t>::max()) {
+        if (parent->height == std::numeric_limits<std::uint32_t>::max()) {
             return {ChainError::kHeightOverflow, BlockValidationError::kNone, *hash};
         }
         const auto target = consensus::TargetFromCompact(
@@ -217,15 +353,15 @@ ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
         if (!work.has_value()) {
             return {ChainError::kWorkCalculationFailure, BlockValidationError::kNone, *hash};
         }
-        auto chain_work = parent_iterator->second.chain_work;
+        auto chain_work = parent->chain_work;
         if (!chain_work.Add(*work)) {
             return {ChainError::kChainWorkOverflow, BlockValidationError::kNone, *hash};
         }
-        const auto context = BuildContext(parent_iterator->second, block.header.time);
+        const auto context = BuildContext(*parent, block.header.time);
         if (!context.has_value()) {
             return {ChainError::kContextFailure, BlockValidationError::kInvalidContext, *hash};
         }
-        const auto expected_bits = ExpectedBits(parent_iterator->second, block.header.time);
+        const auto expected_bits = ExpectedBits(*parent, block.header.time);
         if (!expected_bits.has_value()) {
             return {ChainError::kContextFailure, BlockValidationError::kInvalidContext, *hash};
         }
@@ -239,41 +375,42 @@ ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
         }
 
         const auto inserted = indexes_.emplace(
-            *hash,
-            BlockIndex{*hash, block.header.previous_block_id, parent_iterator->second.height + 1U,
-                       block.header.time, block.header.bits, *target.target, *work, chain_work,
-                       BlockStatus::kPending, block, std::nullopt, 0U});
+            *hash, BlockIndex{*hash, block.header.previous_block_id, parent->height + 1U,
+                              block.header.time, block.header.bits, *target.target, *work,
+                              chain_work, BlockStatus::kPending, block, std::nullopt, 0U});
         if (!inserted.second) {
             return {ChainError::kAllocationFailure, BlockValidationError::kNone, *hash};
         }
 
         const auto original_tip = active_chain_.tip();
-        const auto parent_hash = parent_iterator->first;
+        const auto parent_hash = parent->hash;
         const auto to_parent = ReorganizeChain(parent_hash);
         if (to_parent.error != ChainError::kNone) {
-            indexes_.erase(*hash);
+            EraseIndex(*hash);
             return to_parent;
         }
-        auto candidate_iterator = indexes_.find(*hash);
-        const auto connected = ConnectIndexedBlock(candidate_iterator->second);
+        auto* candidate = EditIndex(*hash);
+        if (candidate == nullptr)
+            return {ChainError::kUnknownBlock, BlockValidationError::kNone, *hash};
+        const auto connected = ConnectIndexedBlock(*candidate);
         if (connected.error != ChainError::kNone) {
-            indexes_.erase(candidate_iterator);
+            EraseIndex(*hash);
             const auto restored = ReorganizeChain(original_tip);
             if (restored.error != ChainError::kNone) {
                 return {ChainError::kRollbackFailure, restored.validation_error, *hash};
             }
             return connected;
         }
-        candidate_iterator->second.status = BlockStatus::kActive;
-        active_chain_.SetTip(*hash, candidate_iterator->second.height);
+        candidate->status = BlockStatus::kActive;
+        active_chain_.SetTip(*hash, candidate->height);
         MarkActiveChain();
-        const auto activation = ActivateBestChain();
+        const auto activation = ActivateBestChainStaged();
         if (activation.error != ChainError::kNone) {
             const auto restored = ReorganizeChain(original_tip);
             if (restored.error != ChainError::kNone) {
                 return {ChainError::kRollbackFailure, restored.validation_error, *hash};
             }
-            indexes_.erase(*hash);
+            EraseIndex(*hash);
             return activation;
         }
         return {ChainError::kNone, BlockValidationError::kNone, *hash,
@@ -283,19 +420,17 @@ ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
     }
 }
 
-ChainResult ChainState::ActivateBestChain() noexcept
+ChainResult ChainState::ActivateBestChainStaged() noexcept
 {
     try {
         const BlockIndex* best = nullptr;
-        for (const auto& [hash, index] : indexes_) {
-            if (!IsUsableStatus(index.status)) {
-                continue;
-            }
+        ForEachIndex([&](const crypto::Hash256& hash, const BlockIndex& index) {
+            if (!IsUsableStatus(index.status))
+                return;
             if (best == nullptr || best->chain_work < index.chain_work ||
-                (best->chain_work == index.chain_work && HashLess{}(hash, best->hash))) {
+                (best->chain_work == index.chain_work && HashLess{}(hash, best->hash)))
                 best = &index;
-            }
-        }
+        });
         if (best == nullptr) {
             return {ChainError::kUnknownBlock, BlockValidationError::kNone, std::nullopt};
         }
@@ -305,26 +440,27 @@ ChainResult ChainState::ActivateBestChain() noexcept
     }
 }
 
-ChainResult ChainState::RollbackAcceptedBlock(const crypto::Hash256& block_hash,
-                                              const crypto::Hash256& previous_tip) noexcept
+ChainResult ChainState::RollbackAcceptedBlockStaged(const crypto::Hash256& block_hash,
+                                                    const crypto::Hash256& previous_tip) noexcept
 {
     try {
-        const auto candidate = indexes_.find(block_hash);
-        const auto previous = indexes_.find(previous_tip);
-        if (candidate == indexes_.end() || previous == indexes_.end()) {
+        const auto candidate = FindIndex(block_hash);
+        const auto previous = FindIndex(previous_tip);
+        if (candidate == nullptr || previous == nullptr) {
             return {ChainError::kUnknownBlock, BlockValidationError::kNone, block_hash};
         }
         const auto restore = ReorganizeChain(previous_tip);
         if (restore.error != ChainError::kNone) {
             return restore;
         }
-        for (const auto& [hash, index] : indexes_) {
-            if (index.previous_hash == block_hash) {
-                return {ChainError::kReorganizationFailure, BlockValidationError::kNone,
-                        block_hash};
-            }
-        }
-        indexes_.erase(candidate);
+        bool has_descendant = false;
+        ForEachIndex([&](const crypto::Hash256&, const BlockIndex& index) {
+            if (index.previous_hash == block_hash)
+                has_descendant = true;
+        });
+        if (has_descendant)
+            return {ChainError::kReorganizationFailure, BlockValidationError::kNone, block_hash};
+        EraseIndex(block_hash);
         MarkActiveChain();
         return {ChainError::kNone, BlockValidationError::kNone, block_hash};
     } catch (...) {
@@ -335,35 +471,35 @@ ChainResult ChainState::RollbackAcceptedBlock(const crypto::Hash256& block_hash,
 std::optional<crypto::Hash256> ChainState::FindFork(const crypto::Hash256& left,
                                                     const crypto::Hash256& right) const noexcept
 {
-    const auto left_initial = indexes_.find(left);
-    const auto right_initial = indexes_.find(right);
-    if (left_initial == indexes_.end() || right_initial == indexes_.end()) {
+    const auto left_initial = FindIndex(left);
+    const auto right_initial = FindIndex(right);
+    if (left_initial == nullptr || right_initial == nullptr) {
         return std::nullopt;
     }
-    const BlockIndex* left_index = &left_initial->second;
-    const BlockIndex* right_index = &right_initial->second;
+    const BlockIndex* left_index = left_initial;
+    const BlockIndex* right_index = right_initial;
     while (left_index->height > right_index->height) {
-        const auto parent = indexes_.find(left_index->previous_hash);
-        if (parent == indexes_.end()) {
+        const auto parent = FindIndex(left_index->previous_hash);
+        if (parent == nullptr) {
             return std::nullopt;
         }
-        left_index = &parent->second;
+        left_index = parent;
     }
     while (right_index->height > left_index->height) {
-        const auto parent = indexes_.find(right_index->previous_hash);
-        if (parent == indexes_.end()) {
+        const auto parent = FindIndex(right_index->previous_hash);
+        if (parent == nullptr) {
             return std::nullopt;
         }
-        right_index = &parent->second;
+        right_index = parent;
     }
     while (left_index->hash != right_index->hash) {
-        const auto left_parent = indexes_.find(left_index->previous_hash);
-        const auto right_parent = indexes_.find(right_index->previous_hash);
-        if (left_parent == indexes_.end() || right_parent == indexes_.end()) {
+        const auto left_parent = FindIndex(left_index->previous_hash);
+        const auto right_parent = FindIndex(right_index->previous_hash);
+        if (left_parent == nullptr || right_parent == nullptr) {
             return std::nullopt;
         }
-        left_index = &left_parent->second;
-        right_index = &right_parent->second;
+        left_index = left_parent;
+        right_index = right_parent;
     }
     return left_index->hash;
 }
@@ -371,8 +507,8 @@ std::optional<crypto::Hash256> ChainState::FindFork(const crypto::Hash256& left,
 ChainResult ChainState::ReorganizeChain(const crypto::Hash256& new_tip) noexcept
 {
     try {
-        const auto target_iterator = indexes_.find(new_tip);
-        if (target_iterator == indexes_.end() || !IsUsableStatus(target_iterator->second.status)) {
+        const auto target_iterator = FindIndex(new_tip);
+        if (target_iterator == nullptr || !IsUsableStatus(target_iterator->status)) {
             return {ChainError::kUnknownBlock, BlockValidationError::kNone, new_tip};
         }
         if (new_tip == active_chain_.tip()) {
@@ -387,33 +523,36 @@ ChainResult ChainState::ReorganizeChain(const crypto::Hash256& new_tip) noexcept
         auto cursor = active_chain_.tip();
         while (cursor != *fork) {
             disconnect_path.push_back(cursor);
-            const auto current = indexes_.find(cursor);
-            if (current == indexes_.end()) {
+            const auto current = FindIndex(cursor);
+            if (current == nullptr) {
                 return {ChainError::kReorganizationFailure, BlockValidationError::kNone, new_tip};
             }
-            cursor = current->second.previous_hash;
+            cursor = current->previous_hash;
         }
         std::vector<crypto::Hash256> connect_path;
         cursor = new_tip;
         while (cursor != *fork) {
             connect_path.push_back(cursor);
-            const auto current = indexes_.find(cursor);
-            if (current == indexes_.end()) {
+            const auto current = FindIndex(cursor);
+            if (current == nullptr) {
                 return {ChainError::kReorganizationFailure, BlockValidationError::kNone, new_tip};
             }
-            cursor = current->second.previous_hash;
+            cursor = current->previous_hash;
         }
         std::reverse(connect_path.begin(), connect_path.end());
 
         std::vector<crypto::Hash256> disconnected;
         for (const auto& hash : disconnect_path) {
-            auto index = indexes_.find(hash);
-            const auto error = DisconnectIndexedBlock(index->second);
+            auto* index = EditIndex(hash);
+            if (index == nullptr)
+                return {ChainError::kReorganizationFailure, BlockValidationError::kNone, new_tip};
+            const auto error = DisconnectIndexedBlock(*index);
             if (error != ChainError::kNone) {
                 for (auto iterator = disconnected.rbegin(); iterator != disconnected.rend();
                      ++iterator) {
-                    auto restore = indexes_.find(*iterator);
-                    if (ConnectIndexedBlock(restore->second).error != ChainError::kNone) {
+                    auto* restore = EditIndex(*iterator);
+                    if (restore == nullptr ||
+                        ConnectIndexedBlock(*restore).error != ChainError::kNone) {
                         return {ChainError::kRollbackFailure, BlockValidationError::kNone, new_tip};
                     }
                 }
@@ -424,19 +563,23 @@ ChainResult ChainState::ReorganizeChain(const crypto::Hash256& new_tip) noexcept
 
         std::vector<crypto::Hash256> connected;
         for (const auto& hash : connect_path) {
-            auto index = indexes_.find(hash);
-            const auto result = ConnectIndexedBlock(index->second);
+            auto* index = EditIndex(hash);
+            if (index == nullptr)
+                return {ChainError::kReorganizationFailure, BlockValidationError::kNone, new_tip};
+            const auto result = ConnectIndexedBlock(*index);
             if (result.error != ChainError::kNone) {
                 for (auto iterator = connected.rbegin(); iterator != connected.rend(); ++iterator) {
-                    auto disconnect = indexes_.find(*iterator);
-                    if (DisconnectIndexedBlock(disconnect->second) != ChainError::kNone) {
+                    auto* disconnect = EditIndex(*iterator);
+                    if (disconnect == nullptr ||
+                        DisconnectIndexedBlock(*disconnect) != ChainError::kNone) {
                         return {ChainError::kRollbackFailure, BlockValidationError::kNone, new_tip};
                     }
                 }
                 for (auto iterator = disconnected.rbegin(); iterator != disconnected.rend();
                      ++iterator) {
-                    auto restore = indexes_.find(*iterator);
-                    if (ConnectIndexedBlock(restore->second).error != ChainError::kNone) {
+                    auto* restore = EditIndex(*iterator);
+                    if (restore == nullptr ||
+                        ConnectIndexedBlock(*restore).error != ChainError::kNone) {
                         return {ChainError::kRollbackFailure, BlockValidationError::kNone, new_tip};
                     }
                 }
@@ -444,7 +587,7 @@ ChainResult ChainState::ReorganizeChain(const crypto::Hash256& new_tip) noexcept
             }
             connected.push_back(hash);
         }
-        active_chain_.SetTip(new_tip, target_iterator->second.height);
+        active_chain_.SetTip(new_tip, target_iterator->height);
         MarkActiveChain();
         return {ChainError::kNone, BlockValidationError::kNone, new_tip};
     } catch (...) {
@@ -464,18 +607,22 @@ std::uint32_t ChainState::active_height() const noexcept
 
 std::size_t ChainState::known_block_count() const noexcept
 {
-    return indexes_.size();
+    if (base_indexes_ == nullptr)
+        return indexes_.size();
+    std::size_t count = 0U;
+    ForEachIndex([&](const crypto::Hash256&, const BlockIndex&) { ++count; });
+    return count;
 }
 
 std::optional<HeaderMetadata>
 ChainState::GetHeaderMetadata(const crypto::Hash256& hash) const noexcept
 {
     static_assert(std::is_nothrow_copy_constructible_v<HeaderMetadata>);
-    const auto found = indexes_.find(hash);
-    if (found == indexes_.end() || !IsUsableStatus(found->second.status)) {
+    const auto found = FindIndex(hash);
+    if (found == nullptr || !IsUsableStatus(found->status)) {
         return std::nullopt;
     }
-    const auto& index = found->second;
+    const auto& index = *found;
     return HeaderMetadata{index.hash,           index.previous_hash, index.height,
                           index.time,           index.expected_bits, index.target,
                           index.per_block_work, index.chain_work};
@@ -483,12 +630,12 @@ ChainState::GetHeaderMetadata(const crypto::Hash256& hash) const noexcept
 
 std::optional<BlockIndex> ChainState::GetBlockIndex(const crypto::Hash256& hash) const noexcept
 {
-    const auto found = indexes_.find(hash);
-    if (found == indexes_.end()) {
+    const auto found = FindIndex(hash);
+    if (found == nullptr) {
         return std::nullopt;
     }
     try {
-        return found->second;
+        return *found;
     } catch (...) {
         return std::nullopt;
     }
@@ -503,11 +650,11 @@ std::optional<std::vector<BlockIndex>> ChainState::GetActiveBlockIndexes() const
         // moves of untrusted block payloads.
         std::vector<crypto::Hash256> hashes;
         hashes.reserve(static_cast<std::size_t>(active_chain_.height()) + 1U);
-        auto current = indexes_.find(active_chain_.tip());
-        while (current != indexes_.end()) {
-            hashes.push_back(current->first);
-            const auto parent = indexes_.find(current->second.previous_hash);
-            if (parent == indexes_.end()) {
+        auto current = FindIndex(active_chain_.tip());
+        while (current != nullptr) {
+            hashes.push_back(current->hash);
+            const auto parent = FindIndex(current->previous_hash);
+            if (parent == nullptr) {
                 break;
             }
             current = parent;
@@ -516,11 +663,11 @@ std::optional<std::vector<BlockIndex>> ChainState::GetActiveBlockIndexes() const
         std::vector<BlockIndex> active;
         active.reserve(hashes.size());
         for (auto iterator = hashes.rbegin(); iterator != hashes.rend(); ++iterator) {
-            const auto index = indexes_.find(*iterator);
-            if (index == indexes_.end()) {
+            const auto index = FindIndex(*iterator);
+            if (index == nullptr) {
                 return std::nullopt;
             }
-            active.push_back(index->second);
+            active.push_back(*index);
         }
         return active;
     } catch (...) {
@@ -549,11 +696,11 @@ ChainState::BuildContext(const BlockIndex& parent, const std::uint32_t candidate
         const BlockIndex* current = &parent;
         for (std::uint32_t count = 0U; count < parameters_.median_time_past_window; ++count) {
             times.push_back(current->time);
-            const auto previous = indexes_.find(current->previous_hash);
-            if (previous == indexes_.end()) {
+            const auto previous = FindIndex(current->previous_hash);
+            if (previous == nullptr) {
                 break;
             }
-            current = &previous->second;
+            current = previous;
         }
         if (times.empty()) {
             return std::nullopt;
@@ -572,11 +719,11 @@ const BlockIndex* ChainState::Ancestor(const BlockIndex& start,
 {
     const BlockIndex* current = &start;
     while (current->height > height) {
-        const auto parent = indexes_.find(current->previous_hash);
-        if (parent == indexes_.end() || parent->second.height != current->height - 1U) {
+        const auto parent = FindIndex(current->previous_hash);
+        if (parent == nullptr || parent->height != current->height - 1U) {
             return nullptr;
         }
-        current = &parent->second;
+        current = parent;
     }
     return current->height == height ? current : nullptr;
 }
@@ -607,17 +754,17 @@ ChainState::ExpectedBits(const BlockIndex& parent,
         const BlockIndex* current = &parent;
         while (current->height % difficulty.retarget_interval != 0U &&
                current->expected_bits == pow_limit) {
-            const auto previous = indexes_.find(current->previous_hash);
-            if (previous == indexes_.end() || previous->second.height != current->height - 1U) {
+            const auto previous = FindIndex(current->previous_hash);
+            if (previous == nullptr || previous->height != current->height - 1U) {
                 return std::nullopt;
             }
             const auto is_delayed =
-                current->time > previous->second.time &&
-                current->time - previous->second.time > difficulty.target_spacing_seconds * 2U;
+                current->time > previous->time &&
+                current->time - previous->time > difficulty.target_spacing_seconds * 2U;
             if (!is_delayed) {
                 break;
             }
-            current = &previous->second;
+            current = previous;
         }
         return current->expected_bits;
     }
@@ -652,20 +799,23 @@ ChainResult ChainState::ConnectIndexedBlock(BlockIndex& index) noexcept
     if (!index.block.has_value()) {
         return {ChainError::kStateConnectFailure, BlockValidationError::kNone, index.hash};
     }
-    const auto parent = indexes_.find(index.previous_hash);
-    if (parent == indexes_.end()) {
+    const auto parent = FindIndex(index.previous_hash);
+    if (parent == nullptr) {
         return {ChainError::kUnknownParent, BlockValidationError::kNone, index.hash};
     }
-    const auto context = BuildContext(parent->second, index.block->header.time);
+    const auto context = BuildContext(*parent, index.block->header.time);
     if (!context.has_value()) {
         return {ChainError::kContextFailure, BlockValidationError::kInvalidContext, index.hash};
     }
-    const auto expected_bits = ExpectedBits(parent->second, index.block->header.time);
+    const auto expected_bits = ExpectedBits(*parent, index.block->header.time);
     if (!expected_bits.has_value() || index.block->header.bits != *expected_bits) {
         return {ChainError::kBlockValidationFailure, BlockValidationError::kUnexpectedBits,
                 index.hash};
     }
-    auto connected = ConnectBlock(*index.block, *context, parameters_.block_validation, utxos_);
+    auto connected =
+        transition_utxos_ != nullptr
+            ? ConnectBlock(*index.block, *context, parameters_.block_validation, *transition_utxos_)
+            : ConnectBlock(*index.block, *context, parameters_.block_validation, utxos_);
     if (connected.error != BlockValidationError::kNone || !connected.connected.has_value()) {
         return {ChainError::kBlockValidationFailure, connected.error, index.hash};
     }
@@ -679,7 +829,9 @@ ChainError ChainState::DisconnectIndexedBlock(BlockIndex& index) noexcept
     if (!index.connected.has_value()) {
         return ChainError::kStateDisconnectFailure;
     }
-    const auto error = DisconnectBlock(*index.connected, utxos_);
+    const auto error = transition_utxos_ != nullptr
+                           ? DisconnectBlock(*index.connected, *transition_utxos_)
+                           : DisconnectBlock(*index.connected, utxos_);
     if (error != BlockValidationError::kNone) {
         return ChainError::kStateDisconnectFailure;
     }
@@ -687,22 +839,15 @@ ChainError ChainState::DisconnectIndexedBlock(BlockIndex& index) noexcept
     return ChainError::kNone;
 }
 
-void ChainState::MarkActiveChain() noexcept
+void ChainState::MarkActiveChain()
 {
-    for (auto& [hash, index] : indexes_) {
-        static_cast<void>(hash);
-        if (index.status != BlockStatus::kPending && index.status != BlockStatus::kInvalid) {
-            index.status = BlockStatus::kValid;
-        }
-    }
-    auto current = indexes_.find(active_chain_.tip());
-    while (current != indexes_.end()) {
-        current->second.status = BlockStatus::kActive;
-        const auto parent = indexes_.find(current->second.previous_hash);
-        if (parent == indexes_.end()) {
-            break;
-        }
-        current = parent;
+    // DisconnectIndexedBlock marks the removed suffix valid; ConnectIndexedBlock
+    // marks the new suffix active. Do not rewrite/copy unchanged ancestors.
+    auto current = FindIndex(active_chain_.tip());
+    while (current != nullptr) {
+        if (current->status != BlockStatus::kActive)
+            EditIndex(current->hash)->status = BlockStatus::kActive;
+        current = FindIndex(current->previous_hash);
     }
 }
 
