@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 
 
 CORE = r'(0|[1-9][0-9]*)'
@@ -177,16 +178,18 @@ def source_archive(source, commit, release_version, output):
     version(release_version)
     files = git(source, 'ls-tree', '-r', '-l', '-z', commit).split(b'\0')
     total = 0
+    expected = {}
     if len(files) > 10001:
         raise ValueError('source archive exceeds the 10000-file bound')
     for raw in files:
         if not raw:
             continue
         attributes, path = raw.split(b'\t', 1)
-        mode, kind, _, size = attributes.split()
+        mode, kind, object_id, size = attributes.split()
         if mode not in (b'100644', b'100755') or kind != b'blob':
             raise ValueError('source archive requires ordinary tracked files, no links/submodules')
         total += int(size)
+        expected[path.decode('utf-8')] = (mode, object_id.decode('ascii'), int(size))
         if total > 64 * 1024 * 1024:
             raise ValueError('source content exceeds the 64 MiB engineering archive bound')
         name = path.decode('utf-8').lower()
@@ -200,9 +203,41 @@ def source_archive(source, commit, release_version, output):
     if secret.returncode != 1:
         raise ValueError('private-key material or unavailable secret scan blocks the source archive')
     with output.open('xb') as destination:
-        subprocess.run(['git', '-C', str(source), 'archive', '--format=tar',
+        subprocess.run(['git', '-C', str(source), '-c', 'core.autocrlf=false',
+                        '-c', 'core.eol=lf', 'archive', '--format=tar',
                         f'--prefix=NovaCoin-{release_version}/', commit], stdout=destination,
                        stderr=subprocess.DEVNULL, check=True, timeout=30, env=git_environment())
+    # Export attributes can still omit/substitute/convert committed content.
+    # Reject such output instead of normalizing it after hashing. Retain the
+    # rejected TAR for diagnosis; preparation must not emit successful metadata.
+    algorithm = git(source, 'rev-parse', '--show-object-format').decode().strip()
+    if algorithm not in ('sha1', 'sha256'):
+        raise ValueError('unsupported Git object format')
+    prefix = f'NovaCoin-{release_version}/'
+    seen = set()
+    with tarfile.open(output, mode='r:') as archive:
+        for member in archive:
+            if member.isdir():
+                continue
+            if not member.isfile() or not member.name.startswith(prefix):
+                raise ValueError('unexpected source archive member')
+            name = member.name[len(prefix):]
+            if name not in expected or name in seen:
+                raise ValueError('source archive file set differs from commit')
+            mode, object_id, size = expected[name]
+            if member.size != size or bool(member.mode & 0o111) != (mode == b'100755'):
+                raise ValueError('source archive size or executable mode differs from commit')
+            stream = archive.extractfile(member)
+            if stream is None:
+                raise ValueError('source archive member unavailable')
+            with stream:
+                content = stream.read(size + 1)
+            digest = hashlib.new(algorithm, f'blob {size}\0'.encode() + content).hexdigest()
+            if len(content) != size or digest != object_id:
+                raise ValueError('source archive bytes differ from committed blob')
+            seen.add(name)
+    if seen != set(expected):
+        raise ValueError('source archive omits committed files')
     return hashlib.sha256(output.read_bytes()).hexdigest()
 
 
