@@ -594,4 +594,40 @@ TEST(MempoolPrepared, CapacityRejectionKeepsTheAdmittedBoundaryCandidate)
     EXPECT_EQ(scenario.utxos.size(), 2U);
 }
 
+TEST(MempoolPreparedReadOnly, ConstCandidateViewReplaysWithoutPublishingCoins)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto input = AddSpendableCoin(scenario, 0x90U);
+    const auto spend = MakeSpend(scenario, input, 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    const nova::chain::UTXOView& view = *candidate;
+    const std::array known{*spend};
+    auto prepared = pool->PrepareReconciliation({}, known, scenario.context, view, 1U);
+    ASSERT_EQ(prepared.result.error, MempoolError::kNone);
+    ASSERT_NE(prepared.prepared, nullptr);
+    EXPECT_TRUE(candidate->HaveCoin(input));
+    EXPECT_EQ(candidate->overlay_entry_count(), 0U);
+    EXPECT_TRUE(scenario.utxos.HaveCoin(input));
+    EXPECT_EQ(pool->size(), 0U);
+    ASSERT_TRUE(pool->CommitPrepared(*prepared.prepared));
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_EQ(pool->RevalidateMempool(scenario.context, view).error, MempoolError::kNone);
+    EXPECT_EQ(candidate->overlay_entry_count(), 0U);
+    EXPECT_EQ(pool->AcceptToMempool(*spend, scenario.context, view, 2U).error,
+              MempoolError::kDuplicateTransaction);
+    candidate->Rollback();
+    EXPECT_EQ(pool->PrepareReconciliation({}, known, scenario.context, view, 1U).result.error,
+              MempoolError::kStateUnavailable);
+    EXPECT_EQ(pool->RevalidateMempool(scenario.context, view).error,
+              MempoolError::kStateUnavailable);
+    EXPECT_EQ(pool->AcceptToMempool(*spend, scenario.context, view, 2U).error,
+              MempoolError::kStateUnavailable);
+    EXPECT_EQ(pool->size(), 1U);
+}
+
 } // namespace

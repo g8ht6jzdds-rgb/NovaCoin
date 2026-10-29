@@ -103,6 +103,11 @@ class Mempool final
                           std::span<const primitives::Transaction> known,
                           const TransactionValidationContext& context, UTXOBatch& candidate_utxos,
                           std::uint64_t time_received) noexcept;
+    [[nodiscard]] PreparationResult
+    PrepareReconciliation(std::span<const primitives::Transaction> confirmed,
+                          std::span<const primitives::Transaction> known,
+                          const TransactionValidationContext& context,
+                          const UTXOView& candidate_utxos, std::uint64_t time_received) noexcept;
     [[nodiscard]] bool CanCommitPrepared(const PreparedState& prepared) const noexcept;
     [[nodiscard]] bool CommitPrepared(PreparedState& prepared) noexcept;
     [[nodiscard]] std::optional<std::vector<MempoolEntry>>
@@ -116,6 +121,10 @@ class Mempool final
                                                 const TransactionValidationContext& context,
                                                 UTXOBatch& active_utxos,
                                                 std::uint64_t time_received) noexcept;
+    [[nodiscard]] MempoolResult AcceptToMempool(const primitives::Transaction& transaction,
+                                                const TransactionValidationContext& context,
+                                                const UTXOView& active_utxos,
+                                                std::uint64_t time_received) noexcept;
     [[nodiscard]] MempoolResult RemoveTransaction(const crypto::Hash256& transaction_id) noexcept;
     [[nodiscard]] MempoolResult
     RemoveForBlock(std::span<const primitives::Transaction> block_transactions) noexcept;
@@ -123,6 +132,8 @@ class Mempool final
                                                   UTXOSet& active_utxos) noexcept;
     [[nodiscard]] MempoolResult RevalidateMempool(const TransactionValidationContext& context,
                                                   UTXOBatch& active_utxos) noexcept;
+    [[nodiscard]] MempoolResult RevalidateMempool(const TransactionValidationContext& context,
+                                                  const UTXOView& active_utxos) noexcept;
     [[nodiscard]] BlockTemplateResult
     SelectForBlock(std::uint64_t max_serialized_size) const noexcept;
 
@@ -137,6 +148,12 @@ class Mempool final
   private:
     [[nodiscard]] bool ParametersAreValid() const noexcept;
     [[nodiscard]] bool CanAdvanceRevision() const noexcept;
+    template <typename Base>
+    [[nodiscard]] PreparationResult PrepareImpl(std::span<const primitives::Transaction> confirmed,
+                                                std::span<const primitives::Transaction> known,
+                                                const TransactionValidationContext& context,
+                                                Base& candidate_utxos,
+                                                std::uint64_t time_received) noexcept;
     template <typename Base>
     [[nodiscard]] MempoolResult AcceptImpl(const primitives::Transaction& transaction,
                                            const TransactionValidationContext& context,

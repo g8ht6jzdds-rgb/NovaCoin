@@ -41,6 +41,12 @@ class UTXOView
 {
   public:
     virtual ~UTXOView() = default;
+    // Ordinary views require a valid/stable lifetime supplied by their owner.
+    // Versioned borrowed views override this to reject stale/closed state.
+    [[nodiscard]] virtual bool IsCurrent() const noexcept
+    {
+        return true;
+    }
 
     [[nodiscard]] virtual std::optional<Coin> GetCoin(const UTXOKey& key) const = 0;
     [[nodiscard]] virtual bool HaveCoin(const UTXOKey& key) const noexcept = 0;
@@ -104,13 +110,17 @@ class UTXOBatch final : public UTXOView
     [[nodiscard]] std::optional<UTXOBatch> BeginBatch() noexcept;
     [[nodiscard]] UTXOError UndoBlock(const BlockUndo& undo) noexcept;
     // Same owner/parent lifetime contract as BeginBatch; read-only freshness.
-    [[nodiscard]] bool IsCurrent() const noexcept;
+    [[nodiscard]] bool IsCurrent() const noexcept override;
+    // A nonpublishing overlay borrows this const view for its lifetime.
+    // All descendants retain disabled publication, including after moves.
+    [[nodiscard]] static std::optional<UTXOBatch> ReadOnlyOverlay(const UTXOView& base) noexcept;
     [[nodiscard]] bool Commit() noexcept;
     void Rollback() noexcept;
     [[nodiscard]] std::size_t overlay_entry_count() const noexcept;
 
   private:
     explicit UTXOBatch(UTXOSet& base);
+    explicit UTXOBatch(const UTXOView& base);
     explicit UTXOBatch(UTXOBatch& parent);
     [[nodiscard]] bool IsOpen() const noexcept;
 
@@ -122,6 +132,7 @@ class UTXOBatch final : public UTXOView
     std::uint64_t parent_revision_{};
     std::uint64_t base_revision_{};
     bool closed_{};
+    bool publication_disabled_{};
 
     friend class UTXOSet;
 };

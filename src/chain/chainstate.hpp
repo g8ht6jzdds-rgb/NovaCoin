@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace nova::chain
@@ -200,6 +201,12 @@ class ChainState final
     [[nodiscard]] PreparationResult PrepareBlock(const primitives::Block& block) noexcept;
     [[nodiscard]] bool CanCommitPrepared(const PreparedTransition& prepared) const noexcept;
     [[nodiscard]] ChainResult CommitPrepared(PreparedTransition& prepared) noexcept;
+    // Visitor receives only a lexical const borrow and returns bool success.
+    // Keep owner/token/UTXO alive, do not retain the view or publish live state.
+    // On false (including stale-after-visit), discard all prepared outputs.
+    template <typename Visitor>
+    [[nodiscard]] bool WithPreparedUTXO(const PreparedTransition& prepared,
+                                        Visitor&& visitor) const noexcept;
     [[nodiscard]] std::optional<std::vector<BlockIndex>>
     GetPreparedActiveBlockIndexes(const PreparedTransition& prepared) const noexcept;
 
@@ -294,5 +301,20 @@ struct ChainState::PreparationResult final {
     ChainResult result;
     std::unique_ptr<PreparedTransition> prepared;
 };
+
+template <typename Visitor>
+bool ChainState::WithPreparedUTXO(const PreparedTransition& prepared,
+                                  Visitor&& visitor) const noexcept
+{
+    if (!CanCommitPrepared(prepared))
+        return false;
+    try {
+        const bool success =
+            std::forward<Visitor>(visitor)(static_cast<const UTXOView&>(*prepared.utxos_));
+        return success && CanCommitPrepared(prepared);
+    } catch (...) {
+        return false;
+    }
+}
 
 } // namespace nova::chain

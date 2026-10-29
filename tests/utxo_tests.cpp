@@ -632,4 +632,71 @@ TEST(UTXOPublication, RootCommitUsesPreallocatedNodes)
     EXPECT_FALSE(batch->Commit());
 }
 
+TEST(UTXOReadOnly, OverlayAndDescendantsCannotPublishEvenAfterMove)
+{
+    UTXOSet base;
+    const auto original = Key(230U, 0U);
+    ASSERT_TRUE(base.AddCoin(original, CoinWithValue(50)));
+    auto source = base.BeginBatch();
+    ASSERT_TRUE(source.has_value());
+    const nova::chain::UTXOView& view = *source;
+    auto overlay = nova::chain::UTXOBatch::ReadOnlyOverlay(view);
+    ASSERT_TRUE(overlay.has_value());
+    const auto first = SpendingTransaction(original, 40);
+    const auto created = UTXOKey{first.TxId(kLimits).value(), 0U};
+    ASSERT_EQ(overlay->ApplyTransaction(first, 101U, false, kLimits).error, UTXOError::kNone);
+    EXPECT_FALSE(overlay->HaveCoin(original));
+    EXPECT_TRUE(overlay->HaveCoin(created));
+    EXPECT_FALSE(overlay->Commit());
+    EXPECT_TRUE(source->HaveCoin(original));
+    EXPECT_FALSE(source->HaveCoin(created));
+    {
+        auto child = overlay->BeginBatch();
+        ASSERT_TRUE(child.has_value());
+        ASSERT_EQ(
+            child->ApplyTransaction(SpendingTransaction(created, 30), 102U, false, kLimits).error,
+            UTXOError::kNone);
+        EXPECT_FALSE(child->Commit());
+        EXPECT_TRUE(overlay->HaveCoin(created));
+    }
+    nova::chain::UTXOBatch moved{std::move(*overlay)};
+    EXPECT_FALSE(overlay->IsCurrent());
+    EXPECT_FALSE(moved.Commit());
+    EXPECT_TRUE(moved.HaveCoin(created));
+    EXPECT_TRUE(base.HaveCoin(original));
+    EXPECT_EQ(base.size(), 1U);
+}
+
+TEST(UTXOReadOnly, ClosedAndStaleVersionedViewsRejectBeforeReadingPrivateDeltas)
+{
+    UTXOSet base;
+    const auto original = Key(231U, 0U);
+    ASSERT_TRUE(base.AddCoin(original, CoinWithValue(50)));
+    auto source = base.BeginBatch();
+    ASSERT_TRUE(source.has_value());
+    auto overlay = nova::chain::UTXOBatch::ReadOnlyOverlay(*source);
+    ASSERT_TRUE(overlay.has_value());
+    const auto transaction = SpendingTransaction(original, 40);
+    const auto created = UTXOKey{transaction.TxId(kLimits).value(), 0U};
+    ASSERT_EQ(overlay->ApplyTransaction(transaction, 101U, false, kLimits).error, UTXOError::kNone);
+    ASSERT_TRUE(base.AddCoin(Key(232U, 0U), CoinWithValue(1)));
+    EXPECT_FALSE(source->IsCurrent());
+    EXPECT_FALSE(overlay->IsCurrent());
+    EXPECT_FALSE(source->GetCoin(original).has_value());
+    EXPECT_FALSE(overlay->HaveCoin(created));
+    EXPECT_FALSE(overlay->GetCoin(created).has_value());
+    EXPECT_FALSE(nova::chain::UTXOBatch::ReadOnlyOverlay(*source).has_value());
+    EXPECT_EQ(overlay->ApplyTransaction(transaction, 101U, false, kLimits).error,
+              UTXOError::kBatchClosed);
+    EXPECT_FALSE(overlay->Commit());
+    auto fresh = base.BeginBatch();
+    ASSERT_TRUE(fresh.has_value());
+    fresh->Rollback();
+    EXPECT_FALSE(fresh->HaveCoin(original));
+    EXPECT_FALSE(fresh->GetCoin(original).has_value());
+    EXPECT_FALSE(nova::chain::UTXOBatch::ReadOnlyOverlay(*fresh).has_value());
+    EXPECT_TRUE(base.HaveCoin(original));
+    EXPECT_EQ(base.size(), 2U);
+}
+
 } // namespace

@@ -13,6 +13,23 @@ namespace nova::chain
 {
 namespace
 {
+class ReadOnlyBatchFactory final
+{
+  public:
+    explicit ReadOnlyBatchFactory(const UTXOView& view) noexcept : view_(view) {}
+    [[nodiscard]] bool IsCurrent() const noexcept
+    {
+        return view_.IsCurrent();
+    }
+    [[nodiscard]] std::optional<UTXOBatch> BeginBatch() const noexcept
+    {
+        return UTXOBatch::ReadOnlyOverlay(view_);
+    }
+
+  private:
+    const UTXOView& view_;
+};
+
 [[nodiscard]] bool IsNonfatalReconciliationResult(const MempoolResult& result) noexcept
 {
     if (result.validation_error == BlockValidationError::kAllocationFailure ||
@@ -82,6 +99,18 @@ MempoolResult Mempool::AcceptToMempool(const primitives::Transaction& transactio
         return {MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
                 std::nullopt, 0U};
     return AcceptImpl(transaction, context, active_utxos, time_received);
+}
+
+MempoolResult Mempool::AcceptToMempool(const primitives::Transaction& transaction,
+                                       const TransactionValidationContext& context,
+                                       const UTXOView& active_utxos,
+                                       const std::uint64_t time_received) noexcept
+{
+    ReadOnlyBatchFactory base{active_utxos};
+    if (!base.IsCurrent())
+        return {MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
+                std::nullopt, 0U};
+    return AcceptImpl(transaction, context, base, time_received);
 }
 
 template <typename Base>
@@ -283,6 +312,16 @@ MempoolResult Mempool::RevalidateMempool(const TransactionValidationContext& con
         return {MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
                 std::nullopt, 0U};
     return RevalidateImpl(context, active_utxos);
+}
+
+MempoolResult Mempool::RevalidateMempool(const TransactionValidationContext& context,
+                                         const UTXOView& active_utxos) noexcept
+{
+    ReadOnlyBatchFactory base{active_utxos};
+    if (!base.IsCurrent())
+        return {MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
+                std::nullopt, 0U};
+    return RevalidateImpl(context, base);
 }
 
 template <typename Base>
@@ -659,6 +698,27 @@ Mempool::PrepareReconciliation(const std::span<const primitives::Transaction> co
                                UTXOBatch& candidate_utxos,
                                const std::uint64_t time_received) noexcept
 {
+    return PrepareImpl(confirmed, known, context, candidate_utxos, time_received);
+}
+
+Mempool::PreparationResult
+Mempool::PrepareReconciliation(const std::span<const primitives::Transaction> confirmed,
+                               const std::span<const primitives::Transaction> known,
+                               const TransactionValidationContext& context,
+                               const UTXOView& candidate_utxos,
+                               const std::uint64_t time_received) noexcept
+{
+    ReadOnlyBatchFactory base{candidate_utxos};
+    return PrepareImpl(confirmed, known, context, base, time_received);
+}
+
+template <typename Base>
+Mempool::PreparationResult
+Mempool::PrepareImpl(const std::span<const primitives::Transaction> confirmed,
+                     const std::span<const primitives::Transaction> known,
+                     const TransactionValidationContext& context, Base& candidate_utxos,
+                     const std::uint64_t time_received) noexcept
+{
     if (!CanAdvanceRevision() || !candidate_utxos.IsCurrent())
         return {{MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
                  std::nullopt, 0U},
@@ -678,11 +738,11 @@ Mempool::PrepareReconciliation(const std::span<const primitives::Transaction> co
         auto result = staged.RemoveForBlock(confirmed);
         if (result.error != MempoolError::kNone)
             return {result, nullptr};
-        result = staged.RevalidateMempool(context, candidate_utxos);
+        result = staged.RevalidateImpl(context, candidate_utxos);
         if (result.error != MempoolError::kNone)
             return {result, nullptr};
         for (const auto& transaction : known) {
-            result = staged.AcceptToMempool(transaction, context, candidate_utxos, time_received);
+            result = staged.AcceptImpl(transaction, context, candidate_utxos, time_received);
             if (!IsNonfatalReconciliationResult(result))
                 return {result, nullptr};
         }
