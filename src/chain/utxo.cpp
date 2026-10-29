@@ -290,12 +290,14 @@ bool UTXOBatch::Commit() noexcept
             return false;
         }
     }
-    Coins removed;
+    // All spends/collisions were checked above under exclusive ownership.
+    // Do not construct a temporary map here: its sentinel/proxy allocation
+    // can throw on MSVC even when it contains no elements. Publication uses
+    // only erasure and already allocated addition nodes with equal allocators.
+    static_assert(std::allocator_traits<Coins::allocator_type>::is_always_equal::value);
+    static_assert(noexcept(std::declval<const UTXOKey&>() < std::declval<const UTXOKey&>()));
     for (const auto& key : delta_.spends) {
-        auto node = base_set_->coins_.extract(key);
-        if (node.empty() || !removed.insert(std::move(node)).inserted) {
-            return false;
-        }
+        base_set_->coins_.erase(key);
     }
     for (auto iterator = delta_.additions.begin(); iterator != delta_.additions.end();) {
         auto node = delta_.additions.extract(iterator++);
