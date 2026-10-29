@@ -173,6 +173,11 @@ UTXOBatch::UTXOBatch(UTXOBatch&& other) noexcept(std::is_nothrow_default_constru
     other.closed_ = true;
 }
 
+bool UTXOBatch::IsCurrent() const noexcept
+{
+    return IsOpen() && revision_ != std::numeric_limits<std::uint64_t>::max();
+}
+
 bool UTXOBatch::IsOpen() const noexcept
 {
     if (closed_)
