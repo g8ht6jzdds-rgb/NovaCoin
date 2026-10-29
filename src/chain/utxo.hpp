@@ -20,6 +20,12 @@ struct Coin final {
     bool is_coinbase{};
 };
 
+enum class CoinReadError : std::uint8_t { kNone, kUnavailable };
+struct CoinReadResult final {
+    CoinReadError error{CoinReadError::kNone};
+    std::optional<Coin> coin;
+};
+
 struct UTXOKey final {
     crypto::Hash256 transaction_id{};
     std::uint32_t output_index{};
@@ -48,6 +54,9 @@ class UTXOView
         return true;
     }
 
+    // Typed readers distinguish absent coins from unavailable local context.
+    // Legacy custom views that suppress read errors must override this method.
+    [[nodiscard]] virtual CoinReadResult ReadCoin(const UTXOKey& key) const;
     [[nodiscard]] virtual std::optional<Coin> GetCoin(const UTXOKey& key) const = 0;
     [[nodiscard]] virtual bool HaveCoin(const UTXOKey& key) const noexcept = 0;
 };
@@ -102,6 +111,7 @@ class UTXOBatch final : public UTXOView
     [[nodiscard]] ApplyTransactionResult
     ApplyTransaction(const primitives::Transaction& transaction, std::uint32_t height,
                      bool is_coinbase, const primitives::TransactionLimits& limits) noexcept;
+    [[nodiscard]] CoinReadResult ReadCoin(const UTXOKey& key) const override;
     [[nodiscard]] std::optional<Coin> GetCoin(const UTXOKey& key) const override;
     [[nodiscard]] bool HaveCoin(const UTXOKey& key) const noexcept override;
     [[nodiscard]] UTXOError UndoTransaction(const TransactionUndo& undo) noexcept;
@@ -133,6 +143,7 @@ class UTXOBatch final : public UTXOView
     std::uint64_t base_revision_{};
     bool closed_{};
     bool publication_disabled_{};
+    mutable bool read_failed_{};
 
     friend class UTXOSet;
 };
@@ -149,8 +160,11 @@ class UTXOSet final : public UTXOView
     UTXOSet(UTXOSet&& other) noexcept(std::is_nothrow_default_constructible_v<Coins>);
     UTXOSet& operator=(UTXOSet&& other) noexcept;
 
+    [[nodiscard]] CoinReadResult ReadCoin(const UTXOKey& key) const override;
     [[nodiscard]] std::optional<Coin> GetCoin(const UTXOKey& key) const override;
     [[nodiscard]] bool HaveCoin(const UTXOKey& key) const noexcept override;
+    // Per-instance one-shot typed-read fault seam; no network/RPC selector.
+    void FailNextReadForTesting() noexcept;
     [[nodiscard]] bool AddCoin(const UTXOKey& key, const Coin& coin) noexcept;
     [[nodiscard]] std::optional<Coin> SpendCoin(const UTXOKey& key) noexcept;
 
@@ -172,6 +186,7 @@ class UTXOSet final : public UTXOView
     void InvalidateBatches() noexcept;
     Coins coins_;
     std::uint64_t revision_{};
+    mutable bool fail_next_read_{};
 
     friend class UTXOBatch;
 };

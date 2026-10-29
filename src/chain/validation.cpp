@@ -191,6 +191,8 @@ CheckTransactionAgainstUtxo(const primitives::Transaction& transaction,
         return {BlockValidationError::kNonFinalTransaction, 0};
     }
 
+    if (!utxos.IsCurrent())
+        return {BlockValidationError::kInvalidContext, 0};
     primitives::Amount input_total = 0;
     for (std::size_t index = 0U; index < transaction.inputs.size(); ++index) {
         const auto& input = transaction.inputs.at(index);
@@ -201,7 +203,10 @@ CheckTransactionAgainstUtxo(const primitives::Transaction& transaction,
         if (!spent_in_block.insert(key).second) {
             return {BlockValidationError::kDoubleSpend, 0};
         }
-        const auto coin = utxos.GetCoin(key);
+        const auto read = utxos.ReadCoin(key);
+        if (read.error != CoinReadError::kNone || !utxos.IsCurrent())
+            return {BlockValidationError::kInvalidContext, 0};
+        const auto& coin = read.coin;
         if (!coin.has_value()) {
             return {BlockValidationError::kMissingUtxo, 0};
         }
@@ -248,6 +253,8 @@ CheckTransactionAgainstUtxo(const primitives::Transaction& transaction,
         return BlockValidationError::kMissingUtxo;
     case UTXOError::kAllocationFailure:
         return BlockValidationError::kAllocationFailure;
+    case UTXOError::kBatchClosed:
+        return BlockValidationError::kInvalidContext;
     default:
         return BlockValidationError::kStateApplicationFailure;
     }

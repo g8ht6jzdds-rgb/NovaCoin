@@ -1086,4 +1086,55 @@ TEST(ChainStatePreparedReadOnly, MempoolPreparationConsumesOnlyLexicalConstView)
     // No durable store or concurrent-reader atomicity is claimed by this test.
 }
 
+TEST(ChainStateReadFailure, LookupUnavailableIsContextFailureAndPublishesNothing)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto parameters = TestParameters();
+    const auto anchor = state->active_tip();
+    const UTXOKey funding{HashWithLastByte(0xEFU), 0U};
+    ASSERT_TRUE(
+        utxos.AddCoin(funding, nova::chain::Coin{TxOutput{50LL * COIN, {0x51U}}, 0U, false}));
+    const auto control = MakeCoinbaseBlock(anchor, 1U, 1100U, kRegularBits, parameters);
+    ASSERT_TRUE(control.has_value());
+    auto block = *control;
+    block.transactions.push_back(
+        Transaction{1,
+                    {TxInput{OutPoint{funding.transaction_id, 0U}, {0x51U}, 0xFFFFFFFFU}},
+                    {TxOutput{49LL * COIN, {0x51U}}},
+                    0U});
+    const auto root = nova::primitives::ComputeMerkleRoot(
+        block.transactions, parameters.block_validation.block_limits.transaction_limits);
+    ASSERT_TRUE(root.has_value());
+    block.header.merkle_root = *root;
+    const auto target = nova::consensus::TargetFromCompact(kRegularBits);
+    ASSERT_TRUE(target.target.has_value());
+    bool mined = false;
+    for (std::uint32_t nonce = 0U; nonce < 4096U; ++nonce) {
+        block.header.nonce = nonce;
+        if (nova::consensus::CheckProofOfWork(BlockHash(block), *target.target)) {
+            mined = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(mined);
+    // Healthy context rejects the deliberately unsupported locking condition.
+    const auto healthy_rejection = state->AcceptBlock(block);
+    EXPECT_EQ(healthy_rejection.validation_error, BlockValidationError::kUnsupportedLockingScript);
+    utxos.FailNextReadForTesting();
+    const auto unavailable = state->AcceptBlock(block);
+    EXPECT_EQ(unavailable.error, ChainError::kContextFailure);
+    EXPECT_EQ(unavailable.validation_error, BlockValidationError::kInvalidContext);
+    EXPECT_EQ(state->active_tip(), anchor);
+    EXPECT_EQ(state->known_block_count(), 1U);
+    EXPECT_EQ(utxos.size(), 1U);
+    EXPECT_TRUE(utxos.HaveCoin(funding));
+    const auto retry = state->AcceptBlock(block);
+    EXPECT_EQ(retry.validation_error, BlockValidationError::kUnsupportedLockingScript);
+    EXPECT_EQ(state->AcceptBlock(*control).error, ChainError::kNone);
+    EXPECT_EQ(state->active_height(), 1U);
+    EXPECT_EQ(utxos.size(), 2U);
+}
+
 } // namespace

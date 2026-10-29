@@ -174,7 +174,10 @@ InspectionResult InspectJournal(std::istream& journal, const InspectionContext& 
                 if (!id.has_value())
                     return {"initialization"};
                 for (std::size_t i = 0; i < tx.outputs.size(); ++i) {
-                    const auto coin = state->utxos->GetCoin({*id, static_cast<std::uint32_t>(i)});
+                    const auto read = state->utxos->ReadCoin({*id, static_cast<std::uint32_t>(i)});
+                    if (read.error != chain::CoinReadError::kNone)
+                        return {"utxo_unavailable"};
+                    const auto& coin = read.coin;
                     if (!coin.has_value() || coin->height != 0U || !coin->is_coinbase ||
                         coin->output.value != tx.outputs[i].value ||
                         coin->output.script_pubkey != tx.outputs[i].script_pubkey ||
@@ -275,7 +278,10 @@ InspectionResult InspectJournal(std::istream& journal, const InspectionContext& 
         std::int64_t total = 0, creator_balance = 0;
         bool creator_unspent = false;
         for (const auto& [key, origin] : origins) {
-            const auto coin = state->utxos->GetCoin(key);
+            const auto read = state->utxos->ReadCoin(key);
+            if (read.error != chain::CoinReadError::kNone)
+                return {"utxo_unavailable"};
+            const auto& coin = read.coin;
             if (!coin.has_value())
                 continue;
             if (coin->output.value != origin.output.value ||
