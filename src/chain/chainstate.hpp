@@ -182,7 +182,8 @@ class ChainState final
   public:
     ChainState(const ChainState&) = delete;
     ChainState& operator=(const ChainState&) = delete;
-    ChainState(ChainState&&) noexcept = default;
+    // Prepared transitions borrow indexes; the live owner stays at its address.
+    ChainState(ChainState&&) = delete;
     ChainState& operator=(ChainState&&) = delete;
 
     [[nodiscard]] static std::unique_ptr<ChainState>
@@ -191,6 +192,16 @@ class ChainState final
     // Per-instance one-shot fault seam; never configured from network input.
     enum class FailurePoint : std::uint8_t { kNone, kBeforeStaging, kAfterCopy, kAfterTransition };
     void SetFailurePointForTesting(FailurePoint point) noexcept;
+
+    class PreparedTransition;
+    struct PreparationResult;
+    // Exclusive, non-reentrant ownership; UTXOSet must outlive ChainState.
+    // Prepared state does not publish or imply durable acceptance.
+    [[nodiscard]] PreparationResult PrepareBlock(const primitives::Block& block) noexcept;
+    [[nodiscard]] bool CanCommitPrepared(const PreparedTransition& prepared) const noexcept;
+    [[nodiscard]] ChainResult CommitPrepared(PreparedTransition& prepared) noexcept;
+    [[nodiscard]] std::optional<std::vector<BlockIndex>>
+    GetPreparedActiveBlockIndexes(const PreparedTransition& prepared) const noexcept;
 
     [[nodiscard]] ChainResult AcceptBlock(const primitives::Block& block) noexcept;
     // Used only to roll back a staged journal acceptance that could not be
@@ -215,11 +226,14 @@ class ChainState final
     // `Indexes` is private, so callers can only construct through Create.
     // The constructor is public solely to permit std::make_unique in Create.
     ChainState(ChainStateParams parameters, UTXOSet& utxos, Indexes indexes,
-               const crypto::Hash256& active_tip, std::uint32_t active_height) noexcept;
+               const crypto::Hash256& active_tip, std::uint32_t active_height);
 
   private:
     friend class NetworkChainInitializer;
 
+    template <typename Operation>
+    [[nodiscard]] PreparationResult
+    PrepareOperation(Operation&& operation, std::optional<crypto::Hash256> failure_hash) noexcept;
     template <typename Operation>
     [[nodiscard]] ChainResult ApplyAtomically(Operation&& operation,
                                               std::optional<crypto::Hash256> failure_hash) noexcept;
@@ -244,6 +258,8 @@ class ChainState final
     void EraseIndex(const crypto::Hash256& hash);
     template <typename Visitor> void ForEachIndex(Visitor&& visitor) const;
 
+    std::shared_ptr<const std::uint8_t> identity_;
+    std::uint64_t publication_revision_{};
     ChainStateParams parameters_;
     UTXOSet& utxos_;
     UTXOBatch* transition_utxos_{};
@@ -253,6 +269,30 @@ class ChainState final
     std::set<crypto::Hash256, HashLess> erased_indexes_;
     Chain active_chain_;
     FailurePoint failure_point_{FailurePoint::kNone};
+};
+
+class ChainState::PreparedTransition final
+{
+  public:
+    PreparedTransition(const PreparedTransition&) = delete;
+    PreparedTransition& operator=(const PreparedTransition&) = delete;
+    PreparedTransition(PreparedTransition&&) = delete;
+    PreparedTransition& operator=(PreparedTransition&&) = delete;
+
+  private:
+    PreparedTransition() = default;
+    std::weak_ptr<const std::uint8_t> owner_;
+    std::uint64_t revision_{};
+    std::optional<UTXOBatch> utxos_;
+    std::unique_ptr<ChainState> staged_;
+    ChainResult result_;
+    bool consumed_{};
+    friend class ChainState;
+};
+
+struct ChainState::PreparationResult final {
+    ChainResult result;
+    std::unique_ptr<PreparedTransition> prepared;
 };
 
 } // namespace nova::chain

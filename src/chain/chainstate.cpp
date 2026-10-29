@@ -239,75 +239,130 @@ void ChainState::SetFailurePointForTesting(const FailurePoint point) noexcept
 }
 
 template <typename Operation>
-ChainResult ChainState::ApplyAtomically(Operation&& operation,
-                                        const std::optional<crypto::Hash256> failure_hash) noexcept
+ChainState::PreparationResult
+ChainState::PrepareOperation(Operation&& operation,
+                             const std::optional<crypto::Hash256> failure_hash) noexcept
 {
+    if (publication_revision_ == std::numeric_limits<std::uint64_t>::max())
+        return {{ChainError::kContextFailure, BlockValidationError::kInvalidContext, failure_hash},
+                nullptr};
     const auto failure = std::exchange(failure_point_, FailurePoint::kNone);
     try {
         if (failure == FailurePoint::kBeforeStaging)
             throw std::bad_alloc{};
+        auto prepared = std::unique_ptr<PreparedTransition>{new PreparedTransition{}};
+        prepared->owner_ = identity_;
+        prepared->revision_ = publication_revision_;
         auto transition_utxos = utxos_.BeginBatch();
         if (!transition_utxos.has_value())
-            return {ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash};
-        ChainState staged{parameters_, utxos_, {}, active_chain_.tip(), active_chain_.height()};
+            return {{ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash},
+                    nullptr};
+        prepared->utxos_.emplace(std::move(*transition_utxos));
+        prepared->staged_ = std::make_unique<ChainState>(
+            parameters_, utxos_, Indexes{}, active_chain_.tip(), active_chain_.height());
+        auto& staged = *prepared->staged_;
         staged.base_indexes_ = &indexes_;
-        staged.transition_utxos_ = &*transition_utxos;
+        staged.transition_utxos_ = &*prepared->utxos_;
         if (failure == FailurePoint::kAfterCopy)
             throw std::bad_alloc{};
         const auto result = operation(staged);
         if (result.error != ChainError::kNone)
-            return result;
+            return {result, nullptr};
         if (failure == FailurePoint::kAfterTransition)
             throw std::bad_alloc{};
-        // Stable component addresses and the live UTXO reference are retained.
-        // No allocation, callbacks or I/O may occur within publication.
-        static_assert(std::is_nothrow_swappable_v<BlockIndex>);
-        static_assert(std::allocator_traits<Indexes::allocator_type>::is_always_equal::value);
-        static_assert(noexcept(HashLess{}(crypto::Hash256{}, crypto::Hash256{})));
-        static_assert(std::is_nothrow_copy_assignable_v<Chain>);
-        for (const auto& hash : staged.erased_indexes_) {
-            if (!indexes_.contains(hash) || staged.indexes_.contains(hash))
-                return {ChainError::kContextFailure, BlockValidationError::kInvalidContext,
-                        failure_hash};
-        }
-        if (!transition_utxos->Commit())
-            return {ChainError::kStateConnectFailure,
-                    BlockValidationError::kStateApplicationFailure, failure_hash};
-        for (const auto& hash : staged.erased_indexes_)
-            indexes_.erase(hash);
-        for (auto iterator = staged.indexes_.begin(); iterator != staged.indexes_.end();) {
-            const auto original = indexes_.find(iterator->first);
-            if (original != indexes_.end()) {
-                using std::swap;
-                swap(original->second, iterator->second);
-                ++iterator;
-            } else {
-                // Same allocator and unique staged keys: no allocation/collision.
-                auto node = staged.indexes_.extract(iterator++);
-                indexes_.insert(std::move(node));
-            }
-        }
-        active_chain_ = staged.active_chain_;
-        return result;
+        prepared->result_ = result;
+        return {result, std::move(prepared)};
     } catch (...) {
-        return {ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash};
+        return {{ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash},
+                nullptr};
     }
+}
+
+bool ChainState::CanCommitPrepared(const PreparedTransition& prepared) const noexcept
+{
+    // Check owner/revision before accessing anything borrowing the live maps.
+    const auto owner = prepared.owner_.lock();
+    if (owner == nullptr || owner != identity_ || prepared.consumed_ ||
+        prepared.revision_ != publication_revision_ ||
+        publication_revision_ == std::numeric_limits<std::uint64_t>::max() ||
+        prepared.staged_ == nullptr || !prepared.utxos_.has_value() ||
+        !prepared.utxos_->IsCurrent())
+        return false;
+    const auto& staged = *prepared.staged_;
+    for (const auto& hash : staged.erased_indexes_) {
+        if (!indexes_.contains(hash) || staged.indexes_.contains(hash))
+            return false;
+    }
+    return true;
+}
+
+std::optional<std::vector<BlockIndex>>
+ChainState::GetPreparedActiveBlockIndexes(const PreparedTransition& prepared) const noexcept
+{
+    if (!CanCommitPrepared(prepared))
+        return std::nullopt;
+    return prepared.staged_->GetActiveBlockIndexes();
+}
+
+ChainResult ChainState::CommitPrepared(PreparedTransition& prepared) noexcept
+{
+    if (!CanCommitPrepared(prepared))
+        return {ChainError::kContextFailure, BlockValidationError::kInvalidContext,
+                prepared.result_.block_hash};
+    auto& staged = *prepared.staged_;
+    // Stable live addresses; no allocation, callback or I/O in publication.
+    static_assert(std::allocator_traits<Indexes::allocator_type>::is_always_equal::value);
+    static_assert(noexcept(HashLess{}(crypto::Hash256{}, crypto::Hash256{})));
+    static_assert(std::is_nothrow_copy_assignable_v<Chain>);
+    if (!prepared.utxos_->Commit())
+        return {ChainError::kStateConnectFailure, BlockValidationError::kStateApplicationFailure,
+                prepared.result_.block_hash};
+    for (const auto& hash : staged.erased_indexes_)
+        indexes_.erase(hash);
+    for (auto iterator = staged.indexes_.begin(); iterator != staged.indexes_.end();) {
+        const auto original = indexes_.find(iterator->first);
+        // Replace the whole preallocated map node rather than swapping the
+        // BlockIndex value. MSVC Debug vector move construction allocates a
+        // proxy even when declared noexcept. No public API lends index refs.
+        if (original != indexes_.end())
+            indexes_.erase(original);
+        auto node = staged.indexes_.extract(iterator++);
+        indexes_.insert(std::move(node));
+    }
+    active_chain_ = staged.active_chain_;
+    prepared.consumed_ = true;
+    ++publication_revision_;
+    return prepared.result_;
+}
+
+template <typename Operation>
+ChainResult ChainState::ApplyAtomically(Operation&& operation,
+                                        const std::optional<crypto::Hash256> failure_hash) noexcept
+{
+    auto prepared = PrepareOperation(std::forward<Operation>(operation), failure_hash);
+    return prepared.prepared != nullptr ? CommitPrepared(*prepared.prepared) : prepared.result;
+}
+
+ChainState::PreparationResult ChainState::PrepareBlock(const primitives::Block& block) noexcept
+{
+    const auto hash = primitives::ComputeBlockHash(block.header);
+    if (!hash.has_value())
+        return {
+            {ChainError::kBlockHashFailure, BlockValidationError::kBlockHashFailure, std::nullopt},
+            nullptr};
+    const auto parent = FindIndex(block.header.previous_block_id);
+    if (parent == nullptr || !IsUsableStatus(parent->status))
+        return {{ChainError::kUnknownParent, BlockValidationError::kNone, *hash}, nullptr};
+    if (FindIndex(*hash) != nullptr)
+        return {{ChainError::kDuplicateBlock, BlockValidationError::kNone, *hash}, nullptr};
+    return PrepareOperation(
+        [&block](ChainState& staged) { return staged.AcceptBlockStaged(block); }, hash);
 }
 
 ChainResult ChainState::AcceptBlock(const primitives::Block& block) noexcept
 {
-    const auto hash = primitives::ComputeBlockHash(block.header);
-    if (!hash.has_value())
-        return {ChainError::kBlockHashFailure, BlockValidationError::kBlockHashFailure,
-                std::nullopt};
-    // Common hostile/duplicate requests must not force a whole-state copy.
-    const auto parent = FindIndex(block.header.previous_block_id);
-    if (parent == nullptr || !IsUsableStatus(parent->status))
-        return {ChainError::kUnknownParent, BlockValidationError::kNone, *hash};
-    if (FindIndex(*hash) != nullptr)
-        return {ChainError::kDuplicateBlock, BlockValidationError::kNone, *hash};
-    return ApplyAtomically([&block](ChainState& staged) { return staged.AcceptBlockStaged(block); },
-                           hash);
+    auto prepared = PrepareBlock(block);
+    return prepared.prepared != nullptr ? CommitPrepared(*prepared.prepared) : prepared.result;
 }
 
 ChainResult ChainState::ActivateBestChain() noexcept
@@ -676,10 +731,9 @@ std::optional<std::vector<BlockIndex>> ChainState::GetActiveBlockIndexes() const
 }
 
 ChainState::ChainState(ChainStateParams parameters, UTXOSet& utxos, Indexes indexes,
-                       const crypto::Hash256& active_tip,
-                       const std::uint32_t active_height) noexcept
-    : parameters_(std::move(parameters)), utxos_(utxos), indexes_(std::move(indexes)),
-      active_chain_(active_tip, active_height)
+                       const crypto::Hash256& active_tip, const std::uint32_t active_height)
+    : identity_(std::make_shared<const std::uint8_t>(0U)), parameters_(std::move(parameters)),
+      utxos_(utxos), indexes_(std::move(indexes)), active_chain_(active_tip, active_height)
 {
 }
 

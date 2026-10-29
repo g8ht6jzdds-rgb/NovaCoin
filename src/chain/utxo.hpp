@@ -103,6 +103,8 @@ class UTXOBatch final : public UTXOView
     // A closed or changed parent cannot publish child changes.
     [[nodiscard]] std::optional<UTXOBatch> BeginBatch() noexcept;
     [[nodiscard]] UTXOError UndoBlock(const BlockUndo& undo) noexcept;
+    // Same owner/parent lifetime contract as BeginBatch; read-only freshness.
+    [[nodiscard]] bool IsCurrent() const noexcept;
     [[nodiscard]] bool Commit() noexcept;
     void Rollback() noexcept;
     [[nodiscard]] std::size_t overlay_entry_count() const noexcept;
