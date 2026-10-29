@@ -45,11 +45,15 @@ target_link_libraries(fuzz_bootstrap_reader PRIVATE nova_node)
 nova_add_fuzzer(fuzz_offline_inspection offline_inspection_fuzz.cpp)
 target_link_libraries(fuzz_offline_inspection PRIVATE nova_inspection)
 
+nova_add_fuzzer(fuzz_generation_metadata generation_metadata_fuzz.cpp)
+target_link_libraries(fuzz_generation_metadata PRIVATE nova_storage)
+
 add_custom_target(nova_fuzzers DEPENDS
     fuzz_wallet_import
     fuzz_rpc
     fuzz_journal
     fuzz_offline_inspection
+    fuzz_generation_metadata
     fuzz_deserializer
     fuzz_transaction_deserializer
     fuzz_block_deserializer
