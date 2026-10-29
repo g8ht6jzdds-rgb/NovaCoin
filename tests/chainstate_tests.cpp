@@ -7,7 +7,11 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <vector>
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
 
 namespace
 {
@@ -681,6 +685,302 @@ TEST(ChainStateSecurity, RejectsFarFutureHeadersWithoutChangingTheActiveTip)
     ASSERT_TRUE(normal.has_value());
     EXPECT_EQ(state->AcceptBlock(*normal).error, ChainError::kNone);
     EXPECT_EQ(state->active_tip(), BlockHash(*normal));
+}
+
+TEST(ChainStatePrepared, KeepsTransitionPrivateUntilExplicitOneShotCommit)
+{
+    static_assert(!std::is_move_constructible_v<ChainState>);
+    static_assert(!std::is_copy_constructible_v<ChainState::PreparedTransition>);
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto anchor = state->active_tip();
+    const auto block = MakeCoinbaseBlock(anchor, 1U, 1100U, kRegularBits, TestParameters());
+    ASSERT_TRUE(block.has_value());
+    auto prepared = state->PrepareBlock(*block);
+    ASSERT_EQ(prepared.result.error, ChainError::kNone);
+    ASSERT_NE(prepared.prepared, nullptr);
+    EXPECT_TRUE(prepared.result.became_active);
+    EXPECT_TRUE(state->CanCommitPrepared(*prepared.prepared));
+    EXPECT_EQ(state->active_tip(), anchor);
+    EXPECT_EQ(state->active_height(), 0U);
+    EXPECT_EQ(state->known_block_count(), 1U);
+    EXPECT_EQ(utxos.size(), 0U);
+    EXPECT_FALSE(state->GetBlockIndex(BlockHash(*block)).has_value());
+    const auto view = state->GetPreparedActiveBlockIndexes(*prepared.prepared);
+    ASSERT_TRUE(view.has_value());
+    ASSERT_EQ(view->size(), 2U);
+    EXPECT_EQ(view->back().hash, BlockHash(*block));
+    EXPECT_EQ(view->back().height, 1U);
+    EXPECT_EQ(state->CommitPrepared(*prepared.prepared).error, ChainError::kNone);
+    EXPECT_EQ(state->active_tip(), BlockHash(*block));
+    EXPECT_EQ(state->known_block_count(), 2U);
+    EXPECT_EQ(utxos.size(), 1U);
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*block, TestParameters())));
+    EXPECT_FALSE(state->CanCommitPrepared(*prepared.prepared));
+    EXPECT_FALSE(state->GetPreparedActiveBlockIndexes(*prepared.prepared).has_value());
+    EXPECT_EQ(state->CommitPrepared(*prepared.prepared).error, ChainError::kContextFailure);
+}
+
+TEST(ChainStatePrepared, WrongOwnerDestroyedOwnerAndSiblingCannotPublish)
+{
+    UTXOSet utxos;
+    UTXOSet other_utxos;
+    auto state = CreateState(utxos);
+    auto other = CreateState(other_utxos);
+    ASSERT_NE(state, nullptr);
+    ASSERT_NE(other, nullptr);
+    const auto block =
+        MakeCoinbaseBlock(state->active_tip(), 1U, 1100U, kRegularBits, TestParameters());
+    ASSERT_TRUE(block.has_value());
+    auto first = state->PrepareBlock(*block);
+    auto sibling = state->PrepareBlock(*block);
+    ASSERT_NE(first.prepared, nullptr);
+    ASSERT_NE(sibling.prepared, nullptr);
+    EXPECT_FALSE(other->CanCommitPrepared(*first.prepared));
+    EXPECT_FALSE(other->GetPreparedActiveBlockIndexes(*first.prepared).has_value());
+    EXPECT_EQ(other->CommitPrepared(*first.prepared).error, ChainError::kContextFailure);
+    EXPECT_EQ(other_utxos.size(), 0U);
+    ASSERT_EQ(state->CommitPrepared(*first.prepared).error, ChainError::kNone);
+    EXPECT_EQ(state->CommitPrepared(*sibling.prepared).error, ChainError::kContextFailure);
+    EXPECT_FALSE(state->GetPreparedActiveBlockIndexes(*sibling.prepared).has_value());
+    auto owned = other->PrepareBlock(*block);
+    ASSERT_NE(owned.prepared, nullptr);
+    other.reset();
+    auto replacement = CreateState(other_utxos);
+    ASSERT_NE(replacement, nullptr);
+    EXPECT_FALSE(replacement->CanCommitPrepared(*owned.prepared));
+    EXPECT_FALSE(replacement->GetPreparedActiveBlockIndexes(*owned.prepared).has_value());
+    EXPECT_EQ(replacement->CommitPrepared(*owned.prepared).error, ChainError::kContextFailure);
+    EXPECT_EQ(other_utxos.size(), 0U);
+}
+
+TEST(ChainStatePrepared, DirectUtxoChangesInvalidateBeforeBorrowedReads)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto block =
+        MakeCoinbaseBlock(state->active_tip(), 1U, 1100U, kRegularBits, TestParameters());
+    ASSERT_TRUE(block.has_value());
+    auto prepared = state->PrepareBlock(*block);
+    ASSERT_NE(prepared.prepared, nullptr);
+    const UTXOKey extra{HashWithLastByte(0xEEU), 0U};
+    ASSERT_TRUE(utxos.AddCoin(extra, nova::chain::Coin{TxOutput{1, {0x51U}}, 0U, false}));
+    EXPECT_FALSE(state->CanCommitPrepared(*prepared.prepared));
+    EXPECT_FALSE(state->GetPreparedActiveBlockIndexes(*prepared.prepared).has_value());
+    EXPECT_EQ(state->CommitPrepared(*prepared.prepared).error, ChainError::kContextFailure);
+    EXPECT_EQ(state->active_height(), 0U);
+    EXPECT_EQ(utxos.size(), 1U);
+    auto before_spend = state->PrepareBlock(*block);
+    ASSERT_NE(before_spend.prepared, nullptr);
+    ASSERT_TRUE(utxos.SpendCoin(extra).has_value());
+    EXPECT_FALSE(state->CanCommitPrepared(*before_spend.prepared));
+    EXPECT_EQ(state->CommitPrepared(*before_spend.prepared).error, ChainError::kContextFailure);
+    EXPECT_EQ(utxos.size(), 0U);
+}
+
+TEST(ChainStatePrepared, AbortInvalidBlockAndPreparationFailuresNeverPublish)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto anchor = state->active_tip();
+    const auto block = MakeCoinbaseBlock(anchor, 1U, 1100U, kRegularBits, TestParameters());
+    ASSERT_TRUE(block.has_value());
+    auto abandoned = state->PrepareBlock(*block);
+    ASSERT_NE(abandoned.prepared, nullptr);
+    abandoned.prepared.reset();
+    auto invalid = *block;
+    invalid.header.merkle_root = nova::crypto::Hash256{};
+    const auto rejected = state->PrepareBlock(invalid);
+    EXPECT_NE(rejected.result.error, ChainError::kNone);
+    EXPECT_EQ(rejected.prepared, nullptr);
+    for (const auto point :
+         {ChainState::FailurePoint::kBeforeStaging, ChainState::FailurePoint::kAfterCopy,
+          ChainState::FailurePoint::kAfterTransition}) {
+        state->SetFailurePointForTesting(point);
+        const auto failed = state->PrepareBlock(*block);
+        EXPECT_EQ(failed.result.error, ChainError::kAllocationFailure);
+        EXPECT_EQ(failed.prepared, nullptr);
+        EXPECT_EQ(state->active_tip(), anchor);
+        EXPECT_EQ(state->known_block_count(), 1U);
+        EXPECT_EQ(utxos.size(), 0U);
+    }
+    const auto retry = state->PrepareBlock(*block);
+    ASSERT_NE(retry.prepared, nullptr);
+    EXPECT_EQ(state->active_tip(), anchor);
+}
+
+TEST(ChainStatePrepared, ActivationAndRollbackInvalidateOutstandingTransitions)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto anchor = state->active_tip();
+    const auto first = MakeCoinbaseBlock(anchor, 1U, 1100U, kRegularBits, TestParameters());
+    ASSERT_TRUE(first.has_value());
+    auto pending = state->PrepareBlock(*first);
+    ASSERT_NE(pending.prepared, nullptr);
+    ASSERT_EQ(state->ActivateBestChain().error, ChainError::kNone);
+    EXPECT_FALSE(state->CanCommitPrepared(*pending.prepared));
+    ASSERT_EQ(state->AcceptBlock(*first).error, ChainError::kNone);
+    const auto second =
+        MakeCoinbaseBlock(state->active_tip(), 2U, 1200U, kRegularBits, TestParameters());
+    ASSERT_TRUE(second.has_value());
+    auto next = state->PrepareBlock(*second);
+    ASSERT_NE(next.prepared, nullptr);
+    ASSERT_EQ(state->RollbackAcceptedBlock(BlockHash(*first), anchor).error, ChainError::kNone);
+    EXPECT_FALSE(state->CanCommitPrepared(*next.prepared));
+    EXPECT_FALSE(state->GetPreparedActiveBlockIndexes(*next.prepared).has_value());
+    EXPECT_EQ(state->CommitPrepared(*next.prepared).error, ChainError::kContextFailure);
+    EXPECT_EQ(state->active_tip(), anchor);
+    EXPECT_EQ(utxos.size(), 0U);
+}
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+thread_local bool count_chain_publication_allocations = false;
+thread_local std::size_t chain_publication_allocations = 0U;
+int CountChainPublicationAllocations(const int kind, void*, std::size_t, int, long,
+                                     const unsigned char*, int)
+{
+    if (count_chain_publication_allocations && kind == _HOOK_ALLOC)
+        ++chain_publication_allocations;
+    return 1;
+}
+#endif
+
+TEST(ChainStatePrepared, ExplicitCommitDoesNotAllocate)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto block =
+        MakeCoinbaseBlock(state->active_tip(), 1U, 1100U, kRegularBits, TestParameters());
+    ASSERT_TRUE(block.has_value());
+    auto prepared = state->PrepareBlock(*block);
+    ASSERT_NE(prepared.prepared, nullptr);
+#if defined(_MSC_VER) && defined(_DEBUG)
+    const auto previous = _CrtSetAllocHook(CountChainPublicationAllocations);
+    chain_publication_allocations = 0U;
+    count_chain_publication_allocations = true;
+#endif
+    const auto result = state->CommitPrepared(*prepared.prepared);
+#if defined(_MSC_VER) && defined(_DEBUG)
+    count_chain_publication_allocations = false;
+    _CrtSetAllocHook(previous);
+    EXPECT_EQ(chain_publication_allocations, 0U);
+#endif
+    EXPECT_EQ(result.error, ChainError::kNone);
+    EXPECT_EQ(state->active_tip(), BlockHash(*block));
+    EXPECT_EQ(utxos.size(), 1U);
+}
+
+TEST(ChainStatePrepared, PreparedReorganizationRetainsOldCoinsUntilCommit)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto parameters = TestParameters();
+    const auto first = MakeCoinbaseBlock(state->active_tip(), 1U, 1100U, kRegularBits, parameters);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_EQ(state->AcceptBlock(*first).error, ChainError::kNone);
+    const auto main_two = MakeCoinbaseBlock(BlockHash(*first), 2U, 1200U, kRegularBits, parameters);
+    ASSERT_TRUE(main_two.has_value());
+    ASSERT_EQ(state->AcceptBlock(*main_two).error, ChainError::kNone);
+    const auto main_three =
+        MakeCoinbaseBlock(BlockHash(*main_two), 3U, 1300U, kRegularBits, parameters);
+    ASSERT_TRUE(main_three.has_value());
+    ASSERT_EQ(state->AcceptBlock(*main_three).error, ChainError::kNone);
+    const auto side_two = MakeCoinbaseBlock(BlockHash(*first), 2U, 1210U, kRegularBits, parameters);
+    ASSERT_TRUE(side_two.has_value());
+    ASSERT_EQ(state->AcceptBlock(*side_two).error, ChainError::kNone);
+    ASSERT_EQ(state->active_tip(), BlockHash(*main_three));
+    // Select a deterministic equal-work competitor winning the documented
+    // hash tie-break, so this exercises a real two-block disconnect/connect.
+    std::optional<Block> side_three;
+    for (std::uint32_t time = 1310U; time < 1600U; ++time) {
+        auto candidate =
+            MakeCoinbaseBlock(BlockHash(*side_two), 3U, time, kRegularBits, parameters);
+        ASSERT_TRUE(candidate.has_value());
+        if (BlockHash(*candidate).bytes() < BlockHash(*main_three).bytes()) {
+            side_three = std::move(candidate);
+            break;
+        }
+    }
+    ASSERT_TRUE(side_three.has_value());
+    auto prepared = state->PrepareBlock(*side_three);
+    ASSERT_NE(prepared.prepared, nullptr);
+    ASSERT_TRUE(prepared.result.became_active);
+    const auto view = state->GetPreparedActiveBlockIndexes(*prepared.prepared);
+    ASSERT_TRUE(view.has_value());
+    ASSERT_EQ(view->size(), 4U);
+    EXPECT_EQ(view->back().hash, BlockHash(*side_three));
+    EXPECT_EQ(state->active_tip(), BlockHash(*main_three));
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*main_two, parameters)));
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*main_three, parameters)));
+    EXPECT_FALSE(utxos.HaveCoin(CoinbaseOutputKey(*side_two, parameters)));
+    EXPECT_FALSE(utxos.HaveCoin(CoinbaseOutputKey(*side_three, parameters)));
+#if defined(_MSC_VER) && defined(_DEBUG)
+    const auto previous = _CrtSetAllocHook(CountChainPublicationAllocations);
+    chain_publication_allocations = 0U;
+    count_chain_publication_allocations = true;
+#endif
+    const auto result = state->CommitPrepared(*prepared.prepared);
+#if defined(_MSC_VER) && defined(_DEBUG)
+    count_chain_publication_allocations = false;
+    _CrtSetAllocHook(previous);
+    EXPECT_EQ(chain_publication_allocations, 0U);
+#endif
+    ASSERT_EQ(result.error, ChainError::kNone);
+    EXPECT_EQ(state->active_tip(), BlockHash(*side_three));
+    EXPECT_EQ(utxos.size(), 3U);
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*first, parameters)));
+    EXPECT_FALSE(utxos.HaveCoin(CoinbaseOutputKey(*main_two, parameters)));
+    EXPECT_FALSE(utxos.HaveCoin(CoinbaseOutputKey(*main_three, parameters)));
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*side_two, parameters)));
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*side_three, parameters)));
+    const auto old_index = state->GetBlockIndex(BlockHash(*main_three));
+    const auto new_index = state->GetBlockIndex(BlockHash(*side_three));
+    ASSERT_TRUE(old_index.has_value());
+    ASSERT_TRUE(new_index.has_value());
+    EXPECT_EQ(old_index->chain_work, new_index->chain_work);
+    EXPECT_EQ(old_index->status, BlockStatus::kValid);
+    EXPECT_EQ(new_index->status, BlockStatus::kActive);
+}
+
+TEST(ChainStatePrepared, InactiveBlockPublicationInvalidatesWithoutChangingActiveCoins)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto parameters = TestParameters();
+    const auto anchor = state->active_tip();
+    const auto first = MakeCoinbaseBlock(anchor, 1U, 1100U, kRegularBits, parameters);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_EQ(state->AcceptBlock(*first).error, ChainError::kNone);
+    const auto second = MakeCoinbaseBlock(BlockHash(*first), 2U, 1200U, kRegularBits, parameters);
+    ASSERT_TRUE(second.has_value());
+    ASSERT_EQ(state->AcceptBlock(*second).error, ChainError::kNone);
+    const auto next = MakeCoinbaseBlock(BlockHash(*second), 3U, 1300U, kRegularBits, parameters);
+    const auto side = MakeCoinbaseBlock(anchor, 1U, 1110U, kRegularBits, parameters);
+    ASSERT_TRUE(next.has_value());
+    ASSERT_TRUE(side.has_value());
+    auto pending = state->PrepareBlock(*next);
+    auto inactive = state->PrepareBlock(*side);
+    ASSERT_NE(pending.prepared, nullptr);
+    ASSERT_NE(inactive.prepared, nullptr);
+    EXPECT_FALSE(inactive.result.became_active);
+    ASSERT_EQ(state->CommitPrepared(*inactive.prepared).error, ChainError::kNone);
+    EXPECT_EQ(state->active_tip(), BlockHash(*second));
+    EXPECT_EQ(state->known_block_count(), 4U);
+    EXPECT_EQ(utxos.size(), 2U);
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*first, parameters)));
+    EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*second, parameters)));
+    EXPECT_FALSE(utxos.HaveCoin(CoinbaseOutputKey(*side, parameters)));
+    EXPECT_FALSE(state->CanCommitPrepared(*pending.prepared));
+    EXPECT_FALSE(state->GetPreparedActiveBlockIndexes(*pending.prepared).has_value());
+    EXPECT_EQ(state->CommitPrepared(*pending.prepared).error, ChainError::kContextFailure);
 }
 
 } // namespace
