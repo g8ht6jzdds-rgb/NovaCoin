@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include "chain/chainstate.hpp"
 #include "chain/validation.hpp"
 #include "consensus/monetary.hpp"
 #include "consensus/pow.hpp"
 #include "wallet/wallet.hpp"
+#include <array>
+#include <type_traits>
 
 #include <chrono>
 #include <cstdint>
@@ -306,6 +309,180 @@ TEST(Wallet, EncryptedPersistenceRejectsEmptyPassphrase)
     ASSERT_NE(wallet, nullptr);
     EXPECT_FALSE(wallet->SaveEncrypted(path, {}));
     EXPECT_EQ(Wallet::LoadEncrypted(kWalletParams, path, {}), nullptr);
+}
+
+nova::chain::BlockIndex WalletObservationBlock(const Transaction& transaction)
+{
+    nova::chain::BlockIndex index;
+    index.height = 11U;
+    index.block.emplace();
+    index.block->transactions.push_back(transaction);
+    return index;
+}
+
+TEST(Wallet, PreparedConfirmedStatePublishesOnlyOnceAndPreservesUnconfirmedCoins)
+{
+    static_assert(!std::is_move_constructible_v<Wallet>);
+    static_assert(!std::is_copy_constructible_v<Wallet::PreparedConfirmedState>);
+    auto wallet = Wallet::Create(kWalletParams);
+    ASSERT_NE(wallet, nullptr);
+    const auto address = wallet->GenerateReceivingAddress();
+    ASSERT_TRUE(address.has_value());
+    ASSERT_TRUE(wallet->ObserveTransaction(
+        FundingTransaction(60U, 3LL * COIN, address->public_key_hash), 1U, true));
+    ASSERT_TRUE(wallet->ObserveTransaction(FundingTransaction(61U, COIN, address->public_key_hash),
+                                           0U, false));
+    const std::array active{
+        WalletObservationBlock(FundingTransaction(62U, 2LL * COIN, address->public_key_hash))};
+    auto prepared = wallet->PrepareConfirmedState(active);
+    ASSERT_NE(prepared, nullptr);
+    EXPECT_EQ(wallet->ConfirmedBalance(), 3LL * COIN);
+    EXPECT_EQ(wallet->UnconfirmedBalance(), COIN);
+    ASSERT_TRUE(wallet->CommitPreparedState(*prepared));
+    EXPECT_EQ(wallet->ConfirmedBalance(), 2LL * COIN);
+    EXPECT_EQ(wallet->UnconfirmedBalance(), COIN);
+    const auto coins = wallet->ListUTXOs();
+    ASSERT_EQ(coins.size(), 2U);
+    EXPECT_EQ(coins[0].height == 11U || coins[1].height == 11U, true);
+    EXPECT_FALSE(wallet->CommitPreparedState(*prepared));
+    EXPECT_EQ(wallet->ConfirmedBalance(), 2LL * COIN);
+}
+
+TEST(Wallet, PreparedStateRejectsWrongOwnerStaleAndDestroyedOwner)
+{
+    auto wallet = Wallet::Create(kWalletParams);
+    auto other = Wallet::Create(kWalletParams);
+    ASSERT_NE(wallet, nullptr);
+    ASSERT_NE(other, nullptr);
+    auto prepared = wallet->PrepareConfirmedState({});
+    ASSERT_NE(prepared, nullptr);
+    EXPECT_FALSE(other->CommitPreparedState(*prepared));
+    ASSERT_TRUE(wallet->GenerateReceivingAddress().has_value());
+    EXPECT_FALSE(wallet->CommitPreparedState(*prepared));
+    auto current = wallet->PrepareConfirmedState({});
+    ASSERT_NE(current, nullptr);
+    wallet.reset();
+    auto replacement = Wallet::Create(kWalletParams);
+    ASSERT_NE(replacement, nullptr);
+    EXPECT_FALSE(replacement->CommitPreparedState(*current));
+    EXPECT_TRUE(replacement->ListUTXOs().empty());
+}
+
+TEST(Wallet, PreparedStateInvalidatesOnObservationClearAndSiblingCommit)
+{
+    auto wallet = Wallet::Create(kWalletParams);
+    ASSERT_NE(wallet, nullptr);
+    const auto address = wallet->GenerateReceivingAddress();
+    ASSERT_TRUE(address.has_value());
+    auto before_observe = wallet->PrepareConfirmedState({});
+    ASSERT_NE(before_observe, nullptr);
+    ASSERT_TRUE(wallet->ObserveTransaction(FundingTransaction(63U, COIN, address->public_key_hash),
+                                           1U, true));
+    EXPECT_FALSE(wallet->CommitPreparedState(*before_observe));
+    auto before_clear = wallet->PrepareConfirmedState({});
+    ASSERT_NE(before_clear, nullptr);
+    wallet->ClearConfirmedState();
+    EXPECT_FALSE(wallet->CommitPreparedState(*before_clear));
+    auto first = wallet->PrepareConfirmedState({});
+    auto sibling = wallet->PrepareConfirmedState({});
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(sibling, nullptr);
+    ASSERT_TRUE(wallet->CommitPreparedState(*first));
+    EXPECT_FALSE(wallet->CommitPreparedState(*sibling));
+}
+
+TEST(Wallet, PreparedRebuildFailureDoesNotPublishEarlierTransactions)
+{
+    auto wallet = Wallet::Create(kWalletParams);
+    ASSERT_NE(wallet, nullptr);
+    const auto address = wallet->GenerateReceivingAddress();
+    ASSERT_TRUE(address.has_value());
+    const auto original = FundingTransaction(64U, 3LL * COIN, address->public_key_hash);
+    ASSERT_TRUE(wallet->ObserveTransaction(original, 1U, true));
+    auto block = WalletObservationBlock(FundingTransaction(65U, COIN, address->public_key_hash));
+    block.block->transactions.push_back(Transaction{});
+    const std::array active{block};
+    EXPECT_EQ(wallet->PrepareConfirmedState(active), nullptr);
+    EXPECT_FALSE(wallet->RebuildConfirmedState(active));
+    EXPECT_EQ(wallet->ConfirmedBalance(), 3LL * COIN);
+    const auto coins = wallet->ListUTXOs();
+    ASSERT_EQ(coins.size(), 1U);
+    EXPECT_EQ(coins.front().key.transaction_id, *original.TxId(kTransactionLimits));
+    EXPECT_EQ(coins.front().height, 1U);
+}
+
+TEST(Wallet, PreparedEncryptedImageRestoresCandidateWithoutPublishingLiveState)
+{
+    const auto path = UniqueWalletPath();
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup()
+        {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    } cleanup{path};
+    const std::vector<std::uint8_t> passphrase{'s', 't', 'a', 'g', 'e', 'd'};
+    auto wallet = Wallet::Create(kWalletParams);
+    auto other = Wallet::Create(kWalletParams);
+    ASSERT_NE(wallet, nullptr);
+    ASSERT_NE(other, nullptr);
+    const auto address = wallet->GenerateReceivingAddress();
+    ASSERT_TRUE(address.has_value());
+    const std::array active{
+        WalletObservationBlock(FundingTransaction(66U, COIN, address->public_key_hash))};
+    auto prepared = wallet->PrepareConfirmedState(active);
+    ASSERT_NE(prepared, nullptr);
+    EXPECT_FALSE(other->SavePreparedEncrypted(*prepared, path, passphrase));
+    EXPECT_FALSE(std::filesystem::exists(path));
+    EXPECT_FALSE(wallet->SavePreparedEncrypted(*prepared, path, {}));
+    EXPECT_FALSE(std::filesystem::exists(path));
+    ASSERT_TRUE(wallet->SavePreparedEncrypted(*prepared, path, passphrase));
+    EXPECT_EQ(wallet->ConfirmedBalance(), 0);
+    const auto restored = Wallet::LoadEncrypted(kWalletParams, path, passphrase);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->ConfirmedBalance(), COIN);
+    ASSERT_EQ(restored->ListUTXOs().size(), 1U);
+    EXPECT_EQ(restored->ListUTXOs().front().height, 11U);
+    ASSERT_EQ(restored->ListReceivingAddresses().size(), 1U);
+    EXPECT_EQ(restored->ListReceivingAddresses().front().public_key_hash, address->public_key_hash);
+    ASSERT_TRUE(wallet->CommitPreparedState(*prepared));
+    EXPECT_EQ(wallet->ConfirmedBalance(), COIN);
+    EXPECT_FALSE(wallet->SavePreparedEncrypted(*prepared, path, passphrase));
+}
+
+TEST(Wallet, FailedPreparedSaveAndObservationLeaveCandidateUsable)
+{
+    const auto path = UniqueWalletPath();
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup()
+        {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    } cleanup{path};
+    ASSERT_TRUE(std::filesystem::create_directory(path));
+    const std::vector<std::uint8_t> passphrase{'r', 'e', 't', 'r', 'y'};
+    auto wallet = Wallet::Create(kWalletParams);
+    ASSERT_NE(wallet, nullptr);
+    const auto address = wallet->GenerateReceivingAddress();
+    ASSERT_TRUE(address.has_value());
+    const std::array active{
+        WalletObservationBlock(FundingTransaction(67U, COIN, address->public_key_hash))};
+    auto prepared = wallet->PrepareConfirmedState(active);
+    ASSERT_NE(prepared, nullptr);
+    EXPECT_FALSE(wallet->SavePreparedEncrypted(*prepared, path, passphrase));
+    EXPECT_TRUE(std::filesystem::is_directory(path));
+    EXPECT_EQ(wallet->ConfirmedBalance(), 0);
+    EXPECT_FALSE(wallet->ObserveTransaction(Transaction{}, 1U, true));
+    const auto image = path / "prepared.dat";
+    ASSERT_TRUE(wallet->SavePreparedEncrypted(*prepared, image, passphrase));
+    const auto restored = Wallet::LoadEncrypted(kWalletParams, image, passphrase);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->ConfirmedBalance(), COIN);
+    ASSERT_TRUE(wallet->CommitPreparedState(*prepared));
+    EXPECT_EQ(wallet->ConfirmedBalance(), COIN);
 }
 
 } // namespace
