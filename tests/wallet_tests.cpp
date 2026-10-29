@@ -4,7 +4,10 @@
 #include "chain/validation.hpp"
 #include "consensus/monetary.hpp"
 #include "consensus/pow.hpp"
+#include "primitives/serialization.hpp"
+#include "wallet/secure_memory.hpp"
 #include "wallet/wallet.hpp"
+#include <algorithm>
 #include <array>
 #include <type_traits>
 
@@ -12,6 +15,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -247,6 +252,176 @@ TEST(Wallet, RejectsInvalidFeeParametersAndOversizedFeeEstimate)
     auto excessive = kWalletParams;
     excessive.fee_rate_per_byte = MAX_MONEY;
     EXPECT_FALSE(nova::wallet::TransactionBuilder::EstimateFee(1U, 2U, excessive).has_value());
+}
+
+struct CleanseObservation final {
+    static inline std::size_t calls{};
+    static inline bool all_zero{true};
+    static void AfterCleanse(const std::span<const std::uint8_t> bytes) noexcept
+    {
+        ++calls;
+        all_zero = all_zero && std::all_of(bytes.begin(), bytes.end(),
+                                           [](const auto value) { return value == 0U; });
+    }
+};
+
+TEST(WalletSecureMemory, WipesGrowthMoveReplacementAndFinalAllocationBeforeFree)
+{
+    CleanseObservation::calls = 0U;
+    CleanseObservation::all_zero = true;
+    const std::array<std::uint8_t, 7U> public_dummy{'p', 'u', 'b', 'l', 'i', 'c', '!'};
+    {
+        nova::wallet::detail::BasicSensitiveBytes<CleanseObservation> first;
+        ASSERT_TRUE(first.Append(public_dummy, 8192U));
+        const auto before = CleanseObservation::calls;
+        first.mutable_view().reserve(4096U);
+        EXPECT_GT(CleanseObservation::calls, before);
+        nova::wallet::detail::BasicSensitiveBytes<CleanseObservation> moved{std::move(first)};
+        EXPECT_TRUE(first.view().empty());
+        nova::wallet::detail::BasicSensitiveBytes<CleanseObservation> replaced;
+        ASSERT_TRUE(replaced.Append(public_dummy, 8192U));
+        replaced = std::move(moved);
+        EXPECT_TRUE(std::equal(replaced.view().begin(), replaced.view().end(), public_dummy.begin(),
+                               public_dummy.end()));
+    }
+    EXPECT_GT(CleanseObservation::calls, 0U);
+    EXPECT_TRUE(CleanseObservation::all_zero);
+}
+
+TEST(WalletSecureMemory, BoundAliasAndAllocationFailurePreserveExistingBytes)
+{
+    using namespace nova::wallet::detail;
+    const std::array<std::uint8_t, 7U> public_dummy{'p', 'u', 'b', 'l', 'i', 'c', '!'};
+    BasicSensitiveBytes<CleanseObservation> bytes;
+    ASSERT_TRUE(bytes.Append(public_dummy, 7U));
+    EXPECT_FALSE(bytes.Append(public_dummy, 7U));
+    EXPECT_FALSE(bytes.Append(bytes.view(), 64U));
+    EXPECT_TRUE(bytes.Append({}, 7U));
+    const auto capacity = bytes.mutable_view().capacity();
+    std::vector<std::uint8_t> larger(capacity + 1U, 0x5AU); // public dummy bytes, not a scalar
+    {
+        ScopedSensitiveFailureForTesting fault{SensitiveFailureStage::kAllocation};
+        EXPECT_FALSE(bytes.Append(larger, capacity + 8U));
+        EXPECT_TRUE(fault.triggered());
+    }
+    EXPECT_TRUE(std::equal(bytes.view().begin(), bytes.view().end(), public_dummy.begin(),
+                           public_dummy.end()));
+    EXPECT_TRUE(bytes.Append(public_dummy, 64U));
+}
+
+TEST(WalletSecureMemory, CanonicalWriterMatchesExistingGrammarAtEveryIntegerWidth)
+{
+    nova::wallet::detail::SensitiveWriter secure{1024U};
+    nova::primitives::BinaryWriter reference;
+    for (const std::uint64_t value : {0ULL, 252ULL, 253ULL, 65535ULL, 65536ULL, 0xFFFFFFFFULL,
+                                      0x100000000ULL, 0xFFFFFFFFFFFFFFFFULL}) {
+        ASSERT_TRUE(secure.WriteCompactSize(value));
+        ASSERT_TRUE(reference.WriteCompactSize(value));
+    }
+    ASSERT_TRUE(secure.WriteU32(0x89ABCDEFU));
+    ASSERT_TRUE(reference.WriteU32(0x89ABCDEFU));
+    ASSERT_TRUE(secure.WriteI64(-1));
+    ASSERT_TRUE(reference.WriteI64(-1));
+    const std::array<std::uint8_t, 3U> dummy{'p', 'u', 'b'};
+    ASSERT_TRUE(secure.WriteBytes(dummy, 3U));
+    ASSERT_TRUE(reference.WriteBytes(dummy, 3U));
+    EXPECT_TRUE(std::equal(secure.bytes().begin(), secure.bytes().end(), reference.bytes().begin(),
+                           reference.bytes().end()));
+    nova::wallet::detail::SensitiveWriter boundary{9U};
+    EXPECT_TRUE(boundary.WriteCompactSize(std::numeric_limits<std::uint64_t>::max()));
+    EXPECT_EQ(boundary.bytes().size(), 9U);
+    EXPECT_FALSE(boundary.WriteU8(1U));
+    EXPECT_EQ(boundary.bytes().size(), 9U);
+    nova::wallet::detail::SensitiveWriter rejected{16U};
+    EXPECT_FALSE(rejected.WriteBytes(dummy, 2U));
+    EXPECT_TRUE(rejected.bytes().empty());
+}
+
+TEST(WalletSecureMemory, ScopedFailureIsOneShotAndNestedScopeRestoresPriorStage)
+{
+    using namespace nova::wallet::detail;
+    ScopedSensitiveFailureForTesting outer{SensitiveFailureStage::kEncryptionScratch};
+    {
+        ScopedSensitiveFailureForTesting inner{SensitiveFailureStage::kDecryptionScratch};
+        EXPECT_THROW(SensitiveAllocationCheckpoint(SensitiveFailureStage::kDecryptionScratch),
+                     std::bad_alloc);
+        EXPECT_TRUE(inner.triggered());
+        EXPECT_NO_THROW(SensitiveAllocationCheckpoint(SensitiveFailureStage::kDecryptionScratch));
+    }
+    EXPECT_THROW(SensitiveAllocationCheckpoint(SensitiveFailureStage::kEncryptionScratch),
+                 std::bad_alloc);
+    EXPECT_TRUE(outer.triggered());
+}
+
+TEST(WalletSecureMemory, SaveAndLoadScratchFailureReturnWithoutReplacingFileOrKeys)
+{
+    static_assert(!std::is_nothrow_default_constructible_v<nova::wallet::detail::SensitiveBytes>);
+    static_assert(!std::is_nothrow_move_constructible_v<nova::wallet::detail::SensitiveBytes>);
+    using namespace nova::wallet::detail;
+    const auto path = UniqueWalletPath();
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup()
+        {
+            std::error_code error;
+            std::filesystem::remove(path, error);
+        }
+    } cleanup{path};
+    const std::vector<std::uint8_t> pass{'t', 'e', 's', 't', '-', 'o', 'n', 'l', 'y'};
+    auto wallet = Wallet::Create(kWalletParams);
+    ASSERT_NE(wallet, nullptr);
+    const auto address = wallet->GenerateReceivingAddress();
+    ASSERT_TRUE(address.has_value());
+    ASSERT_TRUE(wallet->SaveEncrypted(path, pass));
+    auto read = [&] {
+        std::ifstream input{path, std::ios::binary};
+        return std::vector<char>{std::istreambuf_iterator<char>{input},
+                                 std::istreambuf_iterator<char>{}};
+    };
+    const auto original = read(); // encrypted disposable test image, never logged
+    {
+        ScopedSensitiveFailureForTesting fault{SensitiveFailureStage::kEncryptionScratch};
+        EXPECT_FALSE(wallet->SaveEncrypted(path, pass));
+        EXPECT_TRUE(fault.triggered());
+    }
+    EXPECT_TRUE(read() == original);
+    {
+        ScopedSensitiveFailureForTesting fault{SensitiveFailureStage::kFileStaging};
+        EXPECT_FALSE(wallet->SaveEncrypted(path, pass));
+        EXPECT_TRUE(fault.triggered());
+    }
+    EXPECT_TRUE(read() == original);
+    {
+        ScopedSensitiveFailureForTesting fault{SensitiveFailureStage::kAllocation};
+        EXPECT_FALSE(wallet->SaveEncrypted(path, pass));
+        EXPECT_TRUE(fault.triggered());
+    }
+    EXPECT_TRUE(read() == original);
+    {
+        ScopedSensitiveFailureForTesting fault{SensitiveFailureStage::kDecryptionScratch};
+        EXPECT_EQ(Wallet::LoadEncrypted(kWalletParams, path, pass), nullptr);
+        EXPECT_TRUE(fault.triggered());
+    }
+    ASSERT_EQ(wallet->ListReceivingAddresses().size(), 1U);
+    EXPECT_EQ(wallet->ListReceivingAddresses().front().public_key_hash, address->public_key_hash);
+    const auto restored = Wallet::LoadEncrypted(kWalletParams, path, pass);
+    ASSERT_NE(restored, nullptr);
+    ASSERT_EQ(restored->ListReceivingAddresses().size(), 1U);
+    EXPECT_EQ(restored->ListReceivingAddresses().front().public_key_hash, address->public_key_hash);
+}
+
+TEST(WalletSecureMemory, ReadsOriginalVersionOneEmptyFixtureWithoutReencodingIt)
+{
+    const auto fixture = std::filesystem::path{__FILE__}.parent_path().parent_path() /
+                         "test/data/wallet/empty-v1.nwlt";
+    const std::vector<std::uint8_t> public_passphrase{'e', 'm', 'p', 't', 'y', '-', 'v', '1',
+                                                      '-', 'f', 'i', 'x', 't', 'u', 'r', 'e'};
+    const auto restored = Wallet::LoadEncrypted(kWalletParams, fixture, public_passphrase);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_TRUE(restored->ListReceivingAddresses().empty());
+    EXPECT_TRUE(restored->ListUTXOs().empty());
+    EXPECT_EQ(restored->ConfirmedBalance(), 0);
+    EXPECT_EQ(restored->UnconfirmedBalance(), 0);
 }
 
 TEST(Wallet, EncryptedPersistenceRestoresKeysAndUtxosAfterRestart)
