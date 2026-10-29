@@ -618,7 +618,10 @@ TransactionBuildResult TransactionBuilder::Build(const KeyStore& key_store,
     }
 }
 
-Wallet::Wallet(WalletParams parameters) noexcept : parameters_(parameters) {}
+Wallet::Wallet(WalletParams parameters)
+    : identity_(std::make_shared<const std::uint8_t>(0U)), parameters_(parameters)
+{
+}
 
 std::unique_ptr<Wallet> Wallet::Create(const WalletParams& parameters) noexcept
 {
@@ -634,6 +637,12 @@ std::unique_ptr<Wallet> Wallet::Create(const WalletParams& parameters) noexcept
 
 std::optional<WalletAddress> Wallet::GenerateReceivingAddress() noexcept
 {
+    if (!CanAdvanceRevision()) {
+        return std::nullopt;
+    }
+    // Invalidate even a failed attempt: no partially changed key state can
+    // leave an earlier prepared encrypted image eligible for publication.
+    ++revision_;
     return key_store_.GenerateReceivingAddress();
 }
 
@@ -686,8 +695,23 @@ const primitives::TransactionLimits& Wallet::transaction_limits() const noexcept
     return parameters_.transaction_limits;
 }
 
+bool Wallet::CanAdvanceRevision() const noexcept
+{
+    return revision_ != std::numeric_limits<std::uint64_t>::max();
+}
+
 bool Wallet::ObserveTransaction(const primitives::Transaction& transaction,
                                 const std::uint32_t height, const bool confirmed) noexcept
+{
+    if (!CanAdvanceRevision() || !ObserveInto(coins_, transaction, height, confirmed)) {
+        return false;
+    }
+    ++revision_;
+    return true;
+}
+
+bool Wallet::ObserveInto(Coins& coins, const primitives::Transaction& transaction,
+                         const std::uint32_t height, const bool confirmed) const noexcept
 {
     if (primitives::CheckTransactionStructure(transaction, parameters_.transaction_limits) !=
         primitives::TransactionStructureError::kNone) {
@@ -699,7 +723,7 @@ bool Wallet::ObserveTransaction(const primitives::Transaction& transaction,
     }
     try {
         const auto is_coinbase = primitives::IsCoinbaseTransaction(transaction);
-        auto updated_coins = coins_;
+        auto updated_coins = coins;
         for (const auto& input : transaction.inputs) {
             const auto iterator =
                 updated_coins.find(chain::UTXOKey::FromOutPoint(input.previous_output));
@@ -721,41 +745,87 @@ bool Wallet::ObserveTransaction(const primitives::Transaction& transaction,
             updated_coins.insert_or_assign(
                 key, WalletUTXO{key, output, height, is_coinbase, confirmed, false});
         }
-        coins_.swap(updated_coins);
+        coins.swap(updated_coins);
         return true;
     } catch (...) {
         return false;
     }
 }
 
-bool Wallet::RebuildConfirmedState(const std::span<const chain::BlockIndex> active) noexcept
+bool Wallet::IsCurrent(const PreparedConfirmedState& prepared) const noexcept
 {
+    const auto owner = prepared.owner_.lock();
+    return owner != nullptr && owner == identity_ && !prepared.consumed_ &&
+           prepared.revision_ == revision_ && CanAdvanceRevision();
+}
+
+std::unique_ptr<Wallet::PreparedConfirmedState>
+Wallet::PrepareConfirmedState(const std::span<const chain::BlockIndex> active) const noexcept
+{
+    if (!CanAdvanceRevision()) {
+        return nullptr;
+    }
     try {
-        // Roll back observation on allocation/decoding failure; the chain and
-        // its authoritative UTXO state are never modified by this consumer.
-        auto original = coins_;
-        ClearConfirmedState();
+        auto prepared = std::unique_ptr<PreparedConfirmedState>{new PreparedConfirmedState{}};
+        prepared->owner_ = identity_;
+        prepared->revision_ = revision_;
+        prepared->coins_ = coins_;
+        ClearConfirmedCoins(prepared->coins_);
         for (const auto& index : active) {
             if (index.block.has_value()) {
                 for (const auto& transaction : index.block->transactions) {
-                    if (!ObserveTransaction(transaction, index.height, true)) {
-                        coins_.swap(original);
-                        return false;
+                    if (!ObserveInto(prepared->coins_, transaction, index.height, true)) {
+                        return nullptr;
                     }
                 }
             }
         }
-        return true;
+        return prepared;
     } catch (...) {
+        return nullptr;
+    }
+}
+
+bool Wallet::CommitPreparedState(PreparedConfirmedState& prepared) noexcept
+{
+    if (!IsCurrent(prepared)) {
         return false;
     }
+    static_assert(noexcept(coins_.swap(prepared.coins_)));
+    coins_.swap(prepared.coins_);
+    prepared.consumed_ = true;
+    ++revision_;
+    return true;
+}
+
+bool Wallet::SavePreparedEncrypted(const PreparedConfirmedState& prepared,
+                                   const std::filesystem::path& path,
+                                   const std::span<const std::uint8_t> passphrase) const noexcept
+{
+    return IsCurrent(prepared) && SaveCoinsEncrypted(prepared.coins_, path, passphrase);
+}
+
+bool Wallet::RebuildConfirmedState(const std::span<const chain::BlockIndex> active) noexcept
+{
+    auto prepared = PrepareConfirmedState(active);
+    return prepared != nullptr && CommitPreparedState(*prepared);
 }
 
 void Wallet::ClearConfirmedState() noexcept
 {
-    for (auto iterator = coins_.begin(); iterator != coins_.end();) {
+    // This legacy void API can clear even at counter exhaustion. The exhausted
+    // revision permanently prevents creation/use of prepared state.
+    if (CanAdvanceRevision()) {
+        ++revision_;
+    }
+    ClearConfirmedCoins(coins_);
+}
+
+void Wallet::ClearConfirmedCoins(Coins& coins) noexcept
+{
+    for (auto iterator = coins.begin(); iterator != coins.end();) {
         if (iterator->second.confirmed) {
-            iterator = coins_.erase(iterator);
+            iterator = coins.erase(iterator);
         } else {
             iterator->second.pending_spend = false;
             ++iterator;
@@ -865,8 +935,14 @@ WalletError Wallet::Broadcast(const primitives::Transaction& transaction,
 bool Wallet::SaveEncrypted(const std::filesystem::path& path,
                            const std::span<const std::uint8_t> passphrase) const noexcept
 {
+    return SaveCoinsEncrypted(coins_, path, passphrase);
+}
+
+bool Wallet::SaveCoinsEncrypted(const Coins& coins, const std::filesystem::path& path,
+                                const std::span<const std::uint8_t> passphrase) const noexcept
+{
     if (path.empty() || passphrase.empty() || !IsValidParameters(parameters_) ||
-        key_store_.keys_.size() > kMaximumWalletKeys || coins_.size() > kMaximumWalletCoins) {
+        key_store_.keys_.size() > kMaximumWalletKeys || coins.size() > kMaximumWalletCoins) {
         return false;
     }
     try {
@@ -883,10 +959,10 @@ bool Wallet::SaveEncrypted(const std::filesystem::path& path,
                 return false;
             }
         }
-        if (!plaintext_writer.WriteCompactSize(coins_.size())) {
+        if (!plaintext_writer.WriteCompactSize(coins.size())) {
             return false;
         }
-        for (const auto& [key, coin] : coins_) {
+        for (const auto& [key, coin] : coins) {
             if (!plaintext_writer.WriteHash256(key.transaction_id) ||
                 !plaintext_writer.WriteU32(key.output_index) ||
                 !plaintext_writer.WriteI64(coin.output.value) ||
