@@ -154,15 +154,30 @@ UTXOBatch::UTXOBatch(UTXOSet& base) : base_(base), base_set_(&base), base_revisi
 {
 }
 
+UTXOBatch::UTXOBatch(const UTXOView& base) : base_(base), publication_disabled_(true) {}
+
+std::optional<UTXOBatch> UTXOBatch::ReadOnlyOverlay(const UTXOView& base) noexcept
+{
+    if (!base.IsCurrent())
+        return std::nullopt;
+    try {
+        return UTXOBatch{base};
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 UTXOBatch::UTXOBatch(UTXOBatch& parent)
-    : base_(parent), parent_(&parent), parent_revision_(parent.revision_)
+    : base_(parent), parent_(&parent), parent_revision_(parent.revision_),
+      publication_disabled_(parent.publication_disabled_)
 {
 }
 
 UTXOBatch::UTXOBatch(UTXOBatch&& other) noexcept(std::is_nothrow_default_constructible_v<UTXODelta>)
     : base_(other.base_), base_set_(other.base_set_), parent_(other.parent_),
       revision_(other.revision_), parent_revision_(other.parent_revision_),
-      base_revision_(other.base_revision_), closed_(other.closed_)
+      base_revision_(other.base_revision_), closed_(other.closed_),
+      publication_disabled_(other.publication_disabled_)
 {
     // Empty container construction can allocate (notably MSVC Debug).
     // It finishes before touching the source; the following swaps cannot throw.
@@ -184,6 +199,8 @@ bool UTXOBatch::IsOpen() const noexcept
         return false;
     if (parent_ != nullptr)
         return parent_->IsOpen() && parent_->revision_ == parent_revision_;
+    if (publication_disabled_)
+        return base_.IsCurrent();
     return base_set_ != nullptr && base_set_->revision_ == base_revision_ &&
            base_set_->revision_ != std::numeric_limits<std::uint64_t>::max();
 }
@@ -215,6 +232,8 @@ UTXOBatch::ApplyTransaction(const primitives::Transaction& transaction, const st
 
 std::optional<Coin> UTXOBatch::GetCoin(const UTXOKey& key) const
 {
+    if (!IsCurrent())
+        return std::nullopt;
     try {
         return GetCoinFromDelta(base_, delta_, key);
     } catch (...) {
@@ -224,6 +243,8 @@ std::optional<Coin> UTXOBatch::GetCoin(const UTXOKey& key) const
 
 bool UTXOBatch::HaveCoin(const UTXOKey& key) const noexcept
 {
+    if (!IsCurrent())
+        return false;
     return HaveCoinInDelta(base_, delta_, key);
 }
 
@@ -249,6 +270,8 @@ UTXOError UTXOBatch::UndoTransaction(const TransactionUndo& undo) noexcept
 
 bool UTXOBatch::Commit() noexcept
 {
+    if (publication_disabled_)
+        return false;
     if (!IsOpen() || revision_ == std::numeric_limits<std::uint64_t>::max()) {
         return false;
     }

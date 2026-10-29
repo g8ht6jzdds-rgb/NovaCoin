@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "chain/chainstate.hpp"
+#include "chain/mempool.hpp"
 #include "chain/network_chainstate.hpp"
+#include <new>
 
 #include <algorithm>
 #include <cstdint>
@@ -981,6 +983,107 @@ TEST(ChainStatePrepared, InactiveBlockPublicationInvalidatesWithoutChangingActiv
     EXPECT_FALSE(state->CanCommitPrepared(*pending.prepared));
     EXPECT_FALSE(state->GetPreparedActiveBlockIndexes(*pending.prepared).has_value());
     EXPECT_EQ(state->CommitPrepared(*pending.prepared).error, ChainError::kContextFailure);
+}
+
+TEST(ChainStatePreparedReadOnly, VisitorCannotPublishAnOverlayIntoValidatedState)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto parameters = TestParameters();
+    const auto block = MakeCoinbaseBlock(state->active_tip(), 1U, 1100U, kRegularBits, parameters);
+    ASSERT_TRUE(block.has_value());
+    auto prepared = state->PrepareBlock(*block);
+    ASSERT_NE(prepared.prepared, nullptr);
+    const auto key = CoinbaseOutputKey(*block, parameters);
+    bool visited = false;
+    EXPECT_TRUE(state->WithPreparedUTXO(*prepared.prepared, [&](const nova::chain::UTXOView& view) {
+        visited = true;
+        EXPECT_TRUE(view.HaveCoin(key));
+        auto overlay = nova::chain::UTXOBatch::ReadOnlyOverlay(view);
+        EXPECT_TRUE(overlay.has_value());
+        if (!overlay.has_value())
+            return false;
+        Transaction spend{
+            1,
+            {TxInput{OutPoint{key.transaction_id, key.output_index}, {0x51U}, 0xFFFFFFFFU}},
+            {TxOutput{1, {0x51U}}},
+            0U};
+        const auto applied = overlay->ApplyTransaction(
+            spend, 2U, false, parameters.block_validation.block_limits.transaction_limits);
+        EXPECT_EQ(applied.error, nova::chain::UTXOError::kNone);
+        EXPECT_FALSE(overlay->Commit());
+        EXPECT_TRUE(view.HaveCoin(key));
+        return true;
+    }));
+    EXPECT_TRUE(visited);
+    EXPECT_EQ(state->active_height(), 0U);
+    EXPECT_EQ(utxos.size(), 0U);
+    ASSERT_EQ(state->CommitPrepared(*prepared.prepared).error, ChainError::kNone);
+    EXPECT_TRUE(utxos.HaveCoin(key));
+    EXPECT_EQ(utxos.size(), 1U);
+    EXPECT_FALSE(state->WithPreparedUTXO(*prepared.prepared, [&](const nova::chain::UTXOView&) {
+        ADD_FAILURE() << "Consumed token must not invoke visitor";
+        return true;
+    }));
+}
+
+TEST(ChainStatePreparedReadOnly, VisitorFailureExceptionAndGenerationChangeRejectOutputs)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto block =
+        MakeCoinbaseBlock(state->active_tip(), 1U, 1100U, kRegularBits, TestParameters());
+    ASSERT_TRUE(block.has_value());
+    auto prepared = state->PrepareBlock(*block);
+    ASSERT_NE(prepared.prepared, nullptr);
+    EXPECT_FALSE(state->WithPreparedUTXO(*prepared.prepared,
+                                         [](const nova::chain::UTXOView&) { return false; }));
+    EXPECT_FALSE(state->WithPreparedUTXO(
+        *prepared.prepared, [](const nova::chain::UTXOView&) -> bool { throw std::bad_alloc{}; }));
+    EXPECT_TRUE(state->CanCommitPrepared(*prepared.prepared));
+    // Deliberately violate non-reentrancy to test the defensive after-visit
+    // guard. This does not promise rollback of a visitor's own live mutations.
+    EXPECT_FALSE(state->WithPreparedUTXO(*prepared.prepared, [&](const nova::chain::UTXOView&) {
+        return state->ActivateBestChain().error == ChainError::kNone;
+    }));
+    EXPECT_FALSE(state->CanCommitPrepared(*prepared.prepared));
+    EXPECT_EQ(utxos.size(), 0U);
+}
+
+TEST(ChainStatePreparedReadOnly, MempoolPreparationConsumesOnlyLexicalConstView)
+{
+    UTXOSet utxos;
+    auto state = CreateState(utxos);
+    ASSERT_NE(state, nullptr);
+    const auto parameters = TestParameters();
+    auto pool = nova::chain::Mempool::Create({parameters.block_validation, 16U, 100000U, 0});
+    ASSERT_NE(pool, nullptr);
+    const auto block = MakeCoinbaseBlock(state->active_tip(), 1U, 1100U, kRegularBits, parameters);
+    ASSERT_TRUE(block.has_value());
+    auto chain_prepared = state->PrepareBlock(*block);
+    ASSERT_NE(chain_prepared.prepared, nullptr);
+    std::unique_ptr<nova::chain::Mempool::PreparedState> pool_prepared;
+    const auto visited =
+        state->WithPreparedUTXO(*chain_prepared.prepared, [&](const nova::chain::UTXOView& view) {
+            EXPECT_TRUE(view.HaveCoin(CoinbaseOutputKey(*block, parameters)));
+            auto result = pool->PrepareReconciliation({}, {}, {2U, 1000U}, view, 1U);
+            if (result.result.error != nova::chain::MempoolError::kNone)
+                return false;
+            pool_prepared = std::move(result.prepared);
+            return pool_prepared != nullptr;
+        });
+    ASSERT_TRUE(visited);
+    ASSERT_NE(pool_prepared, nullptr);
+    EXPECT_EQ(state->active_height(), 0U);
+    EXPECT_EQ(utxos.size(), 0U);
+    EXPECT_EQ(pool->size(), 0U);
+    ASSERT_EQ(state->CommitPrepared(*chain_prepared.prepared).error, ChainError::kNone);
+    ASSERT_TRUE(pool->CommitPrepared(*pool_prepared));
+    EXPECT_EQ(state->active_height(), 1U);
+    EXPECT_EQ(pool->size(), 0U);
+    // No durable store or concurrent-reader atomicity is claimed by this test.
 }
 
 } // namespace
