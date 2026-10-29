@@ -4,6 +4,9 @@
 
 #include <cstdint>
 #include <vector>
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
 
 namespace
 {
@@ -573,6 +576,60 @@ TEST(UTXOBatchAtomicity, UsesABoundedOverlayAndRollbackDoesNotTouchTheBaseSet)
     const auto transaction_id = transaction.TxId(kLimits);
     ASSERT_TRUE(transaction_id.has_value());
     EXPECT_FALSE(set.HaveCoin(UTXOKey{*transaction_id, 0U}));
+}
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+thread_local bool count_root_publication_allocations = false;
+thread_local std::size_t root_publication_allocations = 0U;
+
+int CountRootPublicationAllocations(const int kind, void*, std::size_t, int, long,
+                                    const unsigned char*, int)
+{
+    if (count_root_publication_allocations && kind == _HOOK_ALLOC) {
+        ++root_publication_allocations;
+    }
+    return 1; // Observe allocations; never force failure or touch heap data.
+}
+#endif
+
+TEST(UTXOPublication, RootCommitUsesPreallocatedNodes)
+{
+    UTXOSet base;
+    const auto original = Key(220U, 0U);
+    const auto untouched = Key(221U, 0U);
+    ASSERT_TRUE(base.AddCoin(original, CoinWithValue(50)));
+    ASSERT_TRUE(base.AddCoin(untouched, CoinWithValue(70)));
+    auto batch = base.BeginBatch();
+    ASSERT_TRUE(batch.has_value());
+    const auto transaction = SpendingTransaction(original, 40);
+    const auto txid = transaction.TxId(kLimits);
+    ASSERT_TRUE(txid.has_value());
+    ASSERT_EQ(batch->ApplyTransaction(transaction, 101U, false, kLimits).error, UTXOError::kNone);
+#if defined(_MSC_VER) && defined(_DEBUG)
+    // Only the synchronous Commit call is measured. No GTest assertion,
+    // logging, fixture construction or deliberate OOM occurs under this hook.
+    // This fixture owns the process-wide hook for this single-thread test.
+    const auto previous = _CrtSetAllocHook(CountRootPublicationAllocations);
+    root_publication_allocations = 0U;
+    count_root_publication_allocations = true;
+#endif
+    const auto committed = batch->Commit();
+#if defined(_MSC_VER) && defined(_DEBUG)
+    count_root_publication_allocations = false;
+    _CrtSetAllocHook(previous);
+    EXPECT_EQ(root_publication_allocations, 0U);
+#endif
+    ASSERT_TRUE(committed);
+    EXPECT_EQ(base.size(), 2U);
+    EXPECT_FALSE(base.HaveCoin(original));
+    const auto created = base.GetCoin(UTXOKey{*txid, 0U});
+    ASSERT_TRUE(created.has_value());
+    EXPECT_EQ(created->output.value, 40);
+    EXPECT_EQ(created->height, 101U);
+    const auto retained = base.GetCoin(untouched);
+    ASSERT_TRUE(retained.has_value());
+    EXPECT_EQ(retained->output.value, 70);
+    EXPECT_FALSE(batch->Commit());
 }
 
 } // namespace
