@@ -2,7 +2,12 @@
 
 #include "chain/mempool.hpp"
 
+#include <array>
 #include <cstdint>
+#include <type_traits>
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
 #include <memory>
 #include <optional>
 #include <span>
@@ -327,6 +332,266 @@ TEST(Mempool, HandlesDeterministicStressAdmissionAndFeeRateSelection)
     ASSERT_EQ(selected.error, MempoolError::kNone);
     ASSERT_EQ(selected.transactions.size(), 32U);
     EXPECT_EQ(TransactionId(selected.transactions.front(), scenario), *highest_fee_id);
+}
+
+TEST(MempoolPrepared, ReconcilesCandidateCoinsPrivatelyAndPreservesDependencies)
+{
+    static_assert(!std::is_move_constructible_v<Mempool>);
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto input = AddSpendableCoin(scenario, 0x81U);
+    const auto parent = MakeSpend(scenario, input, 49LL * COIN);
+    ASSERT_TRUE(parent.has_value());
+    ASSERT_EQ(pool->AcceptToMempool(*parent, scenario.context, scenario.utxos, 1U).error,
+              MempoolError::kNone);
+    const auto parent_id = TransactionId(*parent, scenario);
+    const auto child = MakeSpend(scenario, UTXOKey{parent_id, 0U}, 48LL * COIN);
+    ASSERT_TRUE(child.has_value());
+    ASSERT_EQ(pool->AcceptToMempool(*child, scenario.context, scenario.utxos, 2U).error,
+              MempoolError::kNone);
+    const auto before_bytes = pool->total_serialized_size();
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    ASSERT_EQ(candidate
+                  ->ApplyTransaction(*parent, 10U, false,
+                                     scenario.parameters.validation.block_limits.transaction_limits)
+                  .error,
+              nova::chain::UTXOError::kNone);
+    const auto missing = MakeSpend(scenario, UTXOKey{HashWithLastByte(0x82U), 0U}, COIN);
+    ASSERT_TRUE(missing.has_value());
+    const std::array confirmed{*parent};
+    const std::array known{*child, *missing};
+    auto prepared = pool->PrepareReconciliation(confirmed, known, {11U, 1000U}, *candidate, 3U);
+    ASSERT_EQ(prepared.result.error, MempoolError::kNone);
+    ASSERT_NE(prepared.prepared, nullptr);
+    EXPECT_EQ(pool->size(), 2U);
+    EXPECT_EQ(pool->total_serialized_size(), before_bytes);
+    EXPECT_TRUE(scenario.utxos.HaveCoin(input));
+    const auto entries = pool->GetPreparedEntries(*prepared.prepared);
+    ASSERT_TRUE(entries.has_value());
+    ASSERT_EQ(entries->size(), 1U);
+    EXPECT_EQ(entries->front().transaction_id, TransactionId(*child, scenario));
+    EXPECT_EQ(entries->front().fee, COIN);
+    EXPECT_TRUE(entries->front().dependencies.empty());
+    ASSERT_TRUE(pool->CommitPrepared(*prepared.prepared));
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_FALSE(pool->GetEntry(parent_id).has_value());
+    EXPECT_EQ(pool->total_serialized_size(), entries->front().serialized_size);
+    EXPECT_TRUE(scenario.utxos.HaveCoin(input)); // pool commit never commits candidate UTXOs
+    EXPECT_FALSE(pool->CommitPrepared(*prepared.prepared));
+    EXPECT_FALSE(pool->GetPreparedEntries(*prepared.prepared).has_value());
+}
+
+TEST(MempoolPrepared, RejectsWrongStaleSiblingAndDestroyedOwners)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    auto other = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    ASSERT_NE(other, nullptr);
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    auto prepared = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 0U);
+    ASSERT_NE(prepared.prepared, nullptr);
+    EXPECT_FALSE(other->CommitPrepared(*prepared.prepared));
+    EXPECT_FALSE(other->GetPreparedEntries(*prepared.prepared).has_value());
+    ASSERT_EQ(pool->RemoveForBlock({}).error, MempoolError::kNone);
+    EXPECT_FALSE(pool->CommitPrepared(*prepared.prepared));
+    auto first = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 0U);
+    auto sibling = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 0U);
+    ASSERT_NE(first.prepared, nullptr);
+    ASSERT_NE(sibling.prepared, nullptr);
+    ASSERT_TRUE(pool->CommitPrepared(*first.prepared));
+    EXPECT_FALSE(pool->CommitPrepared(*sibling.prepared));
+    auto owned = other->PrepareReconciliation({}, {}, scenario.context, *candidate, 0U);
+    ASSERT_NE(owned.prepared, nullptr);
+    other.reset();
+    auto replacement = CreateMempool(scenario);
+    ASSERT_NE(replacement, nullptr);
+    EXPECT_FALSE(replacement->CommitPrepared(*owned.prepared));
+    EXPECT_FALSE(replacement->GetPreparedEntries(*owned.prepared).has_value());
+}
+
+TEST(MempoolPrepared, DependencyAllocationIsCaughtWithoutPublishingOrConsumingState)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0x83U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    pool->SetFailurePointForTesting(Mempool::FailurePoint::kDependencyAllocation);
+    EXPECT_EQ(pool->AcceptToMempool(*spend, scenario.context, scenario.utxos, 1U).error,
+              MempoolError::kAllocationFailure);
+    EXPECT_EQ(pool->size(), 0U);
+    EXPECT_EQ(pool->total_serialized_size(), 0U);
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    const std::array known{*spend};
+    for (const auto point : {Mempool::FailurePoint::kDependencyAllocation,
+                             Mempool::FailurePoint::kBeforePreparedCopy}) {
+        pool->SetFailurePointForTesting(point);
+        auto failed = pool->PrepareReconciliation({}, known, scenario.context, *candidate, 1U);
+        EXPECT_EQ(failed.result.error, MempoolError::kAllocationFailure);
+        EXPECT_EQ(failed.prepared, nullptr);
+        EXPECT_EQ(pool->size(), 0U);
+    }
+    auto retry = pool->PrepareReconciliation({}, known, scenario.context, *candidate, 1U);
+    ASSERT_NE(retry.prepared, nullptr);
+    ASSERT_TRUE(pool->CommitPrepared(*retry.prepared));
+    EXPECT_EQ(pool->size(), 1U);
+}
+
+TEST(MempoolPrepared, RevalidationAllocationDoesNotEvictValidEntries)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0x84U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    ASSERT_EQ(pool->AcceptToMempool(*spend, scenario.context, scenario.utxos, 1U).error,
+              MempoolError::kNone);
+    const auto bytes = pool->total_serialized_size();
+    pool->SetFailurePointForTesting(Mempool::FailurePoint::kRevalidationAllocation);
+    EXPECT_EQ(pool->RevalidateMempool(scenario.context, scenario.utxos).error,
+              MempoolError::kAllocationFailure);
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_EQ(pool->total_serialized_size(), bytes);
+    EXPECT_TRUE(pool->GetEntry(TransactionId(*spend, scenario)).has_value());
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    pool->SetFailurePointForTesting(Mempool::FailurePoint::kRevalidationAllocation);
+    auto prepared = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 1U);
+    EXPECT_EQ(prepared.result.error, MempoolError::kAllocationFailure);
+    EXPECT_EQ(prepared.prepared, nullptr);
+    EXPECT_EQ(pool->size(), 1U);
+}
+
+TEST(MempoolPrepared, StaleCandidateAndLiveMutationsCannotPublishPreparedPool)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0x85U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    auto before_accept = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 1U);
+    ASSERT_NE(before_accept.prepared, nullptr);
+    ASSERT_EQ(pool->AcceptToMempool(*spend, scenario.context, scenario.utxos, 1U).error,
+              MempoolError::kNone);
+    EXPECT_FALSE(pool->CommitPrepared(*before_accept.prepared));
+    auto before_remove = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 1U);
+    ASSERT_NE(before_remove.prepared, nullptr);
+    ASSERT_EQ(pool->RemoveTransaction(TransactionId(*spend, scenario)).error, MempoolError::kNone);
+    EXPECT_FALSE(pool->CommitPrepared(*before_remove.prepared));
+    auto before_revalidate = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 1U);
+    ASSERT_NE(before_revalidate.prepared, nullptr);
+    ASSERT_EQ(pool->RevalidateMempool(scenario.context, scenario.utxos).error, MempoolError::kNone);
+    EXPECT_FALSE(pool->CommitPrepared(*before_revalidate.prepared));
+    AddSpendableCoin(scenario, 0x86U);
+    auto stale = pool->PrepareReconciliation({}, {}, scenario.context, *candidate, 1U);
+    EXPECT_EQ(stale.result.error, MempoolError::kStateUnavailable);
+    EXPECT_EQ(stale.prepared, nullptr);
+    EXPECT_EQ(pool->AcceptToMempool(*spend, scenario.context, *candidate, 1U).error,
+              MempoolError::kStateUnavailable);
+    EXPECT_EQ(pool->RevalidateMempool(scenario.context, *candidate).error,
+              MempoolError::kStateUnavailable);
+    EXPECT_EQ(pool->size(), 0U);
+}
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+thread_local bool count_mempool_commit_allocations = false;
+thread_local std::size_t mempool_commit_allocations = 0U;
+int CountMempoolCommitAllocations(const int kind, void*, std::size_t, int, long,
+                                  const unsigned char*, int)
+{
+    if (count_mempool_commit_allocations && kind == _HOOK_ALLOC)
+        ++mempool_commit_allocations;
+    return 1;
+}
+#endif
+
+TEST(MempoolPrepared, FinalCommitUsesOnlyPreallocatedMapSwaps)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0x87U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    const std::array known{*spend};
+    auto prepared = pool->PrepareReconciliation({}, known, scenario.context, *candidate, 1U);
+    ASSERT_NE(prepared.prepared, nullptr);
+#if defined(_MSC_VER) && defined(_DEBUG)
+    const auto previous = _CrtSetAllocHook(CountMempoolCommitAllocations);
+    mempool_commit_allocations = 0U;
+    count_mempool_commit_allocations = true;
+#endif
+    const auto committed = pool->CommitPrepared(*prepared.prepared);
+#if defined(_MSC_VER) && defined(_DEBUG)
+    count_mempool_commit_allocations = false;
+    _CrtSetAllocHook(previous);
+    EXPECT_EQ(mempool_commit_allocations, 0U);
+#endif
+    EXPECT_TRUE(committed);
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_TRUE(pool->GetEntry(TransactionId(*spend, scenario)).has_value());
+}
+
+TEST(MempoolPrepared, MalformedKnownTransactionAbortsWithoutPublishing)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    const std::array known{Transaction{}};
+    auto prepared = pool->PrepareReconciliation({}, known, scenario.context, *candidate, 1U);
+    EXPECT_EQ(prepared.result.error, MempoolError::kInvalidTransaction);
+    EXPECT_EQ(prepared.result.validation_error,
+              nova::chain::BlockValidationError::kInvalidTransactionStructure);
+    EXPECT_EQ(prepared.prepared, nullptr);
+    EXPECT_EQ(pool->size(), 0U);
+    EXPECT_EQ(pool->total_serialized_size(), 0U);
+    EXPECT_EQ(scenario.utxos.size(), 0U);
+}
+
+TEST(MempoolPrepared, CapacityRejectionKeepsTheAdmittedBoundaryCandidate)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    scenario.parameters.max_transactions = 1U;
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto first = MakeSpend(scenario, AddSpendableCoin(scenario, 0x88U), 49LL * COIN);
+    const auto second = MakeSpend(scenario, AddSpendableCoin(scenario, 0x89U), 49LL * COIN);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(second.has_value());
+    auto candidate = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(candidate.has_value());
+    const std::array known{*first, *second};
+    auto prepared = pool->PrepareReconciliation({}, known, scenario.context, *candidate, 1U);
+    ASSERT_EQ(prepared.result.error, MempoolError::kNone);
+    ASSERT_NE(prepared.prepared, nullptr);
+    const auto entries = pool->GetPreparedEntries(*prepared.prepared);
+    ASSERT_TRUE(entries.has_value());
+    ASSERT_EQ(entries->size(), 1U);
+    EXPECT_EQ(entries->front().transaction_id, TransactionId(*first, scenario));
+    EXPECT_EQ(pool->size(), 0U);
+    ASSERT_TRUE(pool->CommitPrepared(*prepared.prepared));
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_TRUE(pool->GetEntry(TransactionId(*first, scenario)).has_value());
+    EXPECT_FALSE(pool->GetEntry(TransactionId(*second, scenario)).has_value());
+    EXPECT_EQ(scenario.utxos.size(), 2U);
 }
 
 } // namespace
