@@ -80,20 +80,49 @@ class Mempool final
   public:
     Mempool(const Mempool&) = delete;
     Mempool& operator=(const Mempool&) = delete;
-    Mempool(Mempool&&) noexcept = default;
+    Mempool(Mempool&&) = delete;
     Mempool& operator=(Mempool&&) = delete;
 
     [[nodiscard]] static std::unique_ptr<Mempool> Create(MempoolParams parameters) noexcept;
 
+    class PreparedState;
+    struct PreparationResult;
+    enum class FailurePoint : std::uint8_t {
+        kNone,
+        kBeforePreparedCopy,
+        kDependencyAllocation,
+        kRevalidationAllocation
+    };
+    // Per-instance one-shot seam, never selected through RPC/network input.
+    void SetFailurePointForTesting(FailurePoint point) noexcept;
+    // Candidate UTXOs must already be validated; this does not commit them.
+    // Exclusive, non-reentrant access. The coordinator must bind the matching
+    // chain/context before publication; the token owns no borrowed UTXO view.
+    [[nodiscard]] PreparationResult
+    PrepareReconciliation(std::span<const primitives::Transaction> confirmed,
+                          std::span<const primitives::Transaction> known,
+                          const TransactionValidationContext& context, UTXOBatch& candidate_utxos,
+                          std::uint64_t time_received) noexcept;
+    [[nodiscard]] bool CanCommitPrepared(const PreparedState& prepared) const noexcept;
+    [[nodiscard]] bool CommitPrepared(PreparedState& prepared) noexcept;
+    [[nodiscard]] std::optional<std::vector<MempoolEntry>>
+    GetPreparedEntries(const PreparedState& prepared) const noexcept;
+
     [[nodiscard]] MempoolResult AcceptToMempool(const primitives::Transaction& transaction,
                                                 const TransactionValidationContext& context,
                                                 UTXOSet& active_utxos,
+                                                std::uint64_t time_received) noexcept;
+    [[nodiscard]] MempoolResult AcceptToMempool(const primitives::Transaction& transaction,
+                                                const TransactionValidationContext& context,
+                                                UTXOBatch& active_utxos,
                                                 std::uint64_t time_received) noexcept;
     [[nodiscard]] MempoolResult RemoveTransaction(const crypto::Hash256& transaction_id) noexcept;
     [[nodiscard]] MempoolResult
     RemoveForBlock(std::span<const primitives::Transaction> block_transactions) noexcept;
     [[nodiscard]] MempoolResult RevalidateMempool(const TransactionValidationContext& context,
                                                   UTXOSet& active_utxos) noexcept;
+    [[nodiscard]] MempoolResult RevalidateMempool(const TransactionValidationContext& context,
+                                                  UTXOBatch& active_utxos) noexcept;
     [[nodiscard]] BlockTemplateResult
     SelectForBlock(std::uint64_t max_serialized_size) const noexcept;
 
@@ -103,15 +132,26 @@ class Mempool final
     GetEntry(const crypto::Hash256& transaction_id) const noexcept;
 
     // The private construction key keeps construction routed through Create.
-    Mempool(ConstructionKey, MempoolParams parameters) noexcept;
+    Mempool(ConstructionKey, MempoolParams parameters);
 
   private:
     [[nodiscard]] bool ParametersAreValid() const noexcept;
+    [[nodiscard]] bool CanAdvanceRevision() const noexcept;
+    template <typename Base>
+    [[nodiscard]] MempoolResult AcceptImpl(const primitives::Transaction& transaction,
+                                           const TransactionValidationContext& context,
+                                           Base& active_utxos,
+                                           std::uint64_t time_received) noexcept;
+    template <typename Base>
+    [[nodiscard]] MempoolResult RevalidateImpl(const TransactionValidationContext& context,
+                                               Base& active_utxos) noexcept;
+    template <typename Base>
     [[nodiscard]] std::optional<UTXOBatch> BuildOverlay(const TransactionValidationContext& context,
-                                                        UTXOSet& active_utxos) const noexcept;
+                                                        Base& active_utxos) const noexcept;
+    template <typename Base>
     [[nodiscard]] std::optional<RebuiltPool>
     BuildRevalidatedPool(const TransactionValidationContext& context,
-                         UTXOSet& active_utxos) const noexcept;
+                         Base& active_utxos) const noexcept;
     [[nodiscard]] std::vector<crypto::Hash256>
     DependenciesFor(const primitives::Transaction& transaction, const Entries& entries) const;
     [[nodiscard]] static std::optional<std::uint64_t>
@@ -121,10 +161,35 @@ class Mempool final
     [[nodiscard]] static MempoolError MapValidationError(BlockValidationError error) noexcept;
     [[nodiscard]] static std::optional<Spends> BuildSpends(const Entries& entries) noexcept;
 
+    std::shared_ptr<const std::uint8_t> identity_;
+    std::uint64_t revision_{};
+    mutable FailurePoint failure_point_{FailurePoint::kNone};
     MempoolParams parameters_;
     Entries entries_;
     Spends spends_;
     std::uint64_t total_serialized_size_{};
+};
+
+class Mempool::PreparedState final
+{
+  public:
+    PreparedState(const PreparedState&) = delete;
+    PreparedState& operator=(const PreparedState&) = delete;
+    PreparedState(PreparedState&&) = delete;
+    PreparedState& operator=(PreparedState&&) = delete;
+
+  private:
+    PreparedState() = default;
+    std::weak_ptr<const std::uint8_t> owner_;
+    std::uint64_t revision_{};
+    RebuiltPool pool_;
+    bool consumed_{};
+    friend class Mempool;
+};
+
+struct Mempool::PreparationResult final {
+    MempoolResult result;
+    std::unique_ptr<PreparedState> prepared;
 };
 
 } // namespace nova::chain
