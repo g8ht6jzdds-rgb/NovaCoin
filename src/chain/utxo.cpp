@@ -24,17 +24,17 @@ static_assert(NextRevision(std::numeric_limits<std::uint64_t>::max()) ==
 using Coins = std::map<UTXOKey, Coin>;
 using Delta = UTXODelta;
 
-[[nodiscard]] std::optional<Coin> GetCoinFromDelta(const UTXOView& base, const Delta& delta,
-                                                   const UTXOKey& key)
+[[nodiscard]] CoinReadResult ReadCoinFromDelta(const UTXOView& base, const Delta& delta,
+                                               const UTXOKey& key)
 {
     const auto added = delta.additions.find(key);
     if (added != delta.additions.end()) {
-        return added->second;
+        return {CoinReadError::kNone, added->second};
     }
     if (delta.spends.contains(key)) {
-        return std::nullopt;
+        return {CoinReadError::kNone, std::nullopt};
     }
-    return base.GetCoin(key);
+    return base.ReadCoin(key);
 }
 
 [[nodiscard]] bool HaveCoinInDelta(const UTXOView& base, const Delta& delta,
@@ -68,7 +68,10 @@ using Delta = UTXODelta;
                 return UTXOError::kUnexpectedCoinbaseInput;
             }
             const auto key = UTXOKey::FromOutPoint(input.previous_output);
-            const auto coin = GetCoinFromDelta(base, delta, key);
+            const auto read = ReadCoinFromDelta(base, delta, key);
+            if (read.error != CoinReadError::kNone)
+                return UTXOError::kBatchClosed;
+            const auto& coin = read.coin;
             if (!coin.has_value()) {
                 return UTXOError::kMissingInput;
             }
@@ -105,7 +108,10 @@ using Delta = UTXODelta;
 [[nodiscard]] UTXOError UndoOnDelta(const UTXOView& base, Delta& delta, const TransactionUndo& undo)
 {
     for (const auto& key : undo.created_coins) {
-        if (!GetCoinFromDelta(base, delta, key).has_value()) {
+        const auto read = ReadCoinFromDelta(base, delta, key);
+        if (read.error != CoinReadError::kNone)
+            return UTXOError::kBatchClosed;
+        if (!read.coin.has_value()) {
             return UTXOError::kUndoMissingCreatedCoin;
         }
         const auto added = delta.additions.find(key);
@@ -116,7 +122,10 @@ using Delta = UTXODelta;
         }
     }
     for (const auto& spent : undo.spent_coins) {
-        if (GetCoinFromDelta(base, delta, spent.key).has_value()) {
+        const auto read = ReadCoinFromDelta(base, delta, spent.key);
+        if (read.error != CoinReadError::kNone)
+            return UTXOError::kBatchClosed;
+        if (read.coin.has_value()) {
             return UTXOError::kUndoExistingSpentCoin;
         }
         if (base.HaveCoin(spent.key)) {
@@ -150,6 +159,17 @@ bool operator<(const UTXOKey& left, const UTXOKey& right) noexcept
     return left.output_index < right.output_index;
 }
 
+CoinReadResult UTXOView::ReadCoin(const UTXOKey& key) const
+{
+    if (!IsCurrent())
+        return {CoinReadError::kUnavailable, std::nullopt};
+    try {
+        return {CoinReadError::kNone, GetCoin(key)};
+    } catch (...) {
+        return {CoinReadError::kUnavailable, std::nullopt};
+    }
+}
+
 UTXOBatch::UTXOBatch(UTXOSet& base) : base_(base), base_set_(&base), base_revision_(base.revision_)
 {
 }
@@ -177,7 +197,7 @@ UTXOBatch::UTXOBatch(UTXOBatch&& other) noexcept(std::is_nothrow_default_constru
     : base_(other.base_), base_set_(other.base_set_), parent_(other.parent_),
       revision_(other.revision_), parent_revision_(other.parent_revision_),
       base_revision_(other.base_revision_), closed_(other.closed_),
-      publication_disabled_(other.publication_disabled_)
+      publication_disabled_(other.publication_disabled_), read_failed_(other.read_failed_)
 {
     // Empty container construction can allocate (notably MSVC Debug).
     // It finishes before touching the source; the following swaps cannot throw.
@@ -195,7 +215,7 @@ bool UTXOBatch::IsCurrent() const noexcept
 
 bool UTXOBatch::IsOpen() const noexcept
 {
-    if (closed_)
+    if (closed_ || read_failed_)
         return false;
     if (parent_ != nullptr)
         return parent_->IsOpen() && parent_->revision_ == parent_revision_;
@@ -219,6 +239,8 @@ UTXOBatch::ApplyTransaction(const primitives::Transaction& transaction, const st
         const auto error =
             ApplyToDelta(base_, proposed, transaction, height, is_coinbase, limits, undo);
         if (error != UTXOError::kNone) {
+            if (error == UTXOError::kBatchClosed)
+                read_failed_ = true;
             return ApplyTransactionResult{error, std::nullopt};
         }
         delta_.additions.swap(proposed.additions);
@@ -230,13 +252,30 @@ UTXOBatch::ApplyTransaction(const primitives::Transaction& transaction, const st
     }
 }
 
-std::optional<Coin> UTXOBatch::GetCoin(const UTXOKey& key) const
+CoinReadResult UTXOBatch::ReadCoin(const UTXOKey& key) const
 {
     if (!IsCurrent())
-        return std::nullopt;
+        return {CoinReadError::kUnavailable, std::nullopt};
     try {
-        return GetCoinFromDelta(base_, delta_, key);
+        auto read = ReadCoinFromDelta(base_, delta_, key);
+        if (read.error != CoinReadError::kNone || !IsCurrent()) {
+            read_failed_ = true;
+            return {CoinReadError::kUnavailable, std::nullopt};
+        }
+        return read;
     } catch (...) {
+        read_failed_ = true;
+        return {CoinReadError::kUnavailable, std::nullopt};
+    }
+}
+
+std::optional<Coin> UTXOBatch::GetCoin(const UTXOKey& key) const
+{
+    try {
+        const auto read = ReadCoin(key);
+        return read.coin;
+    } catch (...) {
+        read_failed_ = true;
         return std::nullopt;
     }
 }
@@ -257,6 +296,8 @@ UTXOError UTXOBatch::UndoTransaction(const TransactionUndo& undo) noexcept
         Delta proposed{delta_.additions, delta_.spends};
         const auto error = UndoOnDelta(base_, proposed, undo);
         if (error != UTXOError::kNone) {
+            if (error == UTXOError::kBatchClosed)
+                read_failed_ = true;
             return error;
         }
         delta_.additions.swap(proposed.additions);
@@ -406,6 +447,25 @@ UTXOSet& UTXOSet::operator=(UTXOSet&& other) noexcept
         other.InvalidateBatches();
     }
     return *this;
+}
+
+void UTXOSet::FailNextReadForTesting() noexcept
+{
+    fail_next_read_ = true;
+}
+
+CoinReadResult UTXOSet::ReadCoin(const UTXOKey& key) const
+{
+    if (std::exchange(fail_next_read_, false))
+        return {CoinReadError::kUnavailable, std::nullopt};
+    const auto found = coins_.find(key);
+    if (found == coins_.end())
+        return {CoinReadError::kNone, std::nullopt};
+    try {
+        return {CoinReadError::kNone, found->second};
+    } catch (...) {
+        return {CoinReadError::kUnavailable, std::nullopt};
+    }
 }
 
 std::optional<Coin> UTXOSet::GetCoin(const UTXOKey& key) const

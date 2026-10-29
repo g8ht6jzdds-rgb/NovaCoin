@@ -266,6 +266,10 @@ ChainState::PrepareOperation(Operation&& operation,
         if (failure == FailurePoint::kAfterCopy)
             throw std::bad_alloc{};
         const auto result = operation(staged);
+        if (!prepared->utxos_->IsCurrent())
+            return {
+                {ChainError::kContextFailure, BlockValidationError::kInvalidContext, failure_hash},
+                nullptr};
         if (result.error != ChainError::kNone)
             return {result, nullptr};
         if (failure == FailurePoint::kAfterTransition)
@@ -870,6 +874,10 @@ ChainResult ChainState::ConnectIndexedBlock(BlockIndex& index) noexcept
         transition_utxos_ != nullptr
             ? ConnectBlock(*index.block, *context, parameters_.block_validation, *transition_utxos_)
             : ConnectBlock(*index.block, *context, parameters_.block_validation, utxos_);
+    if (connected.error == BlockValidationError::kInvalidContext)
+        return {ChainError::kContextFailure, connected.error, index.hash};
+    if (connected.error == BlockValidationError::kAllocationFailure)
+        return {ChainError::kAllocationFailure, connected.error, index.hash};
     if (connected.error != BlockValidationError::kNone || !connected.connected.has_value()) {
         return {ChainError::kBlockValidationFailure, connected.error, index.hash};
     }

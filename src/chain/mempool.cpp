@@ -334,11 +334,11 @@ MempoolResult Mempool::RevalidateImpl(const TransactionValidationContext& contex
         return {MempoolError::kInvalidParameters, BlockValidationError::kInvalidParameters,
                 std::nullopt, 0U};
     }
-    auto rebuilt = BuildRevalidatedPool(context, active_utxos);
-    if (!rebuilt.has_value()) {
-        return {MempoolError::kAllocationFailure, BlockValidationError::kAllocationFailure,
-                std::nullopt, 0U};
-    }
+    MempoolResult failure{MempoolError::kAllocationFailure,
+                          BlockValidationError::kAllocationFailure, std::nullopt, 0U};
+    auto rebuilt = BuildRevalidatedPool(context, active_utxos, failure);
+    if (!rebuilt.has_value())
+        return failure;
     const auto removed_count = entries_.size() - rebuilt->entries.size();
     entries_.swap(rebuilt->entries);
     spends_.swap(rebuilt->spends);
@@ -463,11 +463,14 @@ std::optional<UTXOBatch> Mempool::BuildOverlay(const TransactionValidationContex
 
 template <typename Base>
 std::optional<Mempool::RebuiltPool>
-Mempool::BuildRevalidatedPool(const TransactionValidationContext& context,
-                              Base& active_utxos) const noexcept
+Mempool::BuildRevalidatedPool(const TransactionValidationContext& context, Base& active_utxos,
+                              MempoolResult& failure) const noexcept
 {
     auto batch = active_utxos.BeginBatch();
     if (!batch.has_value()) {
+        if (!active_utxos.IsCurrent())
+            failure = {MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
+                       std::nullopt, 0U};
         return std::nullopt;
     }
     try {
@@ -487,8 +490,11 @@ Mempool::BuildRevalidatedPool(const TransactionValidationContext& context,
                 // Stored entries were admitted already. Hash/size failure or
                 // mismatched identity is unavailable local state, not eviction.
                 if (!transaction_id.has_value() || *transaction_id != existing->first ||
-                    !serialized_size.has_value())
+                    !serialized_size.has_value()) {
+                    failure = {MempoolError::kStateUnavailable,
+                               BlockValidationError::kInvalidContext, existing->first, 0U};
                     return std::nullopt;
+                }
                 if (rebuilt.entries.size() >= parameters_.max_transactions ||
                     *serialized_size >
                         parameters_.max_total_serialized_size - rebuilt.total_serialized_size) {
@@ -506,8 +512,16 @@ Mempool::BuildRevalidatedPool(const TransactionValidationContext& context,
                     validated.error == BlockValidationError::kSignatureHashFailure ||
                     validated.error == BlockValidationError::kInvalidContext ||
                     validated.error == BlockValidationError::kInvalidParameters ||
-                    validated.error == BlockValidationError::kStateApplicationFailure)
+                    validated.error == BlockValidationError::kStateApplicationFailure) {
+                    const auto error =
+                        validated.error == BlockValidationError::kAllocationFailure
+                            ? MempoolError::kAllocationFailure
+                            : (validated.error == BlockValidationError::kInvalidParameters
+                                   ? MempoolError::kInvalidParameters
+                                   : MempoolError::kStateUnavailable);
+                    failure = {error, validated.error, existing->first, 0U};
                     return std::nullopt;
+                }
                 if (validated.error == BlockValidationError::kMissingUtxo) {
                     ++iterator;
                     continue;
@@ -523,8 +537,16 @@ Mempool::BuildRevalidatedPool(const TransactionValidationContext& context,
                     batch->ApplyTransaction(existing->second.transaction, context.height, false,
                                             parameters_.validation.block_limits.transaction_limits);
                 if (applied.error == UTXOError::kAllocationFailure ||
-                    applied.error == UTXOError::kBatchClosed)
+                    applied.error == UTXOError::kBatchClosed) {
+                    failure = {applied.error == UTXOError::kAllocationFailure
+                                   ? MempoolError::kAllocationFailure
+                                   : MempoolError::kStateUnavailable,
+                               applied.error == UTXOError::kAllocationFailure
+                                   ? BlockValidationError::kAllocationFailure
+                                   : BlockValidationError::kInvalidContext,
+                               existing->first, 0U};
                     return std::nullopt;
+                }
                 if (applied.error != UTXOError::kNone || !applied.undo.has_value()) {
                     iterator = remaining.erase(iterator);
                     progressed = true;
@@ -539,12 +561,16 @@ Mempool::BuildRevalidatedPool(const TransactionValidationContext& context,
                                  validated.fee / static_cast<primitives::Amount>(*serialized_size),
                                  existing->second.time_received, dependencies});
                 if (!inserted.second) {
+                    failure = {MempoolError::kStateUnavailable,
+                               BlockValidationError::kInvalidContext, existing->first, 0U};
                     return std::nullopt;
                 }
                 for (const auto& input : existing->second.transaction.inputs) {
                     const auto spend = rebuilt.spends.emplace(
                         UTXOKey::FromOutPoint(input.previous_output), *transaction_id);
                     if (!spend.second) {
+                        failure = {MempoolError::kStateUnavailable,
+                                   BlockValidationError::kInvalidContext, existing->first, 0U};
                         return std::nullopt;
                     }
                 }
@@ -557,7 +583,11 @@ Mempool::BuildRevalidatedPool(const TransactionValidationContext& context,
             }
         }
         return rebuilt;
+    } catch (const std::bad_alloc&) {
+        return std::nullopt;
     } catch (...) {
+        failure = {MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
+                   std::nullopt, 0U};
         return std::nullopt;
     }
 }

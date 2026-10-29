@@ -167,8 +167,8 @@ class Mempool final
                                                         Base& active_utxos) const noexcept;
     template <typename Base>
     [[nodiscard]] std::optional<RebuiltPool>
-    BuildRevalidatedPool(const TransactionValidationContext& context,
-                         Base& active_utxos) const noexcept;
+    BuildRevalidatedPool(const TransactionValidationContext& context, Base& active_utxos,
+                         MempoolResult& failure) const noexcept;
     [[nodiscard]] std::vector<crypto::Hash256>
     DependenciesFor(const primitives::Transaction& transaction, const Entries& entries) const;
     [[nodiscard]] static std::optional<std::uint64_t>

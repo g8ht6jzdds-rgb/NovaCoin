@@ -699,4 +699,49 @@ TEST(UTXOReadOnly, ClosedAndStaleVersionedViewsRejectBeforeReadingPrivateDeltas)
     EXPECT_EQ(base.size(), 2U);
 }
 
+TEST(UTXOReadFailure, TypedSetReadsSeparateMissingUnavailableAndRetry)
+{
+    UTXOSet base;
+    const auto key = Key(240U, 0U);
+    ASSERT_TRUE(base.AddCoin(key, CoinWithValue(50)));
+    base.FailNextReadForTesting();
+    const auto unavailable = base.ReadCoin(key);
+    EXPECT_EQ(unavailable.error, nova::chain::CoinReadError::kUnavailable);
+    EXPECT_FALSE(unavailable.coin.has_value());
+    EXPECT_EQ(base.size(), 1U);
+    const auto retry = base.ReadCoin(key);
+    EXPECT_EQ(retry.error, nova::chain::CoinReadError::kNone);
+    ASSERT_TRUE(retry.coin.has_value());
+    EXPECT_EQ(retry.coin->output.value, 50);
+    const auto absent = base.ReadCoin(Key(241U, 0U));
+    EXPECT_EQ(absent.error, nova::chain::CoinReadError::kNone);
+    EXPECT_FALSE(absent.coin.has_value());
+}
+
+TEST(UTXOReadFailure, FailedBatchRemainsUnusableAcrossMoveAndCannotPublish)
+{
+    UTXOSet base;
+    const auto key = Key(242U, 0U);
+    ASSERT_TRUE(base.AddCoin(key, CoinWithValue(50)));
+    auto batch = base.BeginBatch();
+    ASSERT_TRUE(batch.has_value());
+    base.FailNextReadForTesting();
+    EXPECT_EQ(batch->ReadCoin(key).error, nova::chain::CoinReadError::kUnavailable);
+    EXPECT_FALSE(batch->IsCurrent());
+    EXPECT_FALSE(batch->BeginBatch().has_value());
+    EXPECT_FALSE(batch->Commit());
+    nova::chain::UTXOBatch moved{std::move(*batch)};
+    EXPECT_FALSE(moved.IsCurrent());
+    EXPECT_FALSE(moved.Commit());
+    EXPECT_EQ(moved.ApplyTransaction(SpendingTransaction(key, 40), 101U, false, kLimits).error,
+              UTXOError::kBatchClosed);
+    EXPECT_EQ(base.size(), 1U);
+    ASSERT_TRUE(base.GetCoin(key).has_value());
+    EXPECT_EQ(base.GetCoin(key)->output.value, 50);
+    auto fresh = base.BeginBatch();
+    ASSERT_TRUE(fresh.has_value());
+    EXPECT_EQ(fresh->ReadCoin(key).error, nova::chain::CoinReadError::kNone);
+    EXPECT_TRUE(fresh->IsCurrent());
+}
+
 } // namespace

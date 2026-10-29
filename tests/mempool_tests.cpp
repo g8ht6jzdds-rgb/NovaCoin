@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <new>
 #include <type_traits>
 #if defined(_MSC_VER) && defined(_DEBUG)
 #include <crtdbg.h>
@@ -628,6 +629,87 @@ TEST(MempoolPreparedReadOnly, ConstCandidateViewReplaysWithoutPublishingCoins)
     EXPECT_EQ(pool->AcceptToMempool(*spend, scenario.context, view, 2U).error,
               MempoolError::kStateUnavailable);
     EXPECT_EQ(pool->size(), 1U);
+}
+
+class ThrowingCoinView final : public nova::chain::UTXOView
+{
+  public:
+    explicit ThrowingCoinView(const nova::chain::UTXOView& base) noexcept : base_(base) {}
+    std::optional<nova::chain::Coin> GetCoin(const UTXOKey&) const override
+    {
+        throw std::bad_alloc{}; // deterministic read-failure seam, not heap exhaustion
+    }
+    bool HaveCoin(const UTXOKey& key) const noexcept override
+    {
+        return base_.HaveCoin(key);
+    }
+
+  private:
+    const nova::chain::UTXOView& base_;
+};
+
+TEST(MempoolReadFailure, FailedLookupDoesNotEvictAValidEntry)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0xA1U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    ASSERT_EQ(pool->AcceptToMempool(*spend, scenario.context, scenario.utxos, 1U).error,
+              MempoolError::kNone);
+    const auto bytes = pool->total_serialized_size();
+    ThrowingCoinView failed{scenario.utxos};
+    EXPECT_EQ(pool->RevalidateMempool(scenario.context, failed).error,
+              MempoolError::kStateUnavailable);
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_EQ(pool->total_serialized_size(), bytes);
+    EXPECT_TRUE(pool->GetEntry(TransactionId(*spend, scenario)).has_value());
+    EXPECT_EQ(scenario.utxos.size(), 1U);
+}
+
+TEST(MempoolReadFailure, FailedLookupDoesNotPrepareAnEvictedPool)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0xA2U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    ASSERT_EQ(pool->AcceptToMempool(*spend, scenario.context, scenario.utxos, 1U).error,
+              MempoolError::kNone);
+    ThrowingCoinView failed{scenario.utxos};
+    auto prepared = pool->PrepareReconciliation({}, {}, scenario.context, failed, 1U);
+    EXPECT_EQ(prepared.result.error, MempoolError::kStateUnavailable);
+    EXPECT_EQ(prepared.prepared, nullptr);
+    EXPECT_EQ(pool->size(), 1U);
+}
+
+TEST(MempoolReadFailure, LookupUnavailableIsNotGenuineMissingInput)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0xA3U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    ThrowingCoinView failed{scenario.utxos};
+    auto overlay = nova::chain::UTXOBatch::ReadOnlyOverlay(failed);
+    ASSERT_TRUE(overlay.has_value());
+    const auto unavailable = nova::chain::ValidateTransactionAgainstUTXOSet(
+        *spend, scenario.context, scenario.parameters.validation, *overlay);
+    EXPECT_EQ(unavailable.error, nova::chain::BlockValidationError::kInvalidContext);
+    EXPECT_FALSE(overlay->IsCurrent());
+    UTXOSet missing;
+    auto empty = nova::chain::UTXOBatch::ReadOnlyOverlay(missing);
+    ASSERT_TRUE(empty.has_value());
+    const auto absent = nova::chain::ValidateTransactionAgainstUTXOSet(
+        *spend, scenario.context, scenario.parameters.validation, *empty);
+    EXPECT_EQ(absent.error, nova::chain::BlockValidationError::kMissingUtxo);
+    EXPECT_TRUE(empty->IsCurrent());
+    empty->Rollback();
+    EXPECT_EQ(nova::chain::ValidateTransactionAgainstUTXOSet(*spend, scenario.context,
+                                                             scenario.parameters.validation, *empty)
+                  .error,
+              nova::chain::BlockValidationError::kInvalidContext);
 }
 
 } // namespace
