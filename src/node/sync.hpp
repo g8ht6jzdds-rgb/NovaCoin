@@ -48,7 +48,12 @@ using HeaderIndex = chain::HeaderMetadata;
 class Synchronizer final
 {
   public:
+    using BlockAdmission = chain::ChainResult (*)(void*, const primitives::Block&) noexcept;
     Synchronizer(SyncParams parameters, chain::ChainState& chain) noexcept;
+    // The caller owns the context and must keep it and the read-only chain alive.
+    // A null callback fails closed instead of mutating the chain directly.
+    Synchronizer(SyncParams parameters, const chain::ChainState& chain, void* context,
+                 BlockAdmission admission) noexcept;
 
     [[nodiscard]] SyncResult Start() noexcept;
     [[nodiscard]] SyncResult Handle(const net::FramedMessage& message) noexcept;
@@ -71,7 +76,9 @@ class Synchronizer final
     ExpectedBits(const HeaderIndex& parent, std::uint32_t candidate_time) const noexcept;
 
     SyncParams parameters_;
-    chain::ChainState& chain_;
+    const chain::ChainState& chain_;
+    void* admission_context_{};
+    BlockAdmission admission_{};
     std::map<crypto::Hash256, HeaderIndex, HashLess> headers_;
     crypto::Hash256 best_header_tip_;
 };

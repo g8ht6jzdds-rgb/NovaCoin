@@ -586,7 +586,7 @@ TEST(ChainStateAtomicity, StagingFailuresPreserveStateAndAreConsumedOnce)
     }
 }
 
-TEST(ChainStateAtomicity, SparseReorgPreservesUnchangedAndDisconnectedIndexStatuses)
+void VerifySparseReorgFaults(const std::uint32_t depth)
 {
     UTXOSet utxos;
     auto state = CreateState(utxos);
@@ -596,6 +596,19 @@ TEST(ChainStateAtomicity, SparseReorgPreservesUnchangedAndDisconnectedIndexStatu
     const auto verify = [&]() {
         const auto active = state->GetActiveBlockIndexes();
         ASSERT_TRUE(active.has_value());
+
+        ASSERT_FALSE(active->empty());
+        EXPECT_EQ(active->back().hash, state->active_tip());
+        EXPECT_EQ(active->back().height, state->active_height());
+        // The fixture has an empty anchor and one unspent coinbase per active block.
+        EXPECT_EQ(utxos.size(), active->size() - 1U);
+        auto work = ChainWork::FromPerBlockWork(active->front().per_block_work);
+        EXPECT_EQ(active->front().chain_work, work);
+        for (std::size_t i = 1U; i < active->size(); ++i) {
+            const auto& block = (*active)[i];
+            ASSERT_TRUE(work.Add(block.per_block_work));
+            EXPECT_EQ(block.chain_work, work);
+        }
         for (const auto& hash : known) {
             const auto index = state->GetBlockIndex(hash);
             ASSERT_TRUE(index.has_value());
@@ -622,22 +635,43 @@ TEST(ChainStateAtomicity, SparseReorgPreservesUnchangedAndDisconnectedIndexStatu
     ASSERT_EQ(state->AcceptBlock(*shared).error, ChainError::kNone);
     known.push_back(BlockHash(*shared));
     auto parent = known.back();
-    for (const auto height : {2U, 3U}) {
-        const auto block =
-            MakeCoinbaseBlock(parent, height, 1000U + height * 100U, kRegularBits, parameters);
+    for (std::uint32_t height = 2U; height <= depth + 1U; ++height) {
+        auto block =
+            MakeCoinbaseBlock(parent, height, 1000U + height * 60U, kRegularBits, parameters);
         ASSERT_TRUE(block.has_value());
+        if (height == depth + 1U) {
+            for (std::uint32_t time = 1001U + height * 60U;
+                 BlockHash(*block).bytes().front() > 127U && time < 1040U + height * 60U; ++time) {
+                block = MakeCoinbaseBlock(parent, height, time, kRegularBits, parameters);
+                ASSERT_TRUE(block.has_value());
+            }
+            ASSERT_LE(BlockHash(*block).bytes().front(), 127U);
+        }
         ASSERT_EQ(state->AcceptBlock(*block).error, ChainError::kNone);
         parent = BlockHash(*block);
         known.push_back(parent);
         verify();
     }
+    const auto original_tip = parent;
     parent = BlockHash(*shared);
-    for (const auto height : {2U, 3U, 4U}) {
-        const auto side =
-            MakeCoinbaseBlock(parent, height, 1010U + height * 100U, kRegularBits, parameters);
+    for (std::uint32_t height = 2U; height <= depth + 2U; ++height) {
+        auto side =
+            MakeCoinbaseBlock(parent, height, 1010U + height * 60U, kRegularBits, parameters);
         ASSERT_TRUE(side.has_value());
-        if (height == 4U) {
+        if (height == depth + 1U) {
+            // Keep the original suffix active until the greater-work block arrives.
+            for (std::uint32_t time = 1011U + height * 60U;
+                 BlockHash(*side).bytes() <= original_tip.bytes() && time < 1060U + height * 60U;
+                 ++time) {
+                side = MakeCoinbaseBlock(parent, height, time, kRegularBits, parameters);
+                ASSERT_TRUE(side.has_value());
+            }
+            ASSERT_GT(BlockHash(*side).bytes(), original_tip.bytes());
+        }
+        if (height == depth + 2U) {
             const auto before_tip = state->active_tip();
+            ASSERT_EQ(before_tip, original_tip);
+            ASSERT_EQ(state->active_height(), depth + 1U);
             const auto before_count = state->known_block_count();
             std::vector<BlockStatus> statuses;
             for (const auto& hash : known) {
@@ -645,17 +679,33 @@ TEST(ChainStateAtomicity, SparseReorgPreservesUnchangedAndDisconnectedIndexStatu
                 ASSERT_TRUE(index.has_value());
                 statuses.push_back(index->status);
             }
-            state->SetFailurePointForTesting(ChainState::FailurePoint::kAfterTransition);
-            EXPECT_EQ(state->AcceptBlock(*side).error, ChainError::kAllocationFailure);
-            EXPECT_EQ(state->active_tip(), before_tip);
-            EXPECT_EQ(state->known_block_count(), before_count);
-            EXPECT_FALSE(state->GetBlockIndex(BlockHash(*side)).has_value());
-            for (std::size_t i = 0U; i < known.size(); ++i) {
-                const auto index = state->GetBlockIndex(known[i]);
-                ASSERT_TRUE(index.has_value());
-                EXPECT_EQ(index->status, statuses[i]);
+            using Point = ChainState::FailurePoint;
+            std::vector<std::pair<Point, std::uint32_t>> faults;
+            for (std::uint32_t ordinal = 1U; ordinal <= depth; ++ordinal) {
+                faults.emplace_back(Point::kAfterDisconnect, ordinal);
+                faults.emplace_back(Point::kAfterConnect, ordinal);
+                faults.emplace_back(Point::kDuringCandidateRestore, ordinal);
             }
-            verify();
+            faults.emplace_back(Point::kAfterCandidateConnect, 1U);
+            faults.emplace_back(Point::kAfterTransition, 1U);
+            for (const auto& [point, ordinal] : faults) {
+                SCOPED_TRACE(static_cast<unsigned>(point));
+                SCOPED_TRACE(ordinal);
+                state->SetFailurePointForTesting(point, ordinal);
+                const auto expected = point == Point::kDuringCandidateRestore
+                                          ? ChainError::kRollbackFailure
+                                          : ChainError::kAllocationFailure;
+                EXPECT_EQ(state->AcceptBlock(*side).error, expected);
+                EXPECT_EQ(state->active_tip(), before_tip);
+                EXPECT_EQ(state->known_block_count(), before_count);
+                EXPECT_FALSE(state->GetBlockIndex(BlockHash(*side)).has_value());
+                for (std::size_t i = 0U; i < known.size(); ++i) {
+                    const auto index = state->GetBlockIndex(known[i]);
+                    ASSERT_TRUE(index.has_value());
+                    EXPECT_EQ(index->status, statuses[i]);
+                }
+                verify();
+            }
         }
         ASSERT_EQ(state->AcceptBlock(*side).error, ChainError::kNone);
         parent = BlockHash(*side);
@@ -663,9 +713,17 @@ TEST(ChainStateAtomicity, SparseReorgPreservesUnchangedAndDisconnectedIndexStatu
         verify();
     }
     EXPECT_EQ(state->active_tip(), parent);
-    EXPECT_EQ(state->active_height(), 4U);
-    EXPECT_EQ(utxos.size(), 4U);
+    EXPECT_EQ(state->active_height(), depth + 2U);
+    EXPECT_EQ(utxos.size(), depth + 2U);
     EXPECT_TRUE(utxos.HaveCoin(CoinbaseOutputKey(*shared, parameters)));
+}
+
+TEST(ChainStateAtomicity, SparseReorgPreservesUnchangedAndDisconnectedIndexStatuses)
+{
+    for (const auto depth : {1U, 2U, 10U, 100U}) {
+        SCOPED_TRACE(depth);
+        ASSERT_NO_FATAL_FAILURE(VerifySparseReorgFaults(depth));
+    }
 }
 
 TEST(ChainStateSecurity, RejectsFarFutureHeadersWithoutChangingTheActiveTip)

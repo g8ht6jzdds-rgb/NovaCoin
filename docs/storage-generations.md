@@ -69,6 +69,23 @@ wrap. Exhaustion is a local storage error, not a consensus limit or permission t
 delete evidence. Hashing and complete-journal copying have O(history) I/O cost;
 production capacity and retention management remain unqualified.
 
+Successful candidate-image and metadata writes require an explicit successful
+file close after their checked file flush. A close error prevents preparation
+from becoming a publishable token. Close is not retried because a failed close
+can already have released the descriptor. Destructor cleanup remains best-effort
+on paths that have already failed. Synthetic close-result tests cover the five
+candidate file types and repeated old-state recovery/retry; they do not claim an
+actual device error, complete syscall-error coverage or power-loss qualification.
+
+A separate per-store candidate-I/O model exercises the write loop with a short
+successful write, zero progress, a simulated no-space error, a real one-byte
+prefix followed by simulated no-space, and a failed file-sync result. It can
+target journal, wallet, mempool, descriptor or root candidates. Tests assert
+whether the modeled operation was actually reached: an empty image performs no
+data write but still requires sync. These controls are in-process test APIs,
+not node configuration or RPC. They do not exhaust the host disk, manufacture
+actual device errors or replace platform durability qualification.
+
 `Commit` returns `Committed`, `NotCommitted`, or `Unavailable`. Errors after
 replacement or at the final barrier return `Unavailable`, never final rejection.
 `Resolve` verifies exact old/new authority and member hashes and retries the
@@ -91,11 +108,21 @@ no separate directory barrier. Physical power-loss durability on Windows remains
 power-loss proof on either platform. Platform/filesystem qualification is required
 before this can support a launch gate or a durable coordinator claim.
 
-The parent-owned `nova.generation_crash` fixture launches only its own test child,
-which exits abruptly without destructors after six controlled returned error
-checkpoints. Two fresh processes verify the exact old or new image pair and
-retention of the old images. This proves the tested process-restart paths, not
-interruption inside an OS syscall, kernel failure or power-loss durability.
+The parent-owned `nova.generation_crash` fixture launches only its own test child.
+Its matrix includes before/after checkpoints and partial candidate-image writes;
+fresh processes verify old or new authority and retention of previous images.
+These controlled exits are distinct from interruption inside an OS syscall,
+kernel failure or power-loss durability. The Windows native root-lease test
+separately forces an actual replacement denial with an open handle, verifies
+exact old-root/image recovery twice and then commits a new preparation. It does
+not establish disk-full, flush-failure or power-loss coverage.
+
+The experimental `DurableNode` owns synchronous publication and explicit
+shutdown. Shutdown checks committed authority, prevents subsequent node/peer
+writers and closes its transport. It does not save a separate wallet or mempool:
+successful mutations must already belong to a committed generation. Unavailable
+authority produces a failed shutdown result and requires recovery. A clean
+shutdown result is subject to the same platform durability assumptions above.
 
 `DecodeGenerationMetadata` is the same pure fixed-size decoder used by store
 observation and staged-image checks. `fuzz_generation_metadata` exercises it
@@ -103,9 +130,60 @@ without file access under ASan/UBSan, with public identity-bound seeds under
 `fuzz/corpus/generation_metadata/`. It cannot prove image durability, encryption,
 consensus validity, allocation behavior of other parsers or node-level atomicity.
 
-Remaining work includes inside-syscall fault/crash coverage, actual syscall
-failures and device/barrier evidence, migration retaining legacy files, prepared
-chain/wallet/mempool integration under exclusive publication, all key-generation
-and RPC writers, outcome adapters, restart consistency, concurrent-reader design,
-and the complete 1/10/100-block reorganization and crash/restart matrix. No existing
-node storage authority changes in this PR. MAINNET remains locked.
+Remaining acceptance work includes inside-syscall fault/crash coverage, actual
+syscall failures and device/barrier evidence, the complete writer/fault matrix,
+restart consistency, concurrent-reader design, and the complete 1/10/100-block
+reorganization and crash/restart matrix. The daemon integration described below
+does not by itself discharge these proof obligations. Development-only legacy
+node APIs remain separately unqualified. MAINNET remains locked.
+
+## Daemon coordinator cutover
+
+Initial selector creation uses the same checked write, flush and close path as
+later candidate selectors. Startup verifies the selected images and requires a
+successful directory barrier before returning a recovered store. A failed
+startup barrier refuses admission without rewriting the selector or falling back.
+An interruption before the first selector replacement leaves temporary evidence
+and startup refuses to infer an empty database from it. An interruption after
+replacement may leave a complete empty authority that a later startup verifies;
+the failed startup is not a claim that replacement never occurred. Test-only
+startup hooks exercise these boundaries with controlled exits and modeled I/O
+errors. They do not strengthen the Windows or hardware durability claims above.
+
+Recovery also accepts an empty-by-default injected test observer. It reports only
+phase and replay ordinal/count, never key material or mutable state. The daemon
+does not supply it and no RPC/configuration option selects it. Controlled child
+exits can interrupt first/middle/final block replay, wallet loading, pending-pool
+reconstruction and final admission. Restart tests must preserve all committed
+image bytes and recover the same complete public state. These are process-exit
+tests, not evidence of interrupted physical writes or power-loss durability.
+
+REGTEST and TESTNET daemon startup now select only `DurableRuntime`. Blocks,
+transactions, mining, key generation, payments and faucet admission enter its
+node-owned coordinator, including peer callbacks. The retired legacy flag refuses
+before storage opens. Existing legacy images require verified offline migration
+to a new destination; no in-place rewriting or unpersisted mempool reconstruction
+is performed. TESTNET bootstrap and transport configuration retain their prior
+configuration semantics; RPC remains loopback-only. This does not authorize
+public service operation.
+
+Process-local metrics observe completed publication and transport activity.
+Unavailable or ambiguous durable outcomes are not counted as validation rejection.
+They quarantine the owner and require recovery. Metrics are not persisted or
+consensus inputs. The old `RegtestNode` implementation and its peer constructor
+are linked only through `nova_legacy_node_test_support` in historical regression
+executables. They are absent from the production `nova_node` library and daemon
+link graph. Their direct mutable getters and independent persistence remain
+unqualified test behavior, not durable-coordinator proof. The compatibility
+declaration alone does not provide a production implementation. Gate 6 remains
+FAIL pending the other requirements above; link isolation alone does not prove
+full recovery acceptance.
+
+On Windows, `nova.durable_root_denial` exercises a real selector DELETE-sharing
+denial through daemon address generation, payment submission and mining. It
+requires each rejection to preserve the selector and RPC-visible state, verifies
+that state after restart, then verifies successful payment/mining retries across
+two restarts. It uses disposable loopback fixtures and process termination, not
+power interruption. It does not cover other write/flush failures or qualify
+filesystem durability. Hundred-block daemon reorganization failures and resource
+aborts remain open even when this narrower test passes.

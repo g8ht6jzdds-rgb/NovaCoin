@@ -191,11 +191,29 @@ class ChainState final
     Create(ChainStateParams parameters, ChainAnchor anchor, UTXOSet& utxos) noexcept;
 
     // Per-instance one-shot fault seam; never configured from network input.
-    enum class FailurePoint : std::uint8_t { kNone, kBeforeStaging, kAfterCopy, kAfterTransition };
-    void SetFailurePointForTesting(FailurePoint point) noexcept;
+    enum class FailurePoint : std::uint8_t {
+        kNone,
+        kBeforeStaging,
+        kAfterCopy,
+        kAfterTransition,
+        kAfterDisconnect,
+        kAfterConnect,
+        kAfterCandidateConnect,
+        kDuringCandidateRestore
+    };
+    void SetFailurePointForTesting(FailurePoint point, std::size_t ordinal = 1U) noexcept;
 
     class PreparedTransition;
     struct PreparationResult;
+    class StateCheckpoint final
+    {
+      private:
+        std::weak_ptr<const std::uint8_t> owner_;
+        std::uint64_t revision_{};
+        friend class ChainState;
+    };
+    [[nodiscard]] StateCheckpoint CaptureCheckpoint() const noexcept;
+    [[nodiscard]] bool IsCheckpointCurrent(const StateCheckpoint& checkpoint) const noexcept;
     // Exclusive, non-reentrant ownership; UTXOSet must outlive ChainState.
     // Prepared state does not publish or imply durable acceptance.
     [[nodiscard]] PreparationResult PrepareBlock(const primitives::Block& block) noexcept;
@@ -224,6 +242,7 @@ class ChainState final
     [[nodiscard]] std::size_t known_block_count() const noexcept;
     [[nodiscard]] std::optional<BlockIndex>
     GetBlockIndex(const crypto::Hash256& hash) const noexcept;
+    [[nodiscard]] bool HasBlockIndex(const crypto::Hash256& hash) const noexcept;
     [[nodiscard]] std::optional<HeaderMetadata>
     GetHeaderMetadata(const crypto::Hash256& hash) const noexcept;
     // Returns copied active-chain entries ordered by height for non-consensus
@@ -276,6 +295,7 @@ class ChainState final
     std::set<crypto::Hash256, HashLess> erased_indexes_;
     Chain active_chain_;
     FailurePoint failure_point_{FailurePoint::kNone};
+    std::size_t failure_ordinal_{1U};
 };
 
 class ChainState::PreparedTransition final

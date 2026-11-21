@@ -30,6 +30,12 @@ ValidateNetworkIdentity(std::span<const std::uint8_t> encoded,
 EnsureNetworkIdentity(const std::filesystem::path& data_directory,
                       const consensus::NetworkParams& network) noexcept;
 
+// Caller must hold the node data-directory lease. Allows only its reserved
+// directory alongside an absent marker; other pre-existing contents still fail.
+[[nodiscard]] NetworkIdentityError
+EnsureNetworkIdentityWithLease(const std::filesystem::path& data_directory,
+                               const consensus::NetworkParams& network) noexcept;
+
 [[nodiscard]] std::filesystem::path
 NetworkIdentityMarkerPath(const std::filesystem::path& data_directory) noexcept;
 

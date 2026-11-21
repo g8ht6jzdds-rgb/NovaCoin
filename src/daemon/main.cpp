@@ -1,12 +1,12 @@
 #include "build/version.hpp"
+#include "daemon/durable_migration.hpp"
+#include "daemon/durable_startup.hpp"
 #include "node/bootstrap_config.hpp"
 #include "node/network_selection.hpp"
 #include "node/peer_service.hpp"
-#include "node/regtest_node.hpp"
 #include "rpc/rpc.hpp"
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <chrono>
 #include <csignal>
@@ -123,6 +123,9 @@ int main(const int argc, char* argv[])
     constexpr std::size_t kMaximumConfiguredPeers = 64U;
     static_cast<void>(std::signal(SIGINT, RequestShutdown));
     static_cast<void>(std::signal(SIGTERM, RequestShutdown));
+#ifdef _WIN32
+    static_cast<void>(std::signal(SIGBREAK, RequestShutdown));
+#endif
     std::optional<std::string> name;
     std::optional<std::filesystem::path> data_directory;
     std::optional<std::filesystem::path> log_path;
@@ -131,11 +134,40 @@ int main(const int argc, char* argv[])
     std::optional<std::string> p2p_bind_address;
     std::vector<nova::net::TcpEndpoint> peers;
     std::optional<std::filesystem::path> bootstrap_config;
+    std::optional<std::filesystem::path> migrate_regtest_from;
+    std::optional<std::filesystem::path> migrate_testnet_from;
     bool enable_dns_seeds{};
     bool peer_discovery{};
+    bool durable_regtest{};
+    bool durable_testnet{};
+    bool legacy_regtest{};
     std::optional<nova::consensus::NetworkId> network;
     for (int index = 1; index < argc; ++index) {
         const std::string_view option{argv[index]};
+        if (option == "--durable-regtest") {
+            if (durable_regtest) {
+                std::cerr << "duplicate --durable-regtest option\n";
+                return 2;
+            }
+            durable_regtest = true;
+            continue;
+        }
+        if (option == "--durable-testnet") {
+            if (durable_testnet) {
+                std::cerr << "duplicate --durable-testnet option\n";
+                return 2;
+            }
+            durable_testnet = true;
+            continue;
+        }
+        if (option == "--legacy-regtest") {
+            if (legacy_regtest) {
+                std::cerr << "duplicate --legacy-regtest option\n";
+                return 2;
+            }
+            legacy_regtest = true;
+            continue;
+        }
         if (option == "--regtest") {
             if (network.has_value()) {
                 std::cerr << "duplicate network selection\n";
@@ -203,6 +235,10 @@ int main(const int argc, char* argv[])
             peers.push_back(*endpoint);
         } else if (option == "--bootstrap" && !bootstrap_config.has_value()) {
             bootstrap_config = std::filesystem::path{value};
+        } else if (option == "--migrate-regtest-from" && !migrate_regtest_from.has_value()) {
+            migrate_regtest_from = std::filesystem::path{value};
+        } else if (option == "--migrate-testnet-from" && !migrate_testnet_from.has_value()) {
+            migrate_testnet_from = std::filesystem::path{value};
         } else {
             std::cerr << "invalid or duplicate option\n";
             return 2;
@@ -215,7 +251,8 @@ int main(const int argc, char* argv[])
             << "usage: novacoind --regtest|--testnet|--mainnet --name <name> --datadir <path> "
                "--p2pport <port> --rpcport <port> --logfile <path> [--p2pbind loopback|wildcard] "
                "[--connect host:port] [--bootstrap static-bootstrap.conf] [--enable-dns-seeds] "
-               "[--peer-discovery]\n";
+               "[--peer-discovery] [--durable-regtest [--migrate-regtest-from <path>]] "
+               "[--durable-testnet [--migrate-testnet-from <path>]] [--legacy-regtest]\n";
         return 2;
     }
     const auto selection = nova::node::SelectNetwork(*network);
@@ -226,9 +263,64 @@ int main(const int argc, char* argv[])
         return 1;
     }
     const auto p2p_bind = p2p_bind_address.value_or("127.0.0.1");
+    // All supported daemon writers use the generation coordinator. Legacy
+    // files are accepted only as an offline migration source, never reopened
+    // for independent wallet/journal writes.
+    if (legacy_regtest) {
+        std::cerr << "legacy writer mode is retired; migrate into a new directory\n";
+        return 2;
+    }
+    if ((durable_regtest && *network != nova::consensus::NetworkId::kRegtest) ||
+        (durable_testnet && *network != nova::consensus::NetworkId::kTestnet) ||
+        (durable_regtest && durable_testnet)) {
+        std::cerr << "durable mode conflicts with selected network\n";
+        return 2;
+    }
+    if ((migrate_regtest_from && *network != nova::consensus::NetworkId::kRegtest) ||
+        (migrate_testnet_from && *network != nova::consensus::NetworkId::kTestnet) ||
+        (migrate_regtest_from && migrate_testnet_from)) {
+        std::cerr << "migration source conflicts with selected network\n";
+        return 2;
+    }
+    bool has_legacy_data = false;
+    std::error_code storage_error;
+    for (const auto* filename : {"wallet.dat", "blocks.dat"}) {
+        const auto status =
+            std::filesystem::symlink_status(*data_directory / filename, storage_error);
+        if (storage_error && storage_error != std::errc::no_such_file_or_directory) {
+            std::cerr << "unable to inspect legacy data\n";
+            return 1;
+        }
+        has_legacy_data = has_legacy_data || (!storage_error && std::filesystem::exists(status));
+        storage_error.clear();
+    }
+    if (has_legacy_data) {
+        std::cerr << "legacy data requires offline migration into a new directory\n";
+        return 2;
+    }
+    const auto generations =
+        std::filesystem::symlink_status(*data_directory / "generations", storage_error);
+    if (storage_error && storage_error != std::errc::no_such_file_or_directory) {
+        std::cerr << "unable to inspect generation directory\n";
+        return 1;
+    }
+    if (storage_error || !std::filesystem::exists(generations)) {
+        storage_error.clear();
+        const auto identity =
+            std::filesystem::symlink_status(*data_directory / "network.identity", storage_error);
+        if ((storage_error && storage_error != std::errc::no_such_file_or_directory) ||
+            (!storage_error && std::filesystem::exists(identity))) {
+            std::cerr << "ambiguous data directory; select a new directory\n";
+            return 1;
+        }
+    }
     if (peer_discovery &&
         (*network != nova::consensus::NetworkId::kRegtest || p2p_bind != "127.0.0.1")) {
         std::cerr << "peer discovery requires REGTEST IPv4 loopback\n";
+        return 2;
+    }
+    if (*network == nova::consensus::NetworkId::kRegtest && p2p_bind != "127.0.0.1") {
+        std::cerr << "REGTEST startup requires IPv4 loopback\n";
         return 2;
     }
     if (IsWildcardP2pBindAddress(p2p_bind) && *network != nova::consensus::NetworkId::kTestnet) {
@@ -323,15 +415,6 @@ int main(const int argc, char* argv[])
 #ifdef _WIN32
     ReleaseSecretEnvironmentString(wallet_passphrase, wallet_passphrase_length);
 #endif
-    auto node = nova::node::RegtestNode::Create({*name, *data_directory, *log_path, *p2p_port,
-                                                 *rpc_port, start_time, passphrase, *network});
-    auto peer_service = node == nullptr ? nullptr : nova::node::PeerService::Create(*node);
-    if (node == nullptr || peer_service == nullptr ||
-        (peer_discovery && !peer_service->EnableDiscovery(*p2p_port)) ||
-        peer_service->Listen({p2p_bind, *p2p_port}) != nova::net::TransportError::kNone) {
-        std::cerr << nova::node::NetworkName(*network) << " node P2P initialization failed\n";
-        return 1;
-    }
     // RPC credentials are intentionally provided via the environment, not
     // arguments or logs. The fixed account name keeps the surface small.
     const auto rpc_password = EnvironmentValue("NOVACOIN_RPC_PASSWORD");
@@ -373,78 +456,48 @@ int main(const int argc, char* argv[])
         "127.0.0.1", "novacoin", *rpc_password, {8'192U, 1'000'000U, 4'096U}, *network};
     rpc_config.restricted_principals = std::move(restricted_principals);
     rpc_config.maximum_faucet_payout = maximum_faucet_payout;
-    auto rpc_service = nova::rpc::RpcService::Create(
-        std::move(rpc_config),
-        {node->chain_state(),
-         node->utxos(),
-         node->mempool(),
-         peer_service->peer_manager(),
-         node->wallet(),
-         {node->height() + 1U, node->next_mining_time()},
-         NowSeconds(),
-         [&node]() { return node->PersistWalletForRpc(); },
-         [&node, &peer_service]() -> std::optional<nova::crypto::Hash256> {
-             const auto mined = node->MineBlock();
-             if (mined.error != nova::node::RegtestNodeError::kNone ||
-                 !mined.block_hash.has_value()) {
-                 return std::nullopt;
-             }
-             const auto index = node->chain_state().GetBlockIndex(*mined.block_hash);
-             if (!index.has_value() || !index->block.has_value()) {
-                 return std::nullopt;
-             }
-             peer_service->RelayBlock(*index->block);
-             return mined.block_hash;
-         },
-         [&node, &peer_service](
-             const nova::wallet::Recipient& recipient) -> std::optional<nova::crypto::Hash256> {
-             const std::array<nova::wallet::Recipient, 1U> recipients{recipient};
-             const auto submitted = node->CreateAndBroadcast(recipients);
-             if (submitted.error != nova::node::RegtestNodeError::kNone ||
-                 !submitted.transaction.has_value()) {
-                 return std::nullopt;
-             }
-             const auto transaction_id =
-                 submitted.transaction->TxId(node->wallet().transaction_limits());
-             if (!transaction_id.has_value()) {
-                 return std::nullopt;
-             }
-             peer_service->RelayTransaction(*submitted.transaction);
-             return transaction_id;
-         },
-         [&peer_service](const nova::net::TcpEndpoint& endpoint) {
-             return peer_service->Dial(endpoint, NowSeconds()).has_value();
-         },
-         [&peer_service]() { peer_service->DisconnectPeers(); },
-         [&node]() { return node->metrics(); }});
-    auto rpc_server =
-        rpc_service == nullptr
-            ? nullptr
-            : nova::rpc::LoopbackHttpServer::Create(
-                  {"127.0.0.1", *rpc_port, 32U, 8'192U, 1'000'000U, 30U}, *rpc_service);
-    if (rpc_server == nullptr) {
-        std::cerr << nova::node::NetworkName(*network) << " node RPC initialization failed\n";
+    const auto time_source = std::make_shared<nova::chain::SystemValidationTimeSource>();
+    auto runtime = migrate_regtest_from
+                       ? nova::daemon::MigrateDurableRegtest(*migrate_regtest_from, *data_directory,
+                                                             time_source, start_time, passphrase,
+                                                             std::move(rpc_config))
+                   : migrate_testnet_from
+                       ? nova::daemon::MigrateDurableTestnet(*migrate_testnet_from, *data_directory,
+                                                             time_source, start_time, passphrase,
+                                                             std::move(rpc_config))
+                       : nova::daemon::OpenDurableNode(*data_directory, time_source, start_time,
+                                                       passphrase, std::move(rpc_config));
+    if (!runtime || (peer_discovery && !runtime->Peer().EnableDiscovery(*p2p_port)) ||
+        runtime->Peer().Listen({p2p_bind, *p2p_port}) != nova::net::TransportError::kNone) {
+        std::cerr << "durable " << nova::node::NetworkName(*network)
+                  << " startup failed; inspect any migration destination\n";
+        return 1;
+    }
+    if (migrate_regtest_from || migrate_testnet_from)
+        std::cerr << "legacy source retained; its unpersisted mempool was not migrated\n";
+    auto server = nova::rpc::LoopbackHttpServer::Create(
+        {"127.0.0.1", *rpc_port, 32U, 8'192U, 1'000'000U, 30U}, runtime->Rpc());
+    if (!server) {
+        std::cerr << "durable RPC initialization failed\n";
         return 1;
     }
     for (const auto& endpoint : peers) {
-        if (!peer_service->Dial(endpoint, NowSeconds()).has_value()) {
+        if (!runtime->Peer().Dial(endpoint, NowSeconds())) {
             std::cerr << "failed to dial " << endpoint.host << ':' << endpoint.port << '\n';
             return 1;
         }
     }
-    std::cout << "novacoind " << nova::node::NetworkName(*network) << " P2P/RPC ready "
-              << node->config().name << '\n';
-    while (shutdown_requested == 0) {
-        static_cast<void>(peer_service->Pump(NowSeconds()));
-        static_cast<void>(rpc_server->Pump(NowSeconds()));
+    std::cout << "novacoind " << nova::node::NetworkName(*network) << " durable P2P/RPC ready "
+              << *name << '\n';
+    while (shutdown_requested == 0 && runtime->Ready()) {
+        static_cast<void>(runtime->Pump(NowSeconds()));
+        static_cast<void>(server->Pump(NowSeconds()));
         std::this_thread::sleep_for(std::chrono::milliseconds{10});
     }
-    rpc_server->Close();
-    peer_service->Close();
-    if (!node->PersistWalletForRpc()) {
-        std::cerr << "wallet persistence failed during shutdown\n";
+    server->Close();
+    if (!runtime->Shutdown()) {
+        std::cerr << "durable " << nova::node::NetworkName(*network) << " authority unavailable\n";
         return 1;
     }
-    std::cout << "novacoind shutdown complete " << node->config().name << '\n';
     return 0;
 }

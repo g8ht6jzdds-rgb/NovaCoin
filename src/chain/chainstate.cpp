@@ -233,9 +233,11 @@ template <typename Visitor> void ChainState::ForEachIndex(Visitor&& visitor) con
         visitor(hash, index);
 }
 
-void ChainState::SetFailurePointForTesting(const FailurePoint point) noexcept
+void ChainState::SetFailurePointForTesting(const FailurePoint point,
+                                           const std::size_t ordinal) noexcept
 {
     failure_point_ = point;
+    failure_ordinal_ = ordinal;
 }
 
 template <typename Operation>
@@ -265,6 +267,7 @@ ChainState::PrepareOperation(Operation&& operation,
         staged.transition_utxos_ = &*prepared->utxos_;
         if (failure == FailurePoint::kAfterCopy)
             throw std::bad_alloc{};
+        staged.SetFailurePointForTesting(failure, failure_ordinal_);
         const auto result = operation(staged);
         if (!prepared->utxos_->IsCurrent())
             return {
@@ -280,6 +283,20 @@ ChainState::PrepareOperation(Operation&& operation,
         return {{ChainError::kAllocationFailure, BlockValidationError::kNone, failure_hash},
                 nullptr};
     }
+}
+
+ChainState::StateCheckpoint ChainState::CaptureCheckpoint() const noexcept
+{
+    StateCheckpoint result;
+    result.owner_ = identity_;
+    result.revision_ = publication_revision_;
+    return result;
+}
+
+bool ChainState::IsCheckpointCurrent(const StateCheckpoint& checkpoint) const noexcept
+{
+    const auto owner = checkpoint.owner_.lock();
+    return owner != nullptr && owner == identity_ && checkpoint.revision_ == publication_revision_;
 }
 
 bool ChainState::CanCommitPrepared(const PreparedTransition& prepared) const noexcept
@@ -451,15 +468,23 @@ ChainResult ChainState::AcceptBlockStaged(const primitives::Block& block) noexce
         auto* candidate = EditIndex(*hash);
         if (candidate == nullptr)
             return {ChainError::kUnknownBlock, BlockValidationError::kNone, *hash};
-        const auto connected = ConnectIndexedBlock(*candidate);
+        const bool inject_restore_failure = failure_point_ == FailurePoint::kDuringCandidateRestore;
+        const auto connected =
+            inject_restore_failure
+                ? ChainResult{ChainError::kAllocationFailure, BlockValidationError::kNone, *hash}
+                : ConnectIndexedBlock(*candidate);
         if (connected.error != ChainError::kNone) {
             EraseIndex(*hash);
+            if (inject_restore_failure)
+                failure_point_ = FailurePoint::kAfterConnect;
             const auto restored = ReorganizeChain(original_tip);
             if (restored.error != ChainError::kNone) {
                 return {ChainError::kRollbackFailure, restored.validation_error, *hash};
             }
             return connected;
         }
+        if (failure_point_ == FailurePoint::kAfterCandidateConnect)
+            throw std::bad_alloc{};
         candidate->status = BlockStatus::kActive;
         active_chain_.SetTip(*hash, candidate->height);
         MarkActiveChain();
@@ -618,6 +643,9 @@ ChainResult ChainState::ReorganizeChain(const crypto::Hash256& new_tip) noexcept
                 return {error, BlockValidationError::kNone, new_tip};
             }
             disconnected.push_back(hash);
+            if (failure_point_ == FailurePoint::kAfterDisconnect &&
+                disconnected.size() == failure_ordinal_)
+                throw std::bad_alloc{};
         }
 
         std::vector<crypto::Hash256> connected;
@@ -645,6 +673,9 @@ ChainResult ChainState::ReorganizeChain(const crypto::Hash256& new_tip) noexcept
                 return result;
             }
             connected.push_back(hash);
+            if (failure_point_ == FailurePoint::kAfterConnect &&
+                connected.size() == failure_ordinal_)
+                throw std::bad_alloc{};
         }
         active_chain_.SetTip(new_tip, target_iterator->height);
         MarkActiveChain();
@@ -685,6 +716,11 @@ ChainState::GetHeaderMetadata(const crypto::Hash256& hash) const noexcept
     return HeaderMetadata{index.hash,           index.previous_hash, index.height,
                           index.time,           index.expected_bits, index.target,
                           index.per_block_work, index.chain_work};
+}
+
+bool ChainState::HasBlockIndex(const crypto::Hash256& hash) const noexcept
+{
+    return FindIndex(hash) != nullptr;
 }
 
 std::optional<BlockIndex> ChainState::GetBlockIndex(const crypto::Hash256& hash) const noexcept

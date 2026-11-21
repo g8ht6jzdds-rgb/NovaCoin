@@ -33,10 +33,14 @@ restricted credentials are `NOVACOIN_EXPLORER_RPC_PASSWORD` for the `explorer`
 principal and, on TESTNET only, `NOVACOIN_FAUCET_RPC_PASSWORD` plus the positive
 integer `NOVACOIN_FAUCET_MAX_PAYOUT` for the `faucet` principal. The explorer
 role may call only `getexplorersnapshot`; the faucet role may call only
-`faucetpay`. Unauthorized methods return HTTP 403 and RPC error `-32006`. The
-daemon passes its live `ChainState`, UTXO set, mempool, P2P peer manager, and
-wallet to the service. Wallet address generation persists through the node's
-encrypted-wallet path before returning success.
+`faucetpay`. Unauthorized methods return HTTP 403 and RPC error `-32006`.
+Daemon startup validates these credentials and the
+TESTNET payout bound before opening node state or listeners. Durable RPC uses
+read snapshots and node-owned mutation callbacks; address generation and
+faucet transaction admission use the same generation coordinator as other
+writers. The daemon no longer constructs the legacy borrowed-component RPC
+adapter; that API remains for development/test fixtures and does not establish
+joint recovery atomicity.
 
 ## Methods
 
@@ -64,6 +68,17 @@ Amounts are signed base-unit JSON integers, never decimal values.  Wallet
 methods never expose a private key.  `createtransaction` and `signtransaction`
 return canonical transaction hex; `sendwallettransaction` passes the wallet
 transaction to the configured mempool broadcast adapter.
+
+When the node loses publication authority during a write, the error may say
+that the operation outcome may have committed. A caller must reconcile the
+recovered node and any relevant chain or peer evidence before retrying; an
+error alone does not establish that a payment was rejected. For an uncertain
+`sendwallettransaction`, the error includes the transaction ID calculated
+from the submitted bytes. A later mempool lookup can help reconciliation, but
+absence from the mempool alone does not prove the transaction was never
+accepted, relayed, or confirmed. An uncertain `sendtoaddress` can provide a
+candidate transaction ID when the node constructed one, but may not supply
+one if failure occurred earlier. Blindly repeating it can create a second payment.
 
 Regtest-only `mineregtestheader` receives a canonical 80-byte header as hex and
 a bounded integer attempt limit.  It calls the ordinary CPU regtest miner and

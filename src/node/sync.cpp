@@ -59,7 +59,17 @@ DifficultyParametersAreSafe(const consensus::DifficultyParameters& parameters) n
 } // namespace
 
 Synchronizer::Synchronizer(SyncParams parameters, chain::ChainState& chain) noexcept
-    : parameters_(parameters), chain_(chain), best_header_tip_(chain.active_tip())
+    : Synchronizer(parameters, chain, &chain,
+                   [](void* context, const primitives::Block& block) noexcept {
+                       return static_cast<chain::ChainState*>(context)->AcceptBlock(block);
+                   })
+{
+}
+
+Synchronizer::Synchronizer(SyncParams parameters, const chain::ChainState& chain, void* context,
+                           BlockAdmission admission) noexcept
+    : parameters_(parameters), chain_(chain), admission_context_(context), admission_(admission),
+      best_header_tip_(chain.active_tip())
 {
     static_cast<void>(RefreshValidatedHeaders());
 }
@@ -317,7 +327,9 @@ Synchronizer::ExpectedBits(const HeaderIndex& parent,
 
 SyncResult Synchronizer::AcceptBlock(const primitives::Block& block) noexcept
 {
-    const auto result = chain_.AcceptBlock(block);
+    if (admission_ == nullptr)
+        return {SyncError::kChainStateUnavailable, {}, {}};
+    const auto result = admission_(admission_context_, block);
     return result.error == chain::ChainError::kNone
                ? SyncResult{SyncError::kNone, result, {}}
                : SyncResult{SyncError::kBlockRejected, result, {}};

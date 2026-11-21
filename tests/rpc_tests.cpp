@@ -363,6 +363,398 @@ TEST(RpcIntegration, ServesAuthenticatedReadOnlyHealthAndMetrics)
     EXPECT_NE(info.body.find("\"blocks\":0"), std::string::npos);
 }
 
+TEST(RpcIntegration, WalletSubmissionUsesNodeCallbackAndHonorsRejection)
+{
+    UTXOSet utxos;
+    auto state = CreateChainState(utxos);
+    auto mempool = Mempool::Create({RegtestValidationParams(), 16U, 100000U, 0});
+    auto peers = MakePeerManager();
+    auto wallet = nova::wallet::Wallet::Create({kTransactionLimits, 1, 1U});
+    ASSERT_NE(state, nullptr);
+    ASSERT_NE(mempool, nullptr);
+    ASSERT_NE(wallet, nullptr);
+    const auto address = wallet->GenerateReceivingAddress();
+    ASSERT_TRUE(address.has_value());
+    std::vector<std::uint8_t> script{0x76U, 0xA9U, 0x14U};
+    script.insert(script.end(), address->public_key_hash.begin(), address->public_key_hash.end());
+    script.insert(script.end(), {0x88U, 0xACU});
+    const nova::primitives::Transaction funding{
+        1,
+        {{nova::primitives::OutPoint{AnchorHash(), 0U}, {}, 0xFFFFFFFFU}},
+        {{5LL * COIN, script}},
+        0U};
+    ASSERT_TRUE(wallet->ObserveTransaction(funding, 1U, true));
+    const std::vector<nova::wallet::Recipient> recipients{{address->public_key_hash, COIN}};
+    const auto built = wallet->CreateTransaction(recipients);
+    ASSERT_TRUE(built.built.has_value());
+    nova::primitives::BinaryWriter writer;
+    ASSERT_TRUE(built.built->transaction.Serialize(writer, kTransactionLimits));
+    constexpr char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (const auto byte : writer.bytes()) {
+        hex.push_back(digits[byte >> 4U]);
+        hex.push_back(digits[byte & 15U]);
+    }
+    bool accept = false;
+    unsigned calls = 0;
+    unsigned address_calls = 0;
+    unsigned persist_calls = 0;
+    bool address_success = false;
+    bool state_available = true;
+    bool lose_authority = false;
+    bool wallet_available = true;
+    bool lookup_available = true;
+    std::optional<bool> verification{true};
+    nova::rpc::RpcDependencies dependencies{
+        *state, utxos, *mempool, peers, *wallet, {1U, 1000U}, 1000U, {}, {}, {}, {}, {}, {}};
+    dependencies.submit_transaction = [&](const nova::primitives::Transaction& transaction) {
+        ++calls;
+        EXPECT_EQ(transaction.TxId(kTransactionLimits),
+                  built.built->transaction.TxId(kTransactionLimits));
+        if (lose_authority) {
+            state_available = false;
+            return false;
+        }
+        return accept;
+    };
+    dependencies.generate_address = [&]() -> std::optional<nova::wallet::WalletAddress> {
+        ++address_calls;
+        if (lose_authority) {
+            state_available = false;
+            return std::nullopt;
+        }
+        return address_success ? address : std::nullopt;
+    };
+    dependencies.mine_regtest_block = [&]() -> std::optional<nova::crypto::Hash256> {
+        if (lose_authority)
+            state_available = false;
+        return std::nullopt;
+    };
+    dependencies.send_to_address =
+        [&](const nova::wallet::Recipient&) -> std::optional<nova::crypto::Hash256> {
+        if (lose_authority)
+            state_available = false;
+        return std::nullopt;
+    };
+    dependencies.persist_wallet = [&]() {
+        ++persist_calls;
+        return false;
+    };
+    dependencies.state_available = [&]() { return state_available; };
+    dependencies.verify_transaction = [&](const nova::primitives::Transaction&) {
+        return verification;
+    };
+    dependencies.read_wallet = [&]() -> std::optional<nova::rpc::RpcWalletSnapshot> {
+        if (!wallet_available)
+            return std::nullopt;
+        return nova::rpc::RpcWalletSnapshot{wallet->ConfirmedBalance(),
+                                            wallet->UnconfirmedBalance(), wallet->ListUTXOs()};
+    };
+    dependencies.build_transaction = [&](std::span<const nova::wallet::Recipient> requested)
+        -> std::optional<nova::wallet::TransactionBuildResult> {
+        return wallet_available ? std::optional{wallet->CreateTransaction(requested)}
+                                : std::nullopt;
+    };
+    dependencies.sign_transaction = [&](const nova::primitives::Transaction& transaction)
+        -> std::optional<nova::wallet::TransactionSignResult> {
+        return wallet_available ? std::optional{wallet->SignTransaction(transaction)}
+                                : std::nullopt;
+    };
+    dependencies.find_block = [&](const nova::crypto::Hash256& hash) {
+        return nova::rpc::RpcBlockLookup{
+            lookup_available, lookup_available ? state->GetBlockIndex(hash) : std::nullopt};
+    };
+    dependencies.find_mempool_entry = [&](const nova::crypto::Hash256& hash) {
+        return nova::rpc::RpcMempoolLookup{
+            lookup_available, lookup_available ? mempool->GetEntry(hash) : std::nullopt};
+    };
+    dependencies.read_coin = [&](const nova::chain::UTXOKey& key) {
+        return lookup_available ? utxos.ReadCoin(key)
+                                : nova::chain::CoinReadResult{
+                                      nova::chain::CoinReadError::kUnavailable, std::nullopt};
+    };
+    dependencies.read_chain = [&]() -> std::optional<nova::rpc::RpcChainSnapshot> {
+        if (!lookup_available)
+            return std::nullopt;
+        const auto index = state->GetBlockIndex(state->active_tip());
+        if (!index)
+            return std::nullopt;
+        return nova::rpc::RpcChainSnapshot{state->active_height(), state->active_tip(),
+                                           index->chain_work, mempool->size(),
+                                           mempool->total_serialized_size()};
+    };
+    dependencies.read_active_blocks = [&]() -> std::optional<std::vector<nova::chain::BlockIndex>> {
+        return lookup_available ? state->GetActiveBlockIndexes() : std::nullopt;
+    };
+    nova::rpc::RpcConfig required{
+        "127.0.0.1", "user", "pass", {256U, 8192U, 4096U}, nova::consensus::NetworkId::kRegtest};
+    required.require_node_mutation_callbacks = true;
+    auto incomplete = dependencies;
+    incomplete.generate_address = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(incomplete)), nullptr);
+    auto missing_submission = dependencies;
+    missing_submission.submit_transaction = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_submission)), nullptr);
+    auto missing_guard = dependencies;
+    missing_guard.state_available = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_guard)), nullptr);
+    auto missing_verifier = dependencies;
+    missing_verifier.verify_transaction = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_verifier)), nullptr);
+    auto missing_wallet = dependencies;
+    missing_wallet.read_wallet = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_wallet)), nullptr);
+    auto missing_builder = dependencies;
+    missing_builder.build_transaction = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_builder)), nullptr);
+    auto missing_signer = dependencies;
+    missing_signer.sign_transaction = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_signer)), nullptr);
+    auto missing_block_reader = dependencies;
+    missing_block_reader.find_block = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_block_reader)), nullptr);
+    auto missing_mempool_reader = dependencies;
+    missing_mempool_reader.find_mempool_entry = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_mempool_reader)), nullptr);
+    auto missing_coin_reader = dependencies;
+    missing_coin_reader.read_coin = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_coin_reader)), nullptr);
+    auto missing_summary = dependencies;
+    missing_summary.read_chain = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_summary)), nullptr);
+    auto missing_active = dependencies;
+    missing_active.read_active_blocks = {};
+    EXPECT_EQ(nova::rpc::RpcService::Create(required, std::move(missing_active)), nullptr);
+    auto throwing_guard = dependencies;
+    throwing_guard.state_available = []() -> bool { throw 1; };
+    auto throwing_service = nova::rpc::RpcService::Create(required, std::move(throwing_guard));
+    ASSERT_NE(throwing_service, nullptr);
+    EXPECT_EQ(throwing_service
+                  ->HandleHttpPost({"POST", "Basic dXNlcjpwYXNz",
+                                    R"({"jsonrpc":"2.0","id":4,"method":"getbalances"})"})
+                  .status,
+              500U);
+    auto owner_only = dependencies;
+    owner_only.chain_state = {};
+    owner_only.utxos = {};
+    owner_only.mempool = {};
+    owner_only.wallet = {};
+    auto legacy_config = required;
+    legacy_config.require_node_mutation_callbacks = false;
+    EXPECT_EQ(nova::rpc::RpcService::Create(legacy_config, owner_only), nullptr);
+    auto owner_service = nova::rpc::RpcService::Create(required, std::move(owner_only));
+    ASSERT_NE(owner_service, nullptr);
+    auto service = nova::rpc::RpcService::Create(required, std::move(dependencies));
+    ASSERT_NE(service, nullptr);
+    const auto body = std::string{"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":"
+                                  "\"sendwallettransaction\",\"params\":{\"hex\":\""} +
+                      hex + "\"}}";
+    constexpr std::string_view auth{"Basic dXNlcjpwYXNz"};
+    const auto encoded_address = nova::wallet::EncodeP2pkhAddress(
+        address->public_key_hash, nova::consensus::RegtestNetworkParams());
+    ASSERT_TRUE(encoded_address.has_value());
+    const auto build_body = std::string{"{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":"
+                                        "\"createtransaction\",\"params\":{\"address\":\""} +
+                            *encoded_address + "\",\"amount\":1}}";
+    const auto sign_body = std::string{"{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":"
+                                       "\"signtransaction\",\"params\":{\"hex\":\""} +
+                           hex + "\"}}";
+    EXPECT_NE(owner_service
+                  ->HandleHttpPost(
+                      {"POST", auth, R"({"jsonrpc":"2.0","id":7,"method":"getblockchaininfo"})"})
+                  .body.find("\"blocks\":0"),
+              std::string::npos);
+    EXPECT_NE(
+        owner_service
+            ->HandleHttpPost({"POST", auth, R"({"jsonrpc":"2.0","id":7,"method":"getbalances"})"})
+            .body.find("\"confirmed\""),
+        std::string::npos);
+    EXPECT_EQ(owner_service->HandleHttpPost({"POST", auth, build_body}).body.find("\"error\""),
+              std::string::npos);
+    EXPECT_EQ(owner_service->HandleHttpPost({"POST", auth, sign_body}).body.find("\"error\""),
+              std::string::npos);
+    const auto address_count = wallet->ReceivingAddressCount();
+    constexpr std::string_view address_body =
+        R"({"jsonrpc":"2.0","id":2,"method":"getnewaddress"})";
+    state_available = false;
+    EXPECT_NE(
+        service->HandleHttpPost({"POST", auth, address_body}).body.find("node state unavailable"),
+        std::string::npos);
+    EXPECT_NE(
+        service
+            ->HandleHttpPost({"POST", auth, R"({"jsonrpc":"2.0","id":3,"method":"getbalances"})"})
+            .body.find("node state unavailable"),
+        std::string::npos);
+    EXPECT_EQ(address_calls, 0U);
+    EXPECT_EQ(calls, 0U);
+    state_available = true;
+    constexpr std::string_view zero_hash =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    const auto block_query =
+        std::string{
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"getblock\",\"params\":{\"hash\":\""} +
+        std::string{zero_hash} + "\"}}";
+    const auto transaction_query = std::string{"{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":"
+                                               "\"getmempoolentry\",\"params\":{\"txid\":\""} +
+                                   std::string{zero_hash} + "\"}}";
+    const auto coin_query =
+        std::string{
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"getutxo\",\"params\":{\"txid\":\""} +
+        std::string{zero_hash} + "\",\"vout\":0}}";
+    EXPECT_EQ(
+        owner_service
+            ->HandleHttpPost({"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getnodehealth"})"})
+            .body.find("\"error\""),
+        std::string::npos);
+    EXPECT_EQ(owner_service
+                  ->HandleHttpPost(
+                      {"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getmempoolinfo"})"})
+                  .body.find("\"error\""),
+              std::string::npos);
+    EXPECT_EQ(owner_service
+                  ->HandleHttpPost(
+                      {"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getexplorersnapshot"})"})
+                  .body.find("\"error\""),
+              std::string::npos);
+    EXPECT_NE(
+        owner_service->HandleHttpPost({"POST", auth, block_query}).body.find("block not found"),
+        std::string::npos);
+    EXPECT_NE(owner_service->HandleHttpPost({"POST", auth, transaction_query})
+                  .body.find("transaction not found"),
+              std::string::npos);
+    EXPECT_NE(owner_service->HandleHttpPost({"POST", auth, coin_query}).body.find("UTXO not found"),
+              std::string::npos);
+    EXPECT_NE(owner_service->HandleHttpPost({"POST", auth, body})
+                  .body.find("transaction broadcast failed"),
+              std::string::npos);
+    EXPECT_EQ(calls, 1U);
+    calls = 0U;
+    lookup_available = false;
+    EXPECT_NE(service
+                  ->HandleHttpPost(
+                      {"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getblockchaininfo"})"})
+                  .body.find("chain state unavailable"),
+              std::string::npos);
+    EXPECT_NE(
+        service
+            ->HandleHttpPost({"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getnodehealth"})"})
+            .body.find("chain state unavailable"),
+        std::string::npos);
+    EXPECT_NE(service
+                  ->HandleHttpPost(
+                      {"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getmempoolinfo"})"})
+                  .body.find("chain state unavailable"),
+              std::string::npos);
+    EXPECT_NE(service
+                  ->HandleHttpPost(
+                      {"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getexplorersnapshot"})"})
+                  .body.find("snapshot generation failed"),
+              std::string::npos);
+    EXPECT_NE(
+        service->HandleHttpPost({"POST", auth, block_query}).body.find("block state unavailable"),
+        std::string::npos);
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, transaction_query})
+                  .body.find("mempool state unavailable"),
+              std::string::npos);
+    EXPECT_NE(
+        service->HandleHttpPost({"POST", auth, coin_query}).body.find("UTXO state unavailable"),
+        std::string::npos);
+    lookup_available = true;
+    EXPECT_NE(service
+                  ->HandleHttpPost(
+                      {"POST", auth, R"({"jsonrpc":"2.0","id":8,"method":"getblockchaininfo"})"})
+                  .body.find("\"blocks\":0"),
+              std::string::npos);
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, block_query}).body.find("block not found"),
+              std::string::npos);
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, transaction_query})
+                  .body.find("transaction not found"),
+              std::string::npos);
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, coin_query}).body.find("UTXO not found"),
+              std::string::npos);
+    wallet_available = false;
+    EXPECT_NE(
+        service
+            ->HandleHttpPost({"POST", auth, R"({"jsonrpc":"2.0","id":3,"method":"getbalances"})"})
+            .body.find("wallet state unavailable"),
+        std::string::npos);
+    EXPECT_NE(
+        service
+            ->HandleHttpPost({"POST", auth, R"({"jsonrpc":"2.0","id":3,"method":"listunspent"})"})
+            .body.find("wallet state unavailable"),
+        std::string::npos);
+    EXPECT_NE(
+        service->HandleHttpPost({"POST", auth, build_body}).body.find("wallet state unavailable"),
+        std::string::npos);
+    EXPECT_NE(
+        service->HandleHttpPost({"POST", auth, sign_body}).body.find("wallet state unavailable"),
+        std::string::npos);
+    wallet_available = true;
+    EXPECT_EQ(service->HandleHttpPost({"POST", auth, build_body}).body.find("\"error\""),
+              std::string::npos);
+    EXPECT_EQ(service->HandleHttpPost({"POST", auth, sign_body}).body.find("\"error\""),
+              std::string::npos);
+    verification = std::nullopt;
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, body}).body.find("wallet state unavailable"),
+              std::string::npos);
+    EXPECT_EQ(calls, 0U);
+    verification = false;
+    EXPECT_NE(
+        service->HandleHttpPost({"POST", auth, body}).body.find("local signature check failed"),
+        std::string::npos);
+    EXPECT_EQ(calls, 0U);
+    verification = true;
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, address_body})
+                  .body.find("address generation failed"),
+              std::string::npos);
+    EXPECT_EQ(address_calls, 1U);
+    EXPECT_EQ(wallet->ReceivingAddressCount(), address_count);
+    EXPECT_EQ(persist_calls, 0U);
+    address_success = true;
+    EXPECT_EQ(service->HandleHttpPost({"POST", auth, address_body}).body.find("\"error\""),
+              std::string::npos);
+    EXPECT_EQ(address_calls, 2U);
+    EXPECT_EQ(wallet->ReceivingAddressCount(), address_count);
+    EXPECT_EQ(persist_calls, 0U);
+    EXPECT_NE(
+        service->HandleHttpPost({"POST", auth, body}).body.find("transaction broadcast failed"),
+        std::string::npos);
+    EXPECT_EQ(calls, 1U);
+    EXPECT_EQ(mempool->size(), 0U);
+    accept = true;
+    EXPECT_EQ(service->HandleHttpPost({"POST", auth, body}).body.find("\"error\""),
+              std::string::npos);
+    EXPECT_EQ(calls, 2U);
+    EXPECT_EQ(mempool->size(), 0U);
+    lose_authority = true;
+    const auto unknown = "operation outcome may have committed";
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, address_body}).body.find(unknown),
+              std::string::npos);
+    state_available = true;
+    const auto uncertain_submission = service->HandleHttpPost({"POST", auth, body});
+    EXPECT_NE(uncertain_submission.body.find(unknown), std::string::npos);
+    const auto submitted_id = built.built->transaction.TxId(kTransactionLimits);
+    ASSERT_TRUE(submitted_id);
+    std::string id_hex;
+    for (const auto byte : submitted_id->bytes()) {
+        id_hex.push_back(digits[byte >> 4U]);
+        id_hex.push_back(digits[byte & 15U]);
+    }
+    EXPECT_NE(uncertain_submission.body.find(id_hex), std::string::npos);
+    state_available = true;
+    const auto send_body = std::string{"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"sendtoaddress\","
+                                       "\"params\":{\"address\":\""} +
+                           *encoded_address + "\",\"amount\":1}}";
+    EXPECT_NE(service->HandleHttpPost({"POST", auth, send_body}).body.find(unknown),
+              std::string::npos);
+    state_available = true;
+    EXPECT_NE(service
+                  ->HandleHttpPost({"POST", auth,
+                                    R"({"jsonrpc":"2.0","id":10,"method":"generateregtestblock"})"})
+                  .body.find(unknown),
+              std::string::npos);
+}
+
 TEST(RpcIntegration, ValidatesWalletAndRegtestArguments)
 {
     auto service = CreateService();

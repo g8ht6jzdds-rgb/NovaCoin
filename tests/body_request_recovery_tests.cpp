@@ -23,11 +23,14 @@ struct Sink final : Recovery::Sink {
     Error result{Error::kQueueLimit};
     std::optional<Hash> validated;
     bool stale{};
+    bool unavailable{};
     std::size_t calls{}, count{};
     std::uint64_t peer{};
     Hash first;
     Recovery::BodyState State(const Hash& hash) const noexcept override
     {
+        if (unavailable)
+            return Recovery::BodyState::kUnavailable;
         if (validated.has_value() && *validated == hash)
             return Recovery::BodyState::kValidated;
         return stale ? Recovery::BodyState::kStale : Recovery::BodyState::kPending;
@@ -54,6 +57,33 @@ std::vector<nova::net::TransportPeer> Peers()
     auto second = peer;
     second.id = 8U;
     return {peer, second};
+}
+
+nova::net::InventoryMessage Inventory(std::uint32_t serial);
+
+TEST(BodyRequestRecovery, UnavailableOwnerCancelsWithoutClaimingStaleOrCompleted)
+{
+    Recovery recovery;
+    Sink sink;
+    sink.result = Error::kNone;
+    recovery.Submit(7U, Inventory(1U), 10U, sink);
+    ASSERT_EQ(recovery.size(), 1U);
+    ASSERT_EQ(sink.calls, 1U);
+    sink.unavailable = true;
+    recovery.Tick(20U, Peers(), sink);
+    EXPECT_EQ(recovery.size(), 0U);
+    EXPECT_EQ(sink.calls, 1U);
+    EXPECT_EQ(recovery.counters().snapshot_failures, 1U);
+    EXPECT_EQ(recovery.counters().completed, 0U);
+    EXPECT_EQ(recovery.counters().stale, 0U);
+    recovery.Submit(7U, Inventory(2U), 21U, sink);
+    EXPECT_EQ(recovery.size(), 0U);
+    EXPECT_EQ(sink.calls, 1U);
+    EXPECT_EQ(recovery.counters().snapshot_failures, 2U);
+    sink.unavailable = false;
+    recovery.Submit(7U, Inventory(2U), 22U, sink);
+    EXPECT_EQ(recovery.size(), 1U);
+    EXPECT_EQ(sink.calls, 2U);
 }
 
 nova::net::InventoryMessage Inventory(const std::uint32_t serial)

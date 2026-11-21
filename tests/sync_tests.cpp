@@ -371,6 +371,37 @@ TEST_F(SyncProgress, DeduplicatesRepeatedBodyRequestsWithinEachResponse)
     EXPECT_EQ(sync.header_count(), 2U);
 }
 
+TEST_F(SyncProgress, BlockAdmissionUsesOwnerAndFailsClosedWithoutIt)
+{
+    struct Owner {
+        nova::chain::ChainState* chain;
+        unsigned calls{};
+        bool reject{true};
+    } owner{state.get()};
+    const auto admit = [](void* context, const Block& block) noexcept {
+        auto& owner = *static_cast<Owner*>(context);
+        ++owner.calls;
+        if (owner.reject)
+            return nova::chain::ChainResult{nova::chain::ChainError::kContextFailure,
+                                            nova::chain::BlockValidationError::kNone, std::nullopt,
+                                            false};
+        return owner.chain->AcceptBlock(block);
+    };
+    const auto block = Make(state->active_tip(), 1U);
+    nova::node::Synchronizer unavailable{params, *state, nullptr, nullptr};
+    EXPECT_EQ(unavailable.Handle({nova::net::Command::kBlock, block}).error,
+              SyncError::kChainStateUnavailable);
+    EXPECT_EQ(state->active_height(), 0U);
+    nova::node::Synchronizer sync{params, *state, &owner, admit};
+    EXPECT_EQ(sync.Handle({nova::net::Command::kBlock, block}).error, SyncError::kBlockRejected);
+    EXPECT_EQ(owner.calls, 1U);
+    EXPECT_EQ(state->active_height(), 0U);
+    owner.reject = false;
+    EXPECT_EQ(sync.Handle({nova::net::Command::kBlock, block}).error, SyncError::kNone);
+    EXPECT_EQ(owner.calls, 2U);
+    EXPECT_EQ(state->active_tip(), Hash(block));
+}
+
 TEST_F(SyncProgress, InvalidSuffixRollsBackPrefixAndBestTipThenAllowsRetry)
 {
     nova::node::Synchronizer sync{params, *state};

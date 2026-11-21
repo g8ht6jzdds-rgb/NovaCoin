@@ -15,7 +15,7 @@ class BodyRequestRecovery final
   public:
     static constexpr std::size_t kCapacity = 4096U;
     static constexpr std::size_t kBatch = 2000U;
-    enum class BodyState : std::uint8_t { kPending, kValidated, kStale };
+    enum class BodyState : std::uint8_t { kPending, kValidated, kStale, kUnavailable };
     explicit BodyRequestRecovery(
         std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
     struct Counters final {
@@ -56,7 +56,7 @@ class BodyRequestRecovery final
         bool failed{};
     };
     void Clock(std::uint64_t now) noexcept;
-    void Prune(std::uint64_t now, Sink& sink) noexcept;
+    [[nodiscard]] bool Prune(std::uint64_t now, Sink& sink) noexcept;
     void Outcome(const net::InventoryMessage& batch, net::TransportError result, std::uint64_t now,
                  bool retry) noexcept;
     std::pmr::map<crypto::Hash256, Entry, Less> entries_;

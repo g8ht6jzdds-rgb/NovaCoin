@@ -403,19 +403,18 @@ HeaderFromBytes(const std::span<const std::uint8_t> bytes) noexcept
 }
 
 [[nodiscard]] std::optional<std::string>
-ExplorerSnapshotHex(const chain::ChainState& chain,
+ExplorerSnapshotHex(const std::span<const chain::BlockIndex> active,
                     const consensus::NetworkParams& network) noexcept
 {
-    const auto active = chain.GetActiveBlockIndexes();
-    if (!active.has_value() || active->empty()) {
+    if (active.empty()) {
         return std::nullopt;
     }
     try {
         primitives::BinaryWriter writer;
-        if (!writer.WriteU32(1U) || !writer.WriteCompactSize(active->size())) {
+        if (!writer.WriteU32(1U) || !writer.WriteCompactSize(active.size())) {
             return std::nullopt;
         }
-        for (const auto& index : *active) {
+        for (const auto& index : active) {
             const auto block = index.height == 0U
                                    ? std::optional<primitives::Block>{network.genesis_block}
                                    : index.block;
@@ -460,6 +459,22 @@ class MempoolBroadcaster final : public wallet::TransactionBroadcaster
     std::uint64_t now_{};
 };
 
+class CallbackBroadcaster final : public wallet::TransactionBroadcaster
+{
+  public:
+    explicit CallbackBroadcaster(const std::function<bool(const primitives::Transaction&)>& submit)
+        : submit_(submit)
+    {
+    }
+    wallet::BroadcastResult Broadcast(const primitives::Transaction& transaction) override
+    {
+        return wallet::BroadcastResult{submit_(transaction)};
+    }
+
+  private:
+    const std::function<bool(const primitives::Transaction&)>& submit_;
+};
+
 } // namespace
 
 RpcService::RpcService(RpcConfig config, RpcDependencies dependencies) noexcept
@@ -481,6 +496,18 @@ std::unique_ptr<RpcService> RpcService::Create(RpcConfig config,
         consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
         return nullptr;
     }
+    if (config.require_node_mutation_callbacks &&
+        (!dependencies.submit_transaction || !dependencies.generate_address ||
+         !dependencies.state_available || !dependencies.verify_transaction ||
+         !dependencies.read_wallet || !dependencies.build_transaction ||
+         !dependencies.sign_transaction || !dependencies.find_block ||
+         !dependencies.find_mempool_entry || !dependencies.read_coin || !dependencies.read_chain ||
+         !dependencies.read_active_blocks))
+        return nullptr;
+    if (!config.require_node_mutation_callbacks &&
+        (!dependencies.chain_state || !dependencies.utxos || !dependencies.mempool ||
+         !dependencies.wallet))
+        return nullptr;
     if (!IsLoopback(config.bind_address) || config.username.empty() || config.password.empty() ||
         config.limits.max_header_bytes == 0U || config.limits.max_body_bytes == 0U ||
         config.limits.max_mining_attempts == 0U || config.restricted_principals.size() > 2U) {
@@ -557,6 +584,39 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
         return !params.has_value() ? std::nullopt : Field(*params, name);
     };
     try {
+        if (dependencies_.state_available && !dependencies_.state_available())
+            return {200U, ErrorResponse(id, kNodeFailure, "node state unavailable")};
+        const auto mutation_failed = [&](const std::int32_t code, const char* message) {
+            if (dependencies_.state_available && !dependencies_.state_available())
+                return HttpResponse{
+                    200U,
+                    ErrorResponse(id, kNodeFailure,
+                                  "node state unavailable; operation outcome may have committed")};
+            return HttpResponse{200U, ErrorResponse(id, code, message)};
+        };
+        const auto payment_failed = [&](const char* message) {
+            if (dependencies_.state_available && !dependencies_.state_available() &&
+                dependencies_.uncertain_payment_id) {
+                const auto candidate = dependencies_.uncertain_payment_id();
+                if (candidate)
+                    return HttpResponse{
+                        200U, ErrorResponse(id, kNodeFailure,
+                                            "node state unavailable; operation outcome may have "
+                                            "committed; candidate transaction id " +
+                                                Hex(candidate->bytes()))};
+            }
+            return mutation_failed(kNodeFailure, message);
+        };
+        const auto chain_snapshot = [&]() -> std::optional<RpcChainSnapshot> {
+            if (dependencies_.read_chain)
+                return dependencies_.read_chain();
+            const auto& chain = *dependencies_.chain_state;
+            const auto index = chain.GetBlockIndex(chain.active_tip());
+            return RpcChainSnapshot{
+                chain.active_height(), chain.active_tip(),
+                index ? std::optional<chain::ChainWork>{index->chain_work} : std::nullopt,
+                dependencies_.mempool->size(), dependencies_.mempool->total_serialized_size()};
+        };
         if (*method == "getnetworkinfo") {
             const auto& network = consensus::GetNetworkParams(config_.network);
             return {
@@ -570,12 +630,13 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
                             ",\"network\":\"" + NetworkName(config_.network) + "\"}")};
         }
         if (*method == "getblockchaininfo") {
-            return {200U, ResultResponse(
-                              id, "{\"blocks\":" +
-                                      std::to_string(dependencies_.chain_state.active_height()) +
-                                      ",\"bestblockhash\":\"" +
-                                      Hex(dependencies_.chain_state.active_tip().bytes()) +
-                                      "\",\"chain\":\"" + NetworkName(config_.network) + "\"}")};
+            const auto snapshot = chain_snapshot();
+            if (!snapshot)
+                return {200U, ErrorResponse(id, kNodeFailure, "chain state unavailable")};
+            return {200U, ResultResponse(id, "{\"blocks\":" + std::to_string(snapshot->height) +
+                                                 ",\"bestblockhash\":\"" +
+                                                 Hex(snapshot->tip.bytes()) + "\",\"chain\":\"" +
+                                                 NetworkName(config_.network) + "\"}")};
         }
         if (*method == "getnodehealth" || *method == "getnodemetrics") {
             const auto metrics = dependencies_.read_metrics ? dependencies_.read_metrics()
@@ -597,32 +658,32 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             if (*method == "getnodemetrics") {
                 return {200U, ResultResponse(id, "{" + counters + "}")};
             }
-            return {
-                200U,
-                ResultResponse(
-                    id,
-                    "{\"ready\":true,\"network\":\"" + std::string{NetworkName(config_.network)} +
-                        "\",\"height\":" +
-                        std::to_string(dependencies_.chain_state.active_height()) +
-                        ",\"bestblockhash\":\"" +
-                        Hex(dependencies_.chain_state.active_tip().bytes()) +
-                        "\",\"chainwork\":\"" + [&]()
-                        -> std::string {
-                        const auto index = dependencies_.chain_state.GetBlockIndex(
-                            dependencies_.chain_state.active_tip());
-                        return index.has_value() ? Hex(index->chain_work.bytes()) : std::string{};
-                    }() + "\",\"mempool_bytes\":" +
-                               std::to_string(dependencies_.mempool.total_serialized_size()) +
-                               ",\"peers\":" + std::to_string(dependencies_.peers.peer_count()) +
-                               ",\"mempool\":" + std::to_string(dependencies_.mempool.size()) +
-                               "," + counters + "}")};
+            const auto snapshot = chain_snapshot();
+            if (!snapshot)
+                return {200U, ErrorResponse(id, kNodeFailure, "chain state unavailable")};
+            return {200U,
+                    ResultResponse(
+                        id, "{\"ready\":true,\"network\":\"" +
+                                std::string{NetworkName(config_.network)} + "\",\"height\":" +
+                                std::to_string(snapshot->height) + ",\"bestblockhash\":\"" +
+                                Hex(snapshot->tip.bytes()) + "\",\"chainwork\":\"" +
+                                (snapshot->chain_work ? Hex(snapshot->chain_work->bytes())
+                                                      : std::string{}) +
+                                "\",\"mempool_bytes\":" + std::to_string(snapshot->mempool_bytes) +
+                                ",\"peers\":" + std::to_string(dependencies_.peers.peer_count()) +
+                                ",\"mempool\":" + std::to_string(snapshot->mempool_size) + "," +
+                                counters + "}")};
         }
         if (*method == "getexplorersnapshot") {
             if (config_.network == consensus::NetworkId::kMainnet) {
                 return {200U, ErrorResponse(id, kRegtestOnly, "snapshot network unavailable")};
             }
-            const auto snapshot = ExplorerSnapshotHex(dependencies_.chain_state,
-                                                      consensus::GetNetworkParams(config_.network));
+            const auto active = dependencies_.read_active_blocks
+                                    ? dependencies_.read_active_blocks()
+                                    : dependencies_.chain_state->GetActiveBlockIndexes();
+            const auto snapshot =
+                active ? ExplorerSnapshotHex(*active, consensus::GetNetworkParams(config_.network))
+                       : std::nullopt;
             if (!snapshot.has_value()) {
                 return {200U, ErrorResponse(id, kNodeFailure, "snapshot generation failed")};
             }
@@ -634,8 +695,14 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             const auto hash_text = hash_raw.has_value() ? JsonString(*hash_raw) : std::nullopt;
             const auto hash =
                 hash_text.has_value() ? crypto::Hash256::FromHex(*hash_text) : std::nullopt;
-            const auto index =
-                hash.has_value() ? dependencies_.chain_state.GetBlockIndex(*hash) : std::nullopt;
+            const auto lookup =
+                !hash ? RpcBlockLookup{true, std::nullopt}
+                : dependencies_.find_block
+                    ? dependencies_.find_block(*hash)
+                    : RpcBlockLookup{true, dependencies_.chain_state->GetBlockIndex(*hash)};
+            if (!lookup.available)
+                return {200U, ErrorResponse(id, kNodeFailure, "block state unavailable")};
+            const auto& index = lookup.block;
             if (!index.has_value()) {
                 return {200U, ErrorResponse(id, kNotFound, "block not found")};
             }
@@ -656,8 +723,14 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             const auto hash_text = hash_raw.has_value() ? JsonString(*hash_raw) : std::nullopt;
             const auto hash =
                 hash_text.has_value() ? crypto::Hash256::FromHex(*hash_text) : std::nullopt;
-            const auto entry =
-                hash.has_value() ? dependencies_.mempool.GetEntry(*hash) : std::nullopt;
+            const auto lookup =
+                !hash ? RpcMempoolLookup{true, std::nullopt}
+                : dependencies_.find_mempool_entry
+                    ? dependencies_.find_mempool_entry(*hash)
+                    : RpcMempoolLookup{true, dependencies_.mempool->GetEntry(*hash)};
+            if (!lookup.available)
+                return {200U, ErrorResponse(id, kNodeFailure, "mempool state unavailable")};
+            const auto& entry = lookup.entry;
             if (!entry.has_value()) {
                 return {200U, ErrorResponse(id, kNotFound, "transaction not found")};
             }
@@ -668,8 +741,11 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
                                     ",\"size\":" + std::to_string(entry->serialized_size) +
                                     ",\"time\":" + std::to_string(entry->time_received) + "}")};
             }
-            const auto serialized =
-                TransactionHex(entry->transaction, dependencies_.wallet.transaction_limits());
+            const auto serialized = TransactionHex(
+                entry->transaction,
+                config_.require_node_mutation_callbacks
+                    ? consensus::GetNetworkParams(config_.network).block_limits.transaction_limits
+                    : dependencies_.wallet->transaction_limits());
             if (!serialized.has_value()) {
                 return {200U, ErrorResponse(id, kNodeFailure, "transaction serialization failed")};
             }
@@ -686,8 +762,9 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
                 static_cast<std::uint64_t>(*output) > std::numeric_limits<std::uint32_t>::max()) {
                 return {200U, ErrorResponse(id, kInvalidParams, "txid and vout required")};
             }
-            const auto read = dependencies_.utxos.ReadCoin(
-                chain::UTXOKey{*hash, static_cast<std::uint32_t>(*output)});
+            const chain::UTXOKey key{*hash, static_cast<std::uint32_t>(*output)};
+            const auto read = dependencies_.read_coin ? dependencies_.read_coin(key)
+                                                      : dependencies_.utxos->ReadCoin(key);
             if (read.error != chain::CoinReadError::kNone)
                 return {200U, ErrorResponse(id, kNodeFailure, "UTXO state unavailable")};
             const auto& coin = read.coin;
@@ -700,12 +777,12 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
                                                  (coin->is_coinbase ? "true" : "false") + "}")};
         }
         if (*method == "getmempoolinfo") {
-            return {200U,
-                    ResultResponse(
-                        id, "{\"size\":" + std::to_string(dependencies_.mempool.size()) +
-                                ",\"bytes\":" +
-                                std::to_string(dependencies_.mempool.total_serialized_size()) +
-                                "}")};
+            const auto snapshot = chain_snapshot();
+            if (!snapshot)
+                return {200U, ErrorResponse(id, kNodeFailure, "chain state unavailable")};
+            return {200U, ResultResponse(id, "{\"size\":" + std::to_string(snapshot->mempool_size) +
+                                                 ",\"bytes\":" +
+                                                 std::to_string(snapshot->mempool_bytes) + "}")};
         }
         if (*method == "getpeerinfo") {
             return {200U,
@@ -736,10 +813,13 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             return {200U, ResultResponse(id, "true")};
         }
         if (*method == "getnewaddress") {
-            const auto address = dependencies_.wallet.GenerateReceivingAddress();
+            const auto address = dependencies_.generate_address
+                                     ? dependencies_.generate_address()
+                                     : dependencies_.wallet->GenerateReceivingAddress();
             if (!address.has_value() ||
-                (dependencies_.persist_wallet && !dependencies_.persist_wallet())) {
-                return {200U, ErrorResponse(id, kWalletFailure, "address generation failed")};
+                (!dependencies_.generate_address && dependencies_.persist_wallet &&
+                 !dependencies_.persist_wallet())) {
+                return mutation_failed(kWalletFailure, "address generation failed");
             }
             const auto encoded = wallet::EncodeP2pkhAddress(
                 address->public_key_hash, consensus::GetNetworkParams(config_.network));
@@ -749,14 +829,26 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             return {200U, ResultResponse(id, "\"" + *encoded + "\"")};
         }
         if (*method == "getbalances") {
-            return {200U, ResultResponse(
-                              id, "{\"confirmed\":" +
-                                      AmountJson(dependencies_.wallet.ConfirmedBalance()) +
-                                      ",\"unconfirmed\":" +
-                                      AmountJson(dependencies_.wallet.UnconfirmedBalance()) + "}")};
+            const auto snapshot = dependencies_.read_wallet
+                                      ? dependencies_.read_wallet()
+                                      : std::optional<RpcWalletSnapshot>{RpcWalletSnapshot{
+                                            dependencies_.wallet->ConfirmedBalance(),
+                                            dependencies_.wallet->UnconfirmedBalance(),
+                                            {}}};
+            if (!snapshot)
+                return {200U, ErrorResponse(id, kNodeFailure, "wallet state unavailable")};
+            return {200U, ResultResponse(id, "{\"confirmed\":" + AmountJson(snapshot->confirmed) +
+                                                 ",\"unconfirmed\":" +
+                                                 AmountJson(snapshot->unconfirmed) + "}")};
         }
         if (*method == "listunspent") {
-            const auto coins = dependencies_.wallet.ListUTXOs();
+            const auto snapshot = dependencies_.read_wallet
+                                      ? dependencies_.read_wallet()
+                                      : std::optional<RpcWalletSnapshot>{RpcWalletSnapshot{
+                                            0, 0, dependencies_.wallet->ListUTXOs()}};
+            if (!snapshot)
+                return {200U, ErrorResponse(id, kNodeFailure, "wallet state unavailable")};
+            const auto& coins = snapshot->coins;
             std::string result{"["};
             for (std::size_t index = 0U; index < coins.size(); ++index) {
                 if (index != 0U) {
@@ -785,17 +877,25 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             }
             const std::array<wallet::Recipient, 1U> recipients{
                 {wallet::Recipient{*key_hash, *amount}}};
-            const auto built = dependencies_.wallet.CreateTransaction(recipients);
-            if (!built.built.has_value()) {
+            const auto built = dependencies_.build_transaction
+                                   ? dependencies_.build_transaction(recipients)
+                                   : std::optional<wallet::TransactionBuildResult>{
+                                         dependencies_.wallet->CreateTransaction(recipients)};
+            if (!built)
+                return {200U, ErrorResponse(id, kNodeFailure, "wallet state unavailable")};
+            if (!built->built.has_value()) {
                 return {200U, ErrorResponse(id, kWalletFailure, "transaction construction failed")};
             }
-            const auto serialized =
-                TransactionHex(built.built->transaction, dependencies_.wallet.transaction_limits());
+            const auto serialized = TransactionHex(
+                built->built->transaction,
+                config_.require_node_mutation_callbacks
+                    ? consensus::GetNetworkParams(config_.network).block_limits.transaction_limits
+                    : dependencies_.wallet->transaction_limits());
             if (!serialized.has_value()) {
                 return {200U, ErrorResponse(id, kNodeFailure, "transaction serialization failed")};
             }
             return {200U, ResultResponse(id, "{\"hex\":\"" + *serialized + "\",\"fee\":" +
-                                                 AmountJson(built.built->fee) + "}")};
+                                                 AmountJson(built->built->fee) + "}")};
         }
         if (*method == "sendtoaddress") {
             const auto address_raw = parameter("address");
@@ -813,7 +913,7 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             }
             const auto transaction_id = dependencies_.send_to_address({*key_hash, *amount});
             if (!transaction_id.has_value()) {
-                return {200U, ErrorResponse(id, kNodeFailure, "transaction broadcast failed")};
+                return payment_failed("transaction broadcast failed");
             }
             return {200U, ResultResponse(id, "\"" + Hex(transaction_id->bytes()) + "\"")};
         }
@@ -835,46 +935,81 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             }
             const auto transaction_id = dependencies_.send_to_address({*key_hash, *amount});
             if (!transaction_id.has_value()) {
-                return {200U,
-                        ErrorResponse(id, kNodeFailure, "faucet transaction broadcast failed")};
+                return payment_failed("faucet transaction broadcast failed");
             }
             return {200U, ResultResponse(id, "\"" + Hex(transaction_id->bytes()) + "\"")};
         }
         if (*method == "signtransaction" || *method == "sendwallettransaction") {
+            const auto& transaction_limits =
+                config_.require_node_mutation_callbacks
+                    ? consensus::GetNetworkParams(config_.network).block_limits.transaction_limits
+                    : dependencies_.wallet->transaction_limits();
             const auto hex_raw = parameter("hex");
             const auto hex = hex_raw.has_value() ? JsonString(*hex_raw) : std::nullopt;
-            const auto encoded =
-                hex.has_value()
-                    ? DecodeHex(*hex, dependencies_.wallet.transaction_limits().max_serialized_size)
+            const auto encoded = hex.has_value()
+                                     ? DecodeHex(*hex, transaction_limits.max_serialized_size)
+                                     : std::nullopt;
+            const auto transaction =
+                encoded.has_value()
+                    ? primitives::Transaction::Deserialize(*encoded, transaction_limits)
                     : std::nullopt;
-            const auto transaction = encoded.has_value()
-                                         ? primitives::Transaction::Deserialize(
-                                               *encoded, dependencies_.wallet.transaction_limits())
-                                         : std::nullopt;
             if (!transaction.has_value()) {
                 return {200U, ErrorResponse(id, kInvalidParams, "invalid transaction hex")};
             }
             if (*method == "signtransaction") {
-                const auto signed_transaction = dependencies_.wallet.SignTransaction(*transaction);
-                if (!signed_transaction.transaction.has_value()) {
+                const auto signed_transaction =
+                    dependencies_.sign_transaction
+                        ? dependencies_.sign_transaction(*transaction)
+                        : std::optional<wallet::TransactionSignResult>{
+                              dependencies_.wallet->SignTransaction(*transaction)};
+                if (!signed_transaction)
+                    return {200U, ErrorResponse(id, kNodeFailure, "wallet state unavailable")};
+                if (!signed_transaction->transaction.has_value()) {
                     return {200U, ErrorResponse(id, kWalletFailure, "transaction signing failed")};
                 }
-                const auto serialized = TransactionHex(*signed_transaction.transaction,
-                                                       dependencies_.wallet.transaction_limits());
+                const auto serialized =
+                    TransactionHex(*signed_transaction->transaction, transaction_limits);
                 if (!serialized.has_value()) {
                     return {200U,
                             ErrorResponse(id, kNodeFailure, "transaction serialization failed")};
                 }
                 return {200U, ResultResponse(id, "{\"hex\":\"" + *serialized + "\"}")};
             }
-            MempoolBroadcaster broadcaster{dependencies_.mempool, dependencies_.utxos,
+            if (dependencies_.verify_transaction) {
+                const auto verified = dependencies_.verify_transaction(*transaction);
+                if (!verified.has_value())
+                    return {200U, ErrorResponse(id, kNodeFailure, "wallet state unavailable")};
+                if (!*verified)
+                    return {200U,
+                            ErrorResponse(id, kWalletFailure, "local signature check failed")};
+                const auto txid = transaction->TxId(transaction_limits);
+                if (!txid.has_value())
+                    return {200U,
+                            ErrorResponse(id, kNodeFailure, "transaction ID calculation failed")};
+                if (!dependencies_.submit_transaction ||
+                    !dependencies_.submit_transaction(*transaction)) {
+                    if (dependencies_.state_available && !dependencies_.state_available())
+                        return {200U, ErrorResponse(id, kNodeFailure,
+                                                    "node state unavailable; operation outcome may "
+                                                    "have committed; transaction id " +
+                                                        Hex(txid->bytes()))};
+                    return mutation_failed(kNodeFailure, "transaction broadcast failed");
+                }
+                return {200U, ResultResponse(id, "\"" + Hex(txid->bytes()) + "\"")};
+            }
+            MempoolBroadcaster broadcaster{*dependencies_.mempool, *dependencies_.utxos,
                                            dependencies_.transaction_context,
                                            dependencies_.current_time};
-            const auto result = dependencies_.wallet.Broadcast(*transaction, broadcaster);
+            CallbackBroadcaster node_broadcaster{dependencies_.submit_transaction};
+            auto& selected_broadcaster =
+                dependencies_.submit_transaction
+                    ? static_cast<wallet::TransactionBroadcaster&>(node_broadcaster)
+                    : static_cast<wallet::TransactionBroadcaster&>(broadcaster);
+            const auto result = dependencies_.wallet->Broadcast(*transaction, selected_broadcaster);
             if (result != wallet::WalletError::kNone) {
                 return {200U, ErrorResponse(id, kNodeFailure, "transaction broadcast failed")};
             }
-            const auto txid = transaction->TxId(dependencies_.wallet.transaction_limits());
+            const auto txid = transaction->TxId(dependencies_.wallet->transaction_limits());
             if (!txid.has_value()) {
                 return {200U, ErrorResponse(id, kNodeFailure, "transaction ID calculation failed")};
             }
@@ -925,7 +1060,7 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
             }
             const auto block_hash = dependencies_.mine_regtest_block();
             if (!block_hash.has_value()) {
-                return {200U, ErrorResponse(id, kNodeFailure, "regtest block generation failed")};
+                return mutation_failed(kNodeFailure, "regtest block generation failed");
             }
             return {200U, ResultResponse(id, "\"" + Hex(block_hash->bytes()) + "\"")};
         }

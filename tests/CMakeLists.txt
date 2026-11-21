@@ -1,5 +1,13 @@
 find_package(GTest 1.11 CONFIG REQUIRED)
 
+# Deliberately absent from the production node library and daemon link graph.
+# Retain historical regression behavior only in explicit test executables.
+add_library(nova_legacy_node_test_support STATIC
+    ../src/node/regtest_node.cpp legacy_peer_support.cpp)
+nova_apply_project_options(nova_legacy_node_test_support)
+target_link_libraries(nova_legacy_node_test_support PUBLIC nova_node)
+
+
 add_executable(nova_unit_tests
     version_tests.cpp
     readiness_tests.cpp
@@ -25,24 +33,66 @@ add_executable(nova_unit_tests
     network_selection_tests.cpp
     network_params_tests.cpp
     regtest_harness_tests.cpp
+    regtest_legacy_recovery_tests.cpp
     storage_tests.cpp
     generation_store_tests.cpp
+    durable_shutdown_tests.cpp
     network_identity_tests.cpp
     bootstrap_tests.cpp
     explorer_tests.cpp
     faucet_tests.cpp
     property_tests.cpp)
 nova_apply_project_options(nova_unit_tests)
-target_link_libraries(nova_unit_tests PRIVATE nova_version)
+target_link_libraries(nova_unit_tests PRIVATE nova_version nova_legacy_node_test_support)
 
 find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
 add_executable(nova_generation_crash_worker generation_crash_worker.cpp)
+add_executable(nova_utxo_replay_inspector utxo_replay_inspector.cpp)
+nova_apply_project_options(nova_utxo_replay_inspector)
+target_link_libraries(nova_utxo_replay_inspector PRIVATE nova_node)
 nova_apply_project_options(nova_generation_crash_worker)
-target_link_libraries(nova_generation_crash_worker PRIVATE nova_storage)
+target_link_libraries(nova_generation_crash_worker PRIVATE nova_node nova_rpc nova_legacy_node_test_support)
 add_test(NAME nova.generation_crash
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_generation_crash.py
-        $<TARGET_FILE:nova_generation_crash_worker>)
-set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 180 LABELS "unit;storage;recovery")
+        $<TARGET_FILE:nova_generation_crash_worker> $<TARGET_FILE:nova_utxo_replay_inspector>)
+set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 600 LABELS "unit;storage;recovery")
+foreach(depth IN ITEMS 1 10 100)
+    add_test(NAME nova.generation_reorg_depth_${depth}
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_generation_deep_reorg.py
+            $<TARGET_FILE:nova_generation_crash_worker> $<TARGET_FILE:nova_utxo_replay_inspector> ${depth})
+    set_tests_properties(nova.generation_reorg_depth_${depth} PROPERTIES
+        TIMEOUT 1800 RUN_SERIAL TRUE LABELS "integration;storage;recovery;reorg")
+    if(depth EQUAL 100)
+        # 21 checkpoints each require repeated full 200+-block replay under
+        # sanitizers. Preserve the assertions and individual child deadlines.
+        set_tests_properties(nova.generation_reorg_depth_${depth} PROPERTIES TIMEOUT 3600)
+    endif()
+endforeach()
+add_test(NAME nova.generation_replay_interruptions
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_generation_replay_interruptions.py
+        $<TARGET_FILE:nova_generation_crash_worker> $<TARGET_FILE:nova_utxo_replay_inspector>)
+set_tests_properties(nova.generation_replay_interruptions PROPERTIES
+    TIMEOUT 600 RUN_SERIAL TRUE LABELS "integration;storage;recovery")
+add_test(NAME nova.durable_rpc_configuration
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_durable_rpc_configuration.py
+        $<TARGET_FILE:novacoind>)
+add_test(NAME nova.durable_node_integration
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_durable_regtest_integration.py
+        $<TARGET_FILE:novacoind>)
+add_test(NAME nova.durable_shutdown_integration
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_durable_shutdown_integration.py
+        $<TARGET_FILE:novacoind>)
+set_tests_properties(nova.durable_rpc_configuration nova.durable_node_integration
+    nova.durable_shutdown_integration PROPERTIES
+    TIMEOUT 180 RUN_SERIAL TRUE LABELS "integration;storage;recovery;rpc;loopback")
+if(WIN32)
+    # Real Windows DELETE-sharing denial, not a simulated power-loss result.
+    add_test(NAME nova.durable_root_denial
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_durable_root_denial.py
+            $<TARGET_FILE:novacoind>)
+    set_tests_properties(nova.durable_root_denial PROPERTIES
+        TIMEOUT 180 RUN_SERIAL TRUE LABELS "integration;storage;recovery;rpc;loopback;windows")
+endif()
 add_test(NAME nova.release_policy
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_release.py)
 set_tests_properties(nova.release_policy PROPERTIES TIMEOUT 60 LABELS "unit;release;policy")
@@ -163,7 +213,7 @@ if(UNIX)
     endif()
     add_executable(nova_pending_header_loopback_tests pending_header_loopback_tests.cpp)
     nova_apply_project_options(nova_pending_header_loopback_tests)
-    target_link_libraries(nova_pending_header_loopback_tests PRIVATE GTest::gtest_main nova_node)
+    target_link_libraries(nova_pending_header_loopback_tests PRIVATE GTest::gtest_main nova_node nova_legacy_node_test_support)
     add_test(NAME nova.pending_header_loopback COMMAND nova_pending_header_loopback_tests)
     set_tests_properties(nova.pending_header_loopback PROPERTIES
         LABELS "integration;regtest;p2p;headers" TIMEOUT 50)

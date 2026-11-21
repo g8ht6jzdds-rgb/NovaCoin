@@ -39,11 +39,20 @@ void WriteU32(std::array<std::uint8_t, kMarkerSize>& output, const std::size_t o
            (static_cast<std::uint32_t>(input[offset + 3U]) << 24U);
 }
 
-[[nodiscard]] bool IsEmptyDirectory(const std::filesystem::path& directory,
-                                    std::error_code& error) noexcept
+[[nodiscard]] bool IsEmptyDirectory(const std::filesystem::path& directory, std::error_code& error,
+                                    const bool allow_lease) noexcept
 {
     const std::filesystem::directory_iterator end;
-    return std::filesystem::directory_iterator{directory, error} == end && !error;
+    auto it = std::filesystem::directory_iterator{directory, error};
+    if (error || it == end)
+        return !error;
+    if (!allow_lease || it->path().filename() != ".node-lease")
+        return false;
+    const auto status = it->symlink_status(error);
+    if (error || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+        return false;
+    it.increment(error);
+    return !error && it == end;
 }
 
 [[nodiscard]] bool WriteAtomically(const std::filesystem::path& path,
@@ -105,8 +114,9 @@ NetworkIdentityMarkerPath(const std::filesystem::path& data_directory) noexcept
     return data_directory / "network.identity";
 }
 
-NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_directory,
-                                           const consensus::NetworkParams& network) noexcept
+static NetworkIdentityError EnsureNetworkIdentityImpl(const std::filesystem::path& data_directory,
+                                                      const consensus::NetworkParams& network,
+                                                      const bool allow_lease) noexcept
 {
     if (data_directory.empty() ||
         consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
@@ -124,7 +134,7 @@ NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_dir
             return NetworkIdentityError::kFilesystemFailure;
         }
         if (!exists) {
-            if (!IsEmptyDirectory(data_directory, error)) {
+            if (!IsEmptyDirectory(data_directory, error, allow_lease)) {
                 return error ? NetworkIdentityError::kFilesystemFailure
                              : NetworkIdentityError::kLegacyDirectoryWithoutMarker;
             }
@@ -156,6 +166,19 @@ NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_dir
     } catch (...) {
         return NetworkIdentityError::kFilesystemFailure;
     }
+}
+
+NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_directory,
+                                           const consensus::NetworkParams& network) noexcept
+{
+    return EnsureNetworkIdentityImpl(data_directory, network, false);
+}
+
+NetworkIdentityError
+EnsureNetworkIdentityWithLease(const std::filesystem::path& data_directory,
+                               const consensus::NetworkParams& network) noexcept
+{
+    return EnsureNetworkIdentityImpl(data_directory, network, true);
 }
 
 NetworkIdentityError ValidateNetworkIdentity(const std::span<const std::uint8_t> bytes,

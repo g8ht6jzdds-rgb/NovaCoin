@@ -1,7 +1,9 @@
 #include "node/regtest_node.hpp"
+#include "node/data_directory_lease.hpp"
 
 #include "chain/network_chainstate.hpp"
 #include "consensus/monetary.hpp"
+#include "node/mining_helpers.hpp"
 #include "node/network_selection.hpp"
 #include "storage/network_identity.hpp"
 
@@ -26,15 +28,6 @@ namespace
     return script;
 }
 
-[[nodiscard]] std::vector<std::uint8_t> CoinbaseHeightScript(const std::uint32_t height)
-{
-    if (height <= 127U) {
-        return {0x01U, static_cast<std::uint8_t>(height)};
-    }
-    return {0x02U, static_cast<std::uint8_t>(height & 0xFFU),
-            static_cast<std::uint8_t>((height >> 8U) & 0xFFU)};
-}
-
 [[nodiscard]] std::uint64_t LocalWallClockSeconds() noexcept
 {
     const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
@@ -45,15 +38,17 @@ namespace
 
 } // namespace
 
-RegtestNode::RegtestNode(RegtestNodeConfig config, storage::BlockJournal journal,
+RegtestNode::RegtestNode(std::unique_ptr<storage::GenerationStore> directory_lease,
+                         RegtestNodeConfig config, storage::BlockJournal journal,
                          std::unique_ptr<chain::UTXOSet> utxos,
                          std::unique_ptr<chain::ChainState> chain,
                          std::unique_ptr<chain::Mempool> mempool,
                          std::unique_ptr<wallet::Wallet> wallet,
                          std::shared_ptr<const chain::ValidationTimeSource> validation_time_source,
                          const consensus::NetworkParams& network) noexcept
-    : config_(std::move(config)), journal_(std::move(journal)), utxos_(std::move(utxos)),
-      chain_(std::move(chain)), mempool_(std::move(mempool)), wallet_(std::move(wallet)),
+    : directory_lease_(std::move(directory_lease)), config_(std::move(config)),
+      journal_(std::move(journal)), utxos_(std::move(utxos)), chain_(std::move(chain)),
+      mempool_(std::move(mempool)), wallet_(std::move(wallet)),
       validation_time_source_(std::move(validation_time_source)), network_(&network),
       next_time_(config_.start_time), started_at_(std::chrono::steady_clock::now())
 {
@@ -70,22 +65,66 @@ std::unique_ptr<RegtestNode> RegtestNode::Create(RegtestNodeConfig config) noexc
     }
     const auto& network = *selection.parameters;
     try {
-        if (storage::EnsureNetworkIdentity(config.data_directory, network) !=
+        auto directory_lease = AcquireDataDirectoryLease(config.data_directory, network);
+        if (!directory_lease)
+            return nullptr;
+        std::error_code identity_error;
+        const auto identity_status = std::filesystem::symlink_status(
+            storage::NetworkIdentityMarkerPath(config.data_directory), identity_error);
+        if (identity_error && identity_error != std::errc::no_such_file_or_directory)
+            return nullptr;
+        const bool identity_existed = !identity_error && std::filesystem::exists(identity_status);
+        if (storage::EnsureNetworkIdentityWithLease(config.data_directory, network) !=
             storage::NetworkIdentityError::kNone) {
             return nullptr;
         }
-        auto journal = storage::BlockJournal::Open(config.data_directory, network.block_limits);
-        const wallet::WalletParams wallet_parameters{network.block_limits.transaction_limits, 1, 1U,
-                                                     true};
-        const auto wallet_path = config.data_directory / "wallet.dat";
-        std::error_code wallet_error;
-        const bool wallet_exists = std::filesystem::exists(wallet_path, wallet_error);
-        if (wallet_error || (wallet_exists && config.wallet_passphrase.empty())) {
+        // Never create a separate legacy wallet and journal beside an existing
+        // durable store. The storage modes do not share publication authority.
+        std::error_code generation_error;
+        const auto generation_status = std::filesystem::symlink_status(
+            config.data_directory / "generations", generation_error);
+        if ((generation_error && generation_error != std::errc::no_such_file_or_directory) ||
+            (!generation_error && std::filesystem::exists(generation_status))) {
             return nullptr;
         }
-        auto wallet = wallet_exists ? wallet::Wallet::LoadEncrypted(wallet_parameters, wallet_path,
-                                                                    config.wallet_passphrase)
-                                    : wallet::Wallet::Create(wallet_parameters);
+        const auto wallet_path = config.data_directory / "wallet.dat";
+        const auto journal_path = config.data_directory / "blocks.dat";
+        const auto plain_file_state = [](const std::filesystem::path& path) -> std::optional<bool> {
+            std::error_code error;
+            const auto status = std::filesystem::symlink_status(path, error);
+            if (error == std::errc::no_such_file_or_directory)
+                return false;
+            if (error)
+                return std::nullopt;
+            if (!std::filesystem::exists(status))
+                return false;
+            if (!std::filesystem::is_regular_file(status) || std::filesystem::is_symlink(status))
+                return std::nullopt;
+            return true;
+        };
+        const auto wallet_exists = plain_file_state(wallet_path);
+        const auto journal_exists = plain_file_state(journal_path);
+        if (!wallet_exists || !journal_exists ||
+            (*wallet_exists && config.wallet_passphrase.empty()) ||
+            (!config.wallet_passphrase.empty() && identity_existed && !*wallet_exists &&
+             !*journal_exists) ||
+            (!config.wallet_passphrase.empty() && *wallet_exists != *journal_exists)) {
+            return nullptr;
+        }
+        auto journal = storage::BlockJournal::Open(config.data_directory, network.block_limits);
+        if (journal && !*journal_exists) {
+            // Persist an explicit empty journal for a fresh legacy directory.
+            // A later missing journal is then distinguishable from a new node.
+            std::ofstream empty_journal{journal_path, std::ios::binary | std::ios::app};
+            empty_journal.close();
+            if (!empty_journal)
+                return nullptr;
+        }
+        const wallet::WalletParams wallet_parameters{network.block_limits.transaction_limits, 1, 1U,
+                                                     true};
+        auto wallet = *wallet_exists ? wallet::Wallet::LoadEncrypted(wallet_parameters, wallet_path,
+                                                                     config.wallet_passphrase)
+                                     : wallet::Wallet::Create(wallet_parameters);
         auto mempool = chain::Mempool::Create(
             chain::MempoolParams{chain::NetworkValidationParams(network), 1'000U, 10'000'000U, 0});
         if (!journal.has_value() || wallet == nullptr || mempool == nullptr) {
@@ -106,27 +145,46 @@ std::unique_ptr<RegtestNode> RegtestNode::Create(RegtestNodeConfig config) noexc
         if (!log.is_open()) {
             return nullptr;
         }
-        auto node = std::unique_ptr<RegtestNode>{
-            new RegtestNode{std::move(config), std::move(*journal), std::move(initialized->utxos),
-                            std::move(initialized->chain), std::move(mempool), std::move(wallet),
-                            std::move(validation_time_source), network}};
+        auto node = std::unique_ptr<RegtestNode>{new RegtestNode{
+            std::move(directory_lease), std::move(config), std::move(*journal),
+            std::move(initialized->utxos), std::move(initialized->chain), std::move(mempool),
+            std::move(wallet), std::move(validation_time_source), network}};
+        const auto saved = node->journal_.Load();
+        if (saved.error != storage::BlockJournalError::kNone) {
+            return nullptr;
+        }
+        if (*wallet_exists) {
+            // Validate the stored pair against a private replay before the live
+            // wallet can be rebuilt or saved. Legacy mempool entries are not
+            // persisted, so pending wallet state cannot be reconstructed here.
+            auto verified =
+                chain::NetworkChainInitializer::Create(network.id, node->validation_time_source_);
+            if (!verified)
+                return nullptr;
+            for (const auto& block : saved.blocks) {
+                if (block.header.time == std::numeric_limits<std::uint32_t>::max() ||
+                    verified->chain->AcceptBlock(block).error != chain::ChainError::kNone)
+                    return nullptr;
+            }
+            const auto active = verified->chain->GetActiveBlockIndexes();
+            if (!active || !node->wallet_->MatchesFullReplay(
+                               *active, {}, network.id == consensus::NetworkId::kRegtest)) {
+                return nullptr;
+            }
+        }
         if (network.id == consensus::NetworkId::kTestnet) {
             const auto active = node->chain_->GetActiveBlockIndexes();
             if (!active.has_value() || !node->wallet_->RebuildConfirmedState(*active)) {
                 return nullptr;
             }
         }
-        if (!node->PersistWallet()) {
-            return nullptr;
-        }
-        const auto saved = node->journal_.Load();
-        if (saved.error != storage::BlockJournalError::kNone) {
-            return nullptr;
-        }
         for (const auto& block : saved.blocks) {
             if (node->AcceptBlock(block, false) != RegtestNodeError::kNone) {
                 return nullptr;
             }
+        }
+        if (!node->PersistWallet()) {
+            return nullptr;
         }
         node->Log("started");
         return node;
@@ -255,18 +313,15 @@ RegtestNodeResult RegtestNode::MineBlock() noexcept
 RegtestNodeResult
 RegtestNode::CreateAndBroadcast(const std::span<const wallet::Recipient> recipients) noexcept
 {
-    const auto built = wallet_->CreateTransaction(recipients);
+    auto built = wallet_->CreateTransaction(recipients);
     if (!built.built.has_value()) {
         return {RegtestNodeError::kWalletFailure, std::nullopt, std::nullopt};
     }
-    if (SubmitTransaction(built.built->transaction) != RegtestNodeError::kNone) {
-        return {RegtestNodeError::kMempoolFailure, std::nullopt, std::nullopt};
-    }
-    (void)wallet_->ObserveTransaction(built.built->transaction, 0U, false);
-    if (!PersistWallet()) {
-        return {RegtestNodeError::kWalletFailure, std::nullopt, std::nullopt};
-    }
-    return {RegtestNodeError::kNone, std::nullopt, built.built->transaction};
+    const auto admitted = AdmitTransaction(built.built->transaction, true);
+    if (admitted != RegtestNodeError::kNone)
+        return {admitted, std::nullopt, std::nullopt};
+    RelayTransaction(built.built->transaction);
+    return {RegtestNodeError::kNone, std::nullopt, std::move(built.built->transaction)};
 }
 
 RegtestNodeError RegtestNode::ReceiveBlock(const primitives::Block& block) noexcept
@@ -299,6 +354,17 @@ RegtestNodeError RegtestNode::AcceptBlock(const primitives::Block& block,
         return RegtestNodeError::kBlockRejected;
     }
     const auto active_tip_before = chain_->active_tip();
+    if (persist) {
+        std::error_code wallet_error;
+        const auto wallet_status =
+            std::filesystem::symlink_status(config_.data_directory / "wallet.dat", wallet_error);
+        if ((wallet_error && wallet_error != std::errc::no_such_file_or_directory) ||
+            (!wallet_error && std::filesystem::exists(wallet_status) &&
+             (!std::filesystem::is_regular_file(wallet_status) ||
+              std::filesystem::is_symlink(wallet_status)))) {
+            return RegtestNodeError::kWalletFailure;
+        }
+    }
     if (persist && journal_.Prepare(block) != storage::BlockJournalError::kNone) {
         return RegtestNodeError::kStorageFailure;
     }
@@ -306,21 +372,29 @@ RegtestNodeError RegtestNode::AcceptBlock(const primitives::Block& block,
     if (accepted.error != chain::ChainError::kNone) {
         return RegtestNodeError::kBlockRejected;
     }
-    if (persist && journal_.Commit(*hash) != storage::BlockJournalError::kNone) {
-        // A durable record can exist even if the writer reports an error after
-        // its final flush. Resolve that ambiguity from the authoritative WAL
-        // before deciding whether to roll the in-memory chain back.
-        if (!journal_.IsCommitted(*hash)) {
-            const auto rollback = chain_->RollbackAcceptedBlock(*hash, active_tip_before);
-            if (rollback.error != chain::ChainError::kNone) {
-                return RegtestNodeError::kChainInitializationFailure;
-            }
-            return RegtestNodeError::kStorageFailure;
-        }
-    }
     const auto next_block_time = block.header.time + 1U;
     next_time_ = std::max(next_time_, next_block_time);
+    // A valid inactive block may become an ancestor of the winning branch.
+    // Persist every accepted block before reporting success, so replay never
+    // encounters a committed descendant whose accepted parent was omitted.
+    const auto persist_accepted = [this, persist, &hash, &active_tip_before]() noexcept {
+        if (persist && journal_.Commit(*hash) != storage::BlockJournalError::kNone) {
+            // Resolve a write that may have reached durable storage before its
+            // final acknowledgement. This legacy path still requires coordinator
+            // integration for joint wallet/mempool publication and full ambiguity.
+            if (!journal_.IsCommitted(*hash)) {
+                const auto rollback = chain_->RollbackAcceptedBlock(*hash, active_tip_before);
+                if (rollback.error != chain::ChainError::kNone)
+                    return RegtestNodeError::kChainInitializationFailure;
+                return RegtestNodeError::kStorageFailure;
+            }
+        }
+        return RegtestNodeError::kNone;
+    };
     if (!accepted.became_active) {
+        const auto persisted = persist_accepted();
+        if (persisted != RegtestNodeError::kNone)
+            return persisted;
         Log("inactive block accepted");
         return RegtestNodeError::kNone;
     }
@@ -328,6 +402,9 @@ RegtestNodeError RegtestNode::AcceptBlock(const primitives::Block& block,
     if (!active.has_value()) {
         return RegtestNodeError::kChainInitializationFailure;
     }
+    const auto persisted = persist_accepted();
+    if (persisted != RegtestNodeError::kNone)
+        return persisted;
     if (!wallet_->RebuildConfirmedState(*active)) {
         return RegtestNodeError::kWalletFailure;
     }
@@ -341,9 +418,8 @@ RegtestNodeError RegtestNode::AcceptBlock(const primitives::Block& block,
         (void)mempool_->AcceptToMempool(transaction, {height() + 1U, next_time_}, *utxos_,
                                         next_time_);
     }
-    if (!PersistWallet()) {
+    if (persist && !PersistWallet())
         return RegtestNodeError::kWalletFailure;
-    }
     Log("block accepted");
     return RegtestNodeError::kNone;
 }
@@ -351,23 +427,60 @@ RegtestNodeError RegtestNode::AcceptBlock(const primitives::Block& block,
 RegtestNodeError
 RegtestNode::ReceiveTransaction(const primitives::Transaction& transaction) noexcept
 {
-    const auto accepted =
-        mempool_->AcceptToMempool(transaction, {height() + 1U, next_time_}, *utxos_, next_time_);
-    if (accepted.error != chain::MempoolError::kNone) {
+    return AdmitTransaction(transaction, false);
+}
+
+RegtestNodeError RegtestNode::AdmitTransaction(const primitives::Transaction& transaction,
+                                               const bool observe_wallet) noexcept
+{
+    const auto reject = [this](const RegtestNodeError error) {
         observability::SaturatingAdd(metrics_.transactions_rejected, 1U);
-        return RegtestNodeError::kMempoolFailure;
-    }
+        return error;
+    };
     try {
-        known_transactions_.push_back(transaction);
-        if (!PersistWallet()) {
-            observability::SaturatingAdd(metrics_.transactions_rejected, 1U);
-            return RegtestNodeError::kWalletFailure;
-        }
+        if (height() == std::numeric_limits<std::uint32_t>::max())
+            return reject(RegtestNodeError::kMempoolFailure);
+        auto view = utxos_->BeginBatch();
+        if (!view)
+            return reject(RegtestNodeError::kMempoolFailure);
+        auto admission =
+            mempool_->PrepareAdmission(transaction, {height() + 1U, next_time_}, *view, next_time_);
+        if (admission.result.error != chain::MempoolError::kNone || !admission.prepared)
+            return reject(RegtestNodeError::kMempoolFailure);
+        // All allocation and wallet observation precede publication. In
+        // particular a failed save must not leave a spend in the live pool.
+        auto known = known_transactions_;
+        known.push_back(transaction);
+        auto observed =
+            observe_wallet ? wallet_->PrepareObservedState(transaction, 0U, false) : nullptr;
+        if (observe_wallet && !observed)
+            return reject(RegtestNodeError::kWalletFailure);
+        if (!view->IsCurrent() || !mempool_->CanCommitPrepared(*admission.prepared) ||
+            (observed && !wallet_->CanCommitPrepared(*observed)))
+            return reject(RegtestNodeError::kMempoolFailure);
+        const bool saved =
+            observed
+                ? (config_.wallet_passphrase.empty() ||
+                   wallet_->SavePreparedEncrypted(*observed, config_.data_directory / "wallet.dat",
+                                                  config_.wallet_passphrase))
+                : PersistWallet();
+        if (!saved)
+            return reject(RegtestNodeError::kWalletFailure);
+        // Single-threaded, non-reentrant ownership is required. These commits
+        // publish prepared state without allocations. This legacy path still
+        // does not persist the mempool jointly; it is not crash-atomic recovery.
+        if (!view->IsCurrent() || !mempool_->CanCommitPrepared(*admission.prepared) ||
+            (observed && !wallet_->CanCommitPrepared(*observed)))
+            return reject(RegtestNodeError::kMempoolFailure);
+        if (observed && !wallet_->CommitPreparedState(*observed))
+            return reject(RegtestNodeError::kWalletFailure);
+        if (!mempool_->CommitPrepared(*admission.prepared))
+            return reject(RegtestNodeError::kMempoolFailure);
+        known_transactions_.swap(known);
         observability::SaturatingAdd(metrics_.transactions_accepted, 1U);
         return RegtestNodeError::kNone;
     } catch (...) {
-        observability::SaturatingAdd(metrics_.transactions_rejected, 1U);
-        return RegtestNodeError::kAllocationFailure;
+        return reject(RegtestNodeError::kAllocationFailure);
     }
 }
 
@@ -420,6 +533,23 @@ const wallet::Wallet& RegtestNode::wallet() const noexcept
 {
     return *wallet_;
 }
+std::optional<wallet::WalletAddress> RegtestNode::GenerateReceivingAddress() noexcept
+{
+    auto prepared = wallet_->PrepareReceivingAddress();
+    if (!prepared || !wallet_->CanCommitPreparedAddress(*prepared))
+        return std::nullopt;
+    // Save the private candidate, not a mutation of the live wallet. With the
+    // node exclusively held, the prepared key remains current through commit.
+    if (!config_.wallet_passphrase.empty() &&
+        !wallet_->SavePreparedAddressEncrypted(*prepared, config_.data_directory / "wallet.dat",
+                                               config_.wallet_passphrase))
+        return std::nullopt;
+    const auto address = prepared->address();
+    if (!wallet_->CommitPreparedAddress(*prepared))
+        return std::nullopt;
+    return address;
+}
+
 bool RegtestNode::PersistWalletForRpc() const noexcept
 {
     return PersistWallet();
