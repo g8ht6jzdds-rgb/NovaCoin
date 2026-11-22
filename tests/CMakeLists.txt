@@ -84,6 +84,16 @@ add_test(NAME nova.durable_rpc_configuration
 add_test(NAME nova.durable_node_integration
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_durable_regtest_integration.py
         $<TARGET_FILE:novacoind>)
+foreach(depth IN ITEMS 1 10 100)
+    add_test(NAME nova.durable_reorg_depth_${depth}
+        COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_durable_reorg_integration.py
+            $<TARGET_FILE:novacoind> $<TARGET_FILE:nova_utxo_replay_inspector> ${depth})
+    set_tests_properties(nova.durable_reorg_depth_${depth} PROPERTIES
+        TIMEOUT 1800 RUN_SERIAL TRUE LABELS "integration;storage;recovery;reorg;daemon;regtest")
+    if(depth EQUAL 100)
+        set_tests_properties(nova.durable_reorg_depth_${depth} PROPERTIES TIMEOUT 3600)
+    endif()
+endforeach()
 add_test(NAME nova.durable_shutdown_integration
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_durable_shutdown_integration.py
         $<TARGET_FILE:novacoind>)
