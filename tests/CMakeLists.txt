@@ -59,7 +59,7 @@ set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 600 LABELS "unit;s
 if(NOVA_ENABLE_SANITIZERS)
     # The full restart matrix exceeded 600 seconds in hosted ASan and UBSan.
     # Keep the individual subprocess deadlines and assertion coverage unchanged.
-    set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 1200)
+    set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 2400)
 endif()
 foreach(depth IN ITEMS 1 10 100)
     add_test(NAME nova.generation_reorg_depth_${depth}
