@@ -1,15 +1,13 @@
+#include "rpc/http_request_parser.hpp"
 #include "rpc/rpc.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <map>
 #include <new>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -129,46 +127,6 @@ class Socket final
     return address == "127.0.0.1" || address == "::1";
 }
 
-[[nodiscard]] std::string ToLower(std::string_view input)
-{
-    std::string result;
-    result.reserve(input.size());
-    for (const auto character : input) {
-        result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
-    }
-    return result;
-}
-
-[[nodiscard]] std::string_view Trim(const std::string_view value) noexcept
-{
-    std::size_t first{};
-    while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
-        ++first;
-    }
-    std::size_t last = value.size();
-    while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1U])) != 0) {
-        --last;
-    }
-    return value.substr(first, last - first);
-}
-
-[[nodiscard]] std::optional<std::size_t> ParseContentLength(const std::string_view value) noexcept
-{
-    const auto trimmed = Trim(value);
-    if (trimmed.empty()) {
-        return std::nullopt;
-    }
-    std::size_t parsed{};
-    for (const auto character : trimmed) {
-        if (character < '0' || character > '9' ||
-            parsed > (std::numeric_limits<std::size_t>::max() - 9U) / 10U) {
-            return std::nullopt;
-        }
-        parsed = parsed * 10U + static_cast<std::size_t>(character - '0');
-    }
-    return parsed;
-}
-
 [[nodiscard]] std::string MakeResponse(const std::uint16_t status, const std::string_view body)
 {
     const std::string_view reason = status == 200U   ? "OK"
@@ -183,98 +141,6 @@ class Socket final
 [[nodiscard]] std::string InvalidRequestResponse()
 {
     return MakeResponse(400U, "{\"error\":\"invalid HTTP request\"}");
-}
-
-struct ParsedRequest final {
-    std::string_view method;
-    std::string_view authorization;
-    std::string_view body;
-};
-
-enum class ParseState : std::uint8_t { kIncomplete, kReady, kInvalid };
-
-[[nodiscard]] ParseState ParseRequest(const std::string& input, const HttpServerParams& parameters,
-                                      ParsedRequest& result) noexcept
-{
-    const auto header_end = input.find("\r\n\r\n");
-    if (header_end == std::string::npos) {
-        return input.size() > parameters.max_header_bytes ? ParseState::kInvalid
-                                                          : ParseState::kIncomplete;
-    }
-    if (header_end + 4U > parameters.max_header_bytes) {
-        return ParseState::kInvalid;
-    }
-    const std::string_view header{input.data(), header_end};
-    const auto first_end = header.find("\r\n");
-    if (first_end == std::string_view::npos) {
-        return ParseState::kInvalid;
-    }
-    const auto first_line = header.substr(0U, first_end);
-    const auto first_space = first_line.find(' ');
-    const auto second_space = first_space == std::string_view::npos
-                                  ? std::string_view::npos
-                                  : first_line.find(' ', first_space + 1U);
-    if (first_space == std::string_view::npos || second_space == std::string_view::npos ||
-        first_line.find(' ', second_space + 1U) != std::string_view::npos ||
-        first_line.substr(second_space + 1U) != "HTTP/1.1") {
-        return ParseState::kInvalid;
-    }
-    const auto method = first_line.substr(0U, first_space);
-    const auto target = first_line.substr(first_space + 1U, second_space - first_space - 1U);
-    if (method != "POST" || (target != "/" && target != "/rpc")) {
-        return ParseState::kInvalid;
-    }
-    std::optional<std::size_t> content_length;
-    std::optional<std::string_view> authorization;
-    std::size_t position = first_end + 2U;
-    while (position < header.size()) {
-        const auto line_end = header.find("\r\n", position);
-        const auto end = line_end == std::string_view::npos ? header.size() : line_end;
-        const auto line = header.substr(position, end - position);
-        const auto colon = line.find(':');
-        if (colon == std::string_view::npos || colon == 0U) {
-            return ParseState::kInvalid;
-        }
-        const auto name = ToLower(line.substr(0U, colon));
-        const auto value = Trim(line.substr(colon + 1U));
-        if (name == "content-length") {
-            if (content_length.has_value()) {
-                return ParseState::kInvalid;
-            }
-            content_length = ParseContentLength(value);
-            if (!content_length.has_value() || *content_length > parameters.max_body_bytes) {
-                return ParseState::kInvalid;
-            }
-        } else if (name == "authorization") {
-            if (authorization.has_value() || value.size() > parameters.max_header_bytes) {
-                return ParseState::kInvalid;
-            }
-            authorization = value;
-        } else if (name == "transfer-encoding") {
-            return ParseState::kInvalid;
-        }
-        if (line_end == std::string_view::npos) {
-            break;
-        }
-        position = line_end + 2U;
-    }
-    if (!content_length.has_value()) {
-        return ParseState::kInvalid;
-    }
-    const auto body_offset = header_end + 4U;
-    if (*content_length > std::numeric_limits<std::size_t>::max() - body_offset) {
-        return ParseState::kInvalid;
-    }
-    const auto required = body_offset + *content_length;
-    if (input.size() < required) {
-        return ParseState::kIncomplete;
-    }
-    if (input.size() != required) {
-        return ParseState::kInvalid;
-    }
-    result = ParsedRequest{method, authorization.value_or(std::string_view{}),
-                           std::string_view{input.data() + body_offset, *content_length}};
-    return ParseState::kReady;
 }
 
 } // namespace
@@ -460,13 +326,14 @@ HttpServerResult LoopbackHttpServer::Pump(const std::uint64_t now) noexcept
                     break;
                 }
                 if (!close && client.output.empty()) {
-                    ParsedRequest request{};
-                    const auto parsed =
-                        ParseRequest(client.input, implementation_->parameters, request);
-                    if (parsed == ParseState::kInvalid) {
+                    detail::ParsedHttpRequest request{};
+                    const auto parsed = detail::ParseHttpRequest(
+                        client.input, implementation_->parameters.max_header_bytes,
+                        implementation_->parameters.max_body_bytes, request);
+                    if (parsed == detail::HttpParseState::kInvalid) {
                         client.output = InvalidRequestResponse();
                         ++rejected;
-                    } else if (parsed == ParseState::kReady) {
+                    } else if (parsed == detail::HttpParseState::kReady) {
                         const auto response = implementation_->service.HandleHttpPost(
                             {request.method, request.authorization, request.body});
                         client.output = MakeResponse(response.status, response.body);

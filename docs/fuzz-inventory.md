@@ -19,7 +19,10 @@ exit code, crashes/sanitizer findings and measured coverage when available.
 | Body request retry state | fuzz_body_request_recovery | Budget/expiry/allocation failure controls |
 | Bootstrap file reader | fuzz_bootstrap_reader | Byte cap not a time bound for arbitrary blocking streams |
 | Offline journal/identity/replay | fuzz_offline_inspection | Canonical/corruption/report/resource/state immutability |
-| RPC JSON/HTTP, encrypted wallet file, supporting-service HTTP/config parsers | NO COMPLETE TARGET MAPPING | Existing unit tests are not fuzz coverage. Inventory and add missing bounded targets before Gate 8 PASS. |
+| RPC JSON bodies | fuzz_rpc | Administrator mutation methods and arbitrary auth strings not fully fuzzed |
+| RPC HTTP request framing | fuzz_http_request | Direct parser target; each invocation is bounded to 8,448 input bytes; checked-in valid, incomplete, duplicate-length, and transfer-encoding seeds use `fuzz/corpus/http_request.sha256`; the sanitizer CTest runs a fixed-seed 500-input smoke campaign |
+| Encrypted wallet file | fuzz_wallet_import | Persistence/recovery implications require separate storage tests |
+| Supporting-service HTTP/config parsers | NO COMPLETE TARGET MAPPING | Existing unit tests are not fuzz coverage. Inventory and add missing bounded targets before Gate 8 PASS. |
 
 Use bounded smoke runs with fixed seed and input/RSS limits to validate targets;
 real coverage-based campaigns require independently reviewed duration/corpora and
