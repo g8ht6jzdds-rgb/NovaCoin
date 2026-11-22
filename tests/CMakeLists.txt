@@ -56,6 +56,11 @@ add_test(NAME nova.generation_crash
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_generation_crash.py
         $<TARGET_FILE:nova_generation_crash_worker> $<TARGET_FILE:nova_utxo_replay_inspector>)
 set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 600 LABELS "unit;storage;recovery")
+if(NOVA_ENABLE_SANITIZERS)
+    # The full restart matrix exceeded 600 seconds in hosted ASan and UBSan.
+    # Keep the individual subprocess deadlines and assertion coverage unchanged.
+    set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 1200)
+endif()
 foreach(depth IN ITEMS 1 10 100)
     add_test(NAME nova.generation_reorg_depth_${depth}
         COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_generation_deep_reorg.py
