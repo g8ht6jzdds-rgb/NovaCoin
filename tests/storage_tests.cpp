@@ -148,6 +148,86 @@ std::string ReadBytes(const std::filesystem::path& path)
     return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
 }
 
+TEST_F(BlockJournalTest, CommitObservationSeparatesEmptyPendingAndCommittedWithoutRewrite)
+{
+    using nova::storage::CommitRecordState;
+    EXPECT_FALSE(std::filesystem::exists(journal_->path()));
+    const auto empty = journal_->ObserveCommitRecord(hash_);
+    EXPECT_EQ(empty.state, CommitRecordState::kAbsent);
+    EXPECT_EQ(empty.error, BlockJournalError::kNone);
+    EXPECT_FALSE(empty.recovery_required);
+    EXPECT_FALSE(std::filesystem::exists(journal_->path()));
+    const auto& block = nova::consensus::RegtestNetworkParams().genesis_block;
+    ASSERT_EQ(journal_->Prepare(block), BlockJournalError::kNone);
+    const auto pending_bytes = ReadBytes(journal_->path());
+    const auto pending = journal_->ObserveCommitRecord(hash_);
+    EXPECT_EQ(pending.state, CommitRecordState::kUnavailable);
+    EXPECT_EQ(pending.error, BlockJournalError::kNone);
+    EXPECT_TRUE(pending.recovery_required);
+    EXPECT_EQ(ReadBytes(journal_->path()), pending_bytes);
+    ASSERT_EQ(journal_->Commit(hash_), BlockJournalError::kNone);
+    const auto committed_bytes = ReadBytes(journal_->path());
+    const auto present = journal_->ObserveCommitRecord(hash_);
+    EXPECT_EQ(present.state, CommitRecordState::kPresent);
+    EXPECT_EQ(present.error, BlockJournalError::kNone);
+    EXPECT_FALSE(present.recovery_required);
+    const auto absent = journal_->ObserveCommitRecord(nova::crypto::Hash256{});
+    EXPECT_EQ(absent.state, CommitRecordState::kAbsent);
+    EXPECT_EQ(absent.error, BlockJournalError::kNone);
+    EXPECT_FALSE(absent.recovery_required);
+    EXPECT_EQ(ReadBytes(journal_->path()), committed_bytes);
+}
+
+TEST_F(BlockJournalTest, CommitObservationKeepsTornTailUnavailableAndValidPrefixVisible)
+{
+    using nova::storage::CommitRecordState;
+    const auto& block = nova::consensus::RegtestNetworkParams().genesis_block;
+    ASSERT_EQ(journal_->Prepare(block), BlockJournalError::kNone);
+    ASSERT_EQ(journal_->Commit(hash_), BlockJournalError::kNone);
+    {
+        std::ofstream tail{journal_->path(), std::ios::binary | std::ios::app};
+        ASSERT_TRUE(tail.is_open());
+        tail.put(static_cast<char>(1)); // prepare tag without its length/body
+        tail.flush();
+        ASSERT_TRUE(tail.good());
+    }
+    const auto raw = ReadBytes(journal_->path());
+    const auto present = journal_->ObserveCommitRecord(hash_);
+    EXPECT_EQ(present.state, CommitRecordState::kPresent);
+    EXPECT_EQ(present.error, BlockJournalError::kNone);
+    EXPECT_TRUE(present.recovery_required);
+    const auto unknown = journal_->ObserveCommitRecord(nova::crypto::Hash256{});
+    EXPECT_EQ(unknown.state, CommitRecordState::kUnavailable);
+    EXPECT_EQ(unknown.error, BlockJournalError::kNone);
+    EXPECT_TRUE(unknown.recovery_required);
+    EXPECT_EQ(ReadBytes(journal_->path()), raw);
+}
+
+TEST_F(BlockJournalTest, CommitObservationPreservesMalformedAndUnreadableFailures)
+{
+    using nova::storage::CommitRecordState;
+    {
+        std::ofstream hostile{journal_->path(), std::ios::binary};
+        ASSERT_TRUE(hostile.is_open());
+        hostile.put(static_cast<char>(0x7F));
+        hostile.flush();
+        ASSERT_TRUE(hostile.good());
+    }
+    const auto raw = ReadBytes(journal_->path());
+    const auto malformed = journal_->ObserveCommitRecord(hash_);
+    EXPECT_EQ(malformed.state, CommitRecordState::kUnavailable);
+    EXPECT_EQ(malformed.error, BlockJournalError::kMalformedRecord);
+    EXPECT_EQ(ReadBytes(journal_->path()), raw);
+    // Only this fixture's file is removed, replaced by its own empty directory.
+    ASSERT_TRUE(std::filesystem::remove(journal_->path()));
+    ASSERT_TRUE(std::filesystem::create_directory(journal_->path()));
+    const auto unreadable = journal_->ObserveCommitRecord(hash_);
+    EXPECT_EQ(unreadable.state, CommitRecordState::kUnavailable);
+    EXPECT_TRUE(unreadable.error == BlockJournalError::kOpenFailure ||
+                unreadable.error == BlockJournalError::kFilesystemFailure);
+    EXPECT_TRUE(std::filesystem::is_directory(journal_->path()));
+}
+
 TEST_F(BlockJournalTest, RecoveryIsRepeatableAtEveryRepairFailurePoint)
 {
     const auto& network = nova::consensus::RegtestNetworkParams();

@@ -67,8 +67,9 @@ metadata, not wall-clock timestamps. Known sensitive suffixes/key armor are
 rejected before archiving; this is defense in depth, NOT a complete secret detector.
 Never commit credentials, wallet data or private release keys in the first place.
 
-Source export pins `core.autocrlf=false` and `core.eol=lf`, then checks every
-regular TAR member against the commit's blob identity, size and executable bit,
+Source export pins `core.autocrlf=false`, `core.eol=lf` and `tar.umask=0022`, then
+checks every regular TAR member against the commit's blob identity and size,
+with canonical permissions `0644` for ordinary files and `0755` for executables,
 and requires the complete committed file set. Export attributes that omit or
 rewrite content therefore fail preparation. A rejected TAR remains diagnostic
 evidence, not a successful release; do not normalize or replace it after hashing.

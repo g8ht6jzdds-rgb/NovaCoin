@@ -686,8 +686,11 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
                 static_cast<std::uint64_t>(*output) > std::numeric_limits<std::uint32_t>::max()) {
                 return {200U, ErrorResponse(id, kInvalidParams, "txid and vout required")};
             }
-            const auto coin = dependencies_.utxos.GetCoin(
+            const auto read = dependencies_.utxos.ReadCoin(
                 chain::UTXOKey{*hash, static_cast<std::uint32_t>(*output)});
+            if (read.error != chain::CoinReadError::kNone)
+                return {200U, ErrorResponse(id, kNodeFailure, "UTXO state unavailable")};
+            const auto& coin = read.coin;
             if (!coin.has_value()) {
                 return {200U, ErrorResponse(id, kNotFound, "UTXO not found")};
             }

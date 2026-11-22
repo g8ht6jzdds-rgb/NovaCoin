@@ -590,4 +590,44 @@ TEST(ExplorerRpcSnapshotIntegration, ExportsSelectedGenesisAndRejectsOtherNetwor
     EXPECT_FALSE(nova::consensus::MainnetNetworkParams().enabled);
 }
 
+TEST(RpcReadFailure, GetUtxoUnavailableIsNotNotFoundAndParamsDoNotReadState)
+{
+    UTXOSet utxos;
+    auto state = CreateChainState(utxos);
+    auto pool = Mempool::Create(MempoolParams{RegtestValidationParams(), 16U, 100000U, 0});
+    auto peers = MakePeerManager();
+    auto wallet = nova::wallet::Wallet::Create({kTransactionLimits, 1, 1U});
+    ASSERT_NE(state, nullptr);
+    ASSERT_NE(pool, nullptr);
+    ASSERT_NE(wallet, nullptr);
+    const nova::chain::UTXOKey key{AnchorHash(), 0U};
+    ASSERT_TRUE(utxos.AddCoin(
+        key, nova::chain::Coin{nova::primitives::TxOutput{COIN, {0x51U}}, 0U, false}));
+    nova::rpc::RpcDependencies dependencies{
+        *state, utxos, *pool, peers, *wallet, {1U, 1000U}, 1000U, {}, {}, {}, {}, {}, {}};
+    auto service = nova::rpc::RpcService::Create(
+        {"127.0.0.1", "user", "pass", {256U, 8192U, 4096U}, nova::consensus::NetworkId::kRegtest},
+        std::move(dependencies));
+    ASSERT_NE(service, nullptr);
+    constexpr std::string_view auth{"Basic dXNlcjpwYXNz"};
+    const auto prefix =
+        std::string{
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getutxo\",\"params\":{\"txid\":\""} +
+        (std::string(63U, '0') + "1") + "\",\"vout\":";
+    const auto good = prefix + "0}}";
+    utxos.FailNextReadForTesting();
+    const auto invalid = service->HandleHttpPost({"POST", auth, prefix + "-1}}"});
+    EXPECT_NE(invalid.body.find("-32602"), std::string::npos);
+    const auto unavailable = service->HandleHttpPost({"POST", auth, good});
+    EXPECT_NE(unavailable.body.find("-32004"), std::string::npos);
+    EXPECT_NE(unavailable.body.find("UTXO state unavailable"), std::string::npos);
+    EXPECT_EQ(unavailable.body.find("UTXO not found"), std::string::npos);
+    const auto healthy = service->HandleHttpPost({"POST", auth, good});
+    EXPECT_NE(healthy.body.find("\"result\":"), std::string::npos);
+    const auto missing = service->HandleHttpPost({"POST", auth, prefix + "1}}"});
+    EXPECT_NE(missing.body.find("-32002"), std::string::npos);
+    EXPECT_EQ(utxos.size(), 1U);
+    EXPECT_TRUE(utxos.HaveCoin(key));
+}
+
 } // namespace

@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace nova::chain
@@ -17,6 +18,12 @@ struct Coin final {
     primitives::TxOutput output;
     std::uint32_t height{};
     bool is_coinbase{};
+};
+
+enum class CoinReadError : std::uint8_t { kNone, kUnavailable };
+struct CoinReadResult final {
+    CoinReadError error{CoinReadError::kNone};
+    std::optional<Coin> coin;
 };
 
 struct UTXOKey final {
@@ -40,7 +47,16 @@ class UTXOView
 {
   public:
     virtual ~UTXOView() = default;
+    // Ordinary views require a valid/stable lifetime supplied by their owner.
+    // Versioned borrowed views override this to reject stale/closed state.
+    [[nodiscard]] virtual bool IsCurrent() const noexcept
+    {
+        return true;
+    }
 
+    // Typed readers distinguish absent coins from unavailable local context.
+    // Legacy custom views that suppress read errors must override this method.
+    [[nodiscard]] virtual CoinReadResult ReadCoin(const UTXOKey& key) const;
     [[nodiscard]] virtual std::optional<Coin> GetCoin(const UTXOKey& key) const = 0;
     [[nodiscard]] virtual bool HaveCoin(const UTXOKey& key) const noexcept = 0;
 };
@@ -89,37 +105,71 @@ class UTXOBatch final : public UTXOView
   public:
     UTXOBatch(const UTXOBatch&) = delete;
     UTXOBatch& operator=(const UTXOBatch&) = delete;
-    UTXOBatch(UTXOBatch&&) noexcept = default;
+    UTXOBatch(UTXOBatch&& other) noexcept(std::is_nothrow_default_constructible_v<UTXODelta>);
     UTXOBatch& operator=(UTXOBatch&&) noexcept = delete;
 
     [[nodiscard]] ApplyTransactionResult
     ApplyTransaction(const primitives::Transaction& transaction, std::uint32_t height,
                      bool is_coinbase, const primitives::TransactionLimits& limits) noexcept;
+    [[nodiscard]] CoinReadResult ReadCoin(const UTXOKey& key) const override;
     [[nodiscard]] std::optional<Coin> GetCoin(const UTXOKey& key) const override;
     [[nodiscard]] bool HaveCoin(const UTXOKey& key) const noexcept override;
     [[nodiscard]] UTXOError UndoTransaction(const TransactionUndo& undo) noexcept;
+    // Parent must outlive and remain at its address while a child exists.
+    // A closed or changed parent cannot publish child changes.
+    [[nodiscard]] std::optional<UTXOBatch> BeginBatch() noexcept;
+    [[nodiscard]] UTXOError UndoBlock(const BlockUndo& undo) noexcept;
+    // Same owner/parent lifetime contract as BeginBatch; read-only freshness.
+    [[nodiscard]] bool IsCurrent() const noexcept override;
+    // A nonpublishing overlay borrows this const view for its lifetime.
+    // All descendants retain disabled publication, including after moves.
+    [[nodiscard]] static std::optional<UTXOBatch> ReadOnlyOverlay(const UTXOView& base) noexcept;
     [[nodiscard]] bool Commit() noexcept;
     void Rollback() noexcept;
     [[nodiscard]] std::size_t overlay_entry_count() const noexcept;
 
   private:
-    explicit UTXOBatch(UTXOSet& base) noexcept;
+    explicit UTXOBatch(UTXOSet& base);
+    explicit UTXOBatch(const UTXOView& base);
+    explicit UTXOBatch(UTXOBatch& parent);
+    [[nodiscard]] bool IsOpen() const noexcept;
 
-    UTXOSet& base_;
+    const UTXOView& base_;
+    UTXOSet* base_set_{};
+    UTXOBatch* parent_{};
     UTXODelta delta_;
+    std::uint64_t revision_{};
+    std::uint64_t parent_revision_{};
+    std::uint64_t base_revision_{};
     bool closed_{};
+    bool publication_disabled_{};
+    mutable bool read_failed_{};
 
     friend class UTXOSet;
 };
 
 class UTXOSet final : public UTXOView
 {
+  private:
+    using Coins = std::map<UTXOKey, Coin>;
+
   public:
+    UTXOSet() = default;
+    UTXOSet(const UTXOSet& other);
+    UTXOSet& operator=(const UTXOSet& other);
+    UTXOSet(UTXOSet&& other) noexcept(std::is_nothrow_default_constructible_v<Coins>);
+    UTXOSet& operator=(UTXOSet&& other) noexcept;
+
+    [[nodiscard]] CoinReadResult ReadCoin(const UTXOKey& key) const override;
     [[nodiscard]] std::optional<Coin> GetCoin(const UTXOKey& key) const override;
     [[nodiscard]] bool HaveCoin(const UTXOKey& key) const noexcept override;
+    // Per-instance one-shot typed-read fault seam; no network/RPC selector.
+    void FailNextReadForTesting() noexcept;
     [[nodiscard]] bool AddCoin(const UTXOKey& key, const Coin& coin) noexcept;
     [[nodiscard]] std::optional<Coin> SpendCoin(const UTXOKey& key) noexcept;
 
+    // The set must outlive batches at the same address. Successful mutations
+    // invalidate open batches; exclusive single-thread ownership is required.
     [[nodiscard]] std::optional<UTXOBatch> BeginBatch() noexcept;
     [[nodiscard]] ApplyTransactionResult
     ApplyTransaction(const primitives::Transaction& transaction, std::uint32_t height,
@@ -133,9 +183,10 @@ class UTXOSet final : public UTXOView
     [[nodiscard]] std::size_t size() const noexcept;
 
   private:
-    using Coins = std::map<UTXOKey, Coin>;
-
+    void InvalidateBatches() noexcept;
     Coins coins_;
+    std::uint64_t revision_{};
+    mutable bool fail_next_read_{};
 
     friend class UTXOBatch;
 };

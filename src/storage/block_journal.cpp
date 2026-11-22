@@ -444,6 +444,25 @@ const std::filesystem::path& BlockJournal::path() const noexcept
     return path_;
 }
 
+CommitRecordObservation
+BlockJournal::ObserveCommitRecord(const crypto::Hash256& block_hash) const noexcept
+{
+    const auto loaded = Load();
+    if (loaded.error != BlockJournalError::kNone)
+        return {CommitRecordState::kUnavailable, loaded.error, loaded.recovery_required};
+    for (const auto& block : loaded.blocks) {
+        const auto hash = primitives::ComputeBlockHash(block.header);
+        if (!hash.has_value())
+            return {CommitRecordState::kUnavailable, BlockJournalError::kHashFailure,
+                    loaded.recovery_required};
+        if (*hash == block_hash)
+            return {CommitRecordState::kPresent, BlockJournalError::kNone,
+                    loaded.recovery_required};
+    }
+    return {loaded.recovery_required ? CommitRecordState::kUnavailable : CommitRecordState::kAbsent,
+            BlockJournalError::kNone, loaded.recovery_required};
+}
+
 bool BlockJournal::IsCommitted(const crypto::Hash256& block_hash) const noexcept
 {
     const auto loaded = Load();

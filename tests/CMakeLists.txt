@@ -26,6 +26,7 @@ add_executable(nova_unit_tests
     network_params_tests.cpp
     regtest_harness_tests.cpp
     storage_tests.cpp
+    generation_store_tests.cpp
     network_identity_tests.cpp
     bootstrap_tests.cpp
     explorer_tests.cpp
@@ -35,6 +36,13 @@ nova_apply_project_options(nova_unit_tests)
 target_link_libraries(nova_unit_tests PRIVATE nova_version)
 
 find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
+add_executable(nova_generation_crash_worker generation_crash_worker.cpp)
+nova_apply_project_options(nova_generation_crash_worker)
+target_link_libraries(nova_generation_crash_worker PRIVATE nova_storage)
+add_test(NAME nova.generation_crash
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_generation_crash.py
+        $<TARGET_FILE:nova_generation_crash_worker>)
+set_tests_properties(nova.generation_crash PROPERTIES TIMEOUT 180 LABELS "unit;storage;recovery")
 add_test(NAME nova.release_policy
     COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_SOURCE_DIR}/scripts/test_release.py)
 set_tests_properties(nova.release_policy PROPERTIES TIMEOUT 60 LABELS "unit;release;policy")

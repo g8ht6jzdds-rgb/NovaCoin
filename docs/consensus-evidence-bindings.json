@@ -83,7 +83,7 @@
           "path": "src/chain/validation.cpp",
           "line": 69,
           "token": "IsFinal(",
-          "sha256": "5be920bf0fd033b72291f61dd5b86f48263ad285fa732d327b1db9ba19abff5f"
+          "sha256": "05944579165677b3569b9bf3aa07336f75c29d865836ee1388bd4cb3fae5d5c1"
         }
       ],
       "cases": {
@@ -199,7 +199,7 @@
           "path": "src/chain/validation.cpp",
           "line": 88,
           "token": "HasMinimalCoinbaseHeight",
-          "sha256": "5be920bf0fd033b72291f61dd5b86f48263ad285fa732d327b1db9ba19abff5f"
+          "sha256": "05944579165677b3569b9bf3aa07336f75c29d865836ee1388bd4cb3fae5d5c1"
         }
       ],
       "cases": {
@@ -452,9 +452,9 @@
       "sources": [
         {
           "path": "src/chain/validation.cpp",
-          "line": 258,
+          "line": 265,
           "token": "CheckBlockHeader",
-          "sha256": "5be920bf0fd033b72291f61dd5b86f48263ad285fa732d327b1db9ba19abff5f"
+          "sha256": "05944579165677b3569b9bf3aa07336f75c29d865836ee1388bd4cb3fae5d5c1"
         }
       ],
       "cases": {

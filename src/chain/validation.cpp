@@ -191,6 +191,8 @@ CheckTransactionAgainstUtxo(const primitives::Transaction& transaction,
         return {BlockValidationError::kNonFinalTransaction, 0};
     }
 
+    if (!utxos.IsCurrent())
+        return {BlockValidationError::kInvalidContext, 0};
     primitives::Amount input_total = 0;
     for (std::size_t index = 0U; index < transaction.inputs.size(); ++index) {
         const auto& input = transaction.inputs.at(index);
@@ -201,7 +203,10 @@ CheckTransactionAgainstUtxo(const primitives::Transaction& transaction,
         if (!spent_in_block.insert(key).second) {
             return {BlockValidationError::kDoubleSpend, 0};
         }
-        const auto coin = utxos.GetCoin(key);
+        const auto read = utxos.ReadCoin(key);
+        if (read.error != CoinReadError::kNone || !utxos.IsCurrent())
+            return {BlockValidationError::kInvalidContext, 0};
+        const auto& coin = read.coin;
         if (!coin.has_value()) {
             return {BlockValidationError::kMissingUtxo, 0};
         }
@@ -248,6 +253,8 @@ CheckTransactionAgainstUtxo(const primitives::Transaction& transaction,
         return BlockValidationError::kMissingUtxo;
     case UTXOError::kAllocationFailure:
         return BlockValidationError::kAllocationFailure;
+    case UTXOError::kBatchClosed:
+        return BlockValidationError::kInvalidContext;
     default:
         return BlockValidationError::kStateApplicationFailure;
     }
@@ -346,9 +353,10 @@ TransactionValidationResult ValidateTransactionAgainstUTXOSet(
     }
 }
 
-BlockValidationResult ConnectBlock(const primitives::Block& block,
-                                   const BlockValidationContext& context,
-                                   const BlockValidationParams& parameters, UTXOSet& utxos) noexcept
+template <typename View>
+BlockValidationResult
+ConnectBlockInto(const primitives::Block& block, const BlockValidationContext& context,
+                 const BlockValidationParams& parameters, View& utxos) noexcept
 {
     const auto block_error = CheckBlock(block, context, parameters);
     if (block_error != BlockValidationError::kNone) {
@@ -423,7 +431,9 @@ BlockValidationResult ConnectBlock(const primitives::Block& block,
     }
 }
 
-BlockValidationError DisconnectBlock(const ConnectedBlock& connected_block, UTXOSet& utxos) noexcept
+template <typename View>
+BlockValidationError DisconnectBlockFrom(const ConnectedBlock& connected_block,
+                                         View& utxos) noexcept
 {
     const auto undo_error = utxos.UndoBlock(connected_block.undo);
     if (undo_error == UTXOError::kNone) {
@@ -433,6 +443,31 @@ BlockValidationError DisconnectBlock(const ConnectedBlock& connected_block, UTXO
         return BlockValidationError::kAllocationFailure;
     }
     return BlockValidationError::kDisconnectFailure;
+}
+
+BlockValidationResult ConnectBlock(const primitives::Block& block,
+                                   const BlockValidationContext& context,
+                                   const BlockValidationParams& parameters, UTXOSet& utxos) noexcept
+{
+    return ConnectBlockInto(block, context, parameters, utxos);
+}
+
+BlockValidationResult ConnectBlock(const primitives::Block& block,
+                                   const BlockValidationContext& context,
+                                   const BlockValidationParams& parameters,
+                                   UTXOBatch& utxos) noexcept
+{
+    return ConnectBlockInto(block, context, parameters, utxos);
+}
+
+BlockValidationError DisconnectBlock(const ConnectedBlock& connected, UTXOSet& utxos) noexcept
+{
+    return DisconnectBlockFrom(connected, utxos);
+}
+
+BlockValidationError DisconnectBlock(const ConnectedBlock& connected, UTXOBatch& utxos) noexcept
+{
+    return DisconnectBlockFrom(connected, utxos);
 }
 
 } // namespace nova::chain
