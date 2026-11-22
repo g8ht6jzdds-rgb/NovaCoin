@@ -7,11 +7,16 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace
@@ -866,5 +871,35 @@ TEST_F(DurableShutdownTest, WriteAndSyncErrorsRejectWriterIngressWithoutLosingSt
     ASSERT_TRUE(current);
     EXPECT_EQ(current->mempool_size, 1U);
     EXPECT_EQ(current->tip, before->tip);
+}
+
+TEST(DurableStartup, UnknownNetworkRejectsBeforeFilesystemMutation)
+{
+    struct Cleanup final {
+        std::filesystem::path path;
+        ~Cleanup()
+        {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    };
+
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("nova-durable-invalid-network-" +
+                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    Cleanup cleanup{root};
+    ASSERT_TRUE(std::filesystem::create_directory(root));
+    const auto time = std::make_shared<nova::chain::FixedValidationTimeSource>(1'704'067'800U);
+    constexpr std::array<std::uint8_t, 1U> passphrase{0x61U};
+
+    for (const auto raw : {3U, 255U}) {
+        SCOPED_TRACE(raw);
+        const auto node_directory = root / ("node-" + std::to_string(raw));
+        const auto state = nova::node::OpenDurableNodeState(
+            node_directory, static_cast<nova::consensus::NetworkId>(raw), time, 1'704'067'800U,
+            passphrase);
+        EXPECT_FALSE(state);
+        EXPECT_FALSE(std::filesystem::exists(node_directory));
+    }
 }
 } // namespace
