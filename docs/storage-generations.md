@@ -1,9 +1,11 @@
 # Local generation-store format and qualification
 
-This is local storage metadata, not consensus serialization. The generation
-store is not wired into node admission or wallet/RPC persistence yet. The
-reproduced journal/wallet atomicity failure remains **FAIL**. No Gate 6, security,
-release, or MAINNET readiness claim follows from these component tests.
+This is local storage metadata, not consensus serialization. REGTEST and TESTNET
+daemon writers are routed through the durable node coordinator described below;
+the old `RegtestNode` persistence path is isolated to test support. Historical
+journal/wallet atomicity failures remain in the external evidence record. The
+integration and component tests do not establish Gate 6, security, release, or
+MAINNET readiness.
 
 ## Authority and bytes
 
@@ -130,12 +132,19 @@ without file access under ASan/UBSan, with public identity-bound seeds under
 `fuzz/corpus/generation_metadata/`. It cannot prove image durability, encryption,
 consensus validity, allocation behavior of other parsers or node-level atomicity.
 
-Remaining acceptance work includes inside-syscall fault/crash coverage, actual
-syscall failures and device/barrier evidence, the complete writer/fault matrix,
-restart consistency, concurrent-reader design, and the complete 1/10/100-block
-reorganization and crash/restart matrix. The daemon integration described below
-does not by itself discharge these proof obligations. Development-only legacy
-node APIs remain separately unqualified. MAINNET remains locked.
+The bounded local acceptance run now covers the integrated daemon writer paths,
+modeled journal/wallet/mempool/descriptor/root write and sync failures, selector
+replacement denial, controlled process exits, repeated restart checks, and
+1/10/100-block reorganization fixtures. The exact test names, commands, source
+snapshot, binaries, and results are bound in the external Gate 6 evidence packet.
+These checks do not inject failures inside operating-system syscalls, demonstrate
+power-loss persistence, qualify a filesystem/device/controller/cache/barrier
+combination, or provide independent review. Concurrent-publication guarantees
+are limited to the coordinator serialization exercised by the recorded tests;
+they are not a cross-process or hardware-durability claim. Development-only
+legacy node APIs remain outside production daemon linkage. Gate 6 remains FAIL
+until platform qualification and independent review are supplied and all other
+acceptance evidence is verified. MAINNET remains locked.
 
 ## Daemon coordinator cutover
 
@@ -185,5 +194,7 @@ requires each rejection to preserve the selector and RPC-visible state, verifies
 that state after restart, then verifies successful payment/mining retries across
 two restarts. It uses disposable loopback fixtures and process termination, not
 power interruption. It does not cover other write/flush failures or qualify
-filesystem durability. Hundred-block daemon reorganization failures and resource
-aborts remain open even when this narrower test passes.
+filesystem durability. Earlier depth-100 timeout/resource-abort records remain
+preserved as historical failures. The current bounded depth-100 fixture passes
+within its recorded budget, but this does not establish unbounded reorganization
+capacity or production-scale performance.

@@ -60,6 +60,10 @@ OpenDurableNodeState(const std::filesystem::path& directory, consensus::NetworkI
         std::filesystem::create_directory(staging_path, error);
         if (error)
             return nullptr;
+#ifndef _WIN32
+        if (!storage::SyncDirectoryHierarchy(directory))
+            return nullptr;
+#endif
         auto workspace = StagingWorkspace::Open(staging_path);
         if (!workspace)
             return nullptr;

@@ -1,5 +1,7 @@
+#include "daemon/durable_runtime.hpp"
 #include "node/durable_node.hpp"
 #include "node/durable_startup.hpp"
+#include "wallet/address.hpp"
 #include "wallet/secure_memory.hpp"
 
 #include <gtest/gtest.h>
@@ -48,6 +50,23 @@ class DurableShutdownTest : public ::testing::Test
         return nova::node::DurableNode::Create(std::move(state->session),
                                                std::move(state->workspace), passphrase_,
                                                std::move(state->directory_lease));
+    }
+    std::unique_ptr<nova::daemon::DurableRuntime> OpenRuntime()
+    {
+        node_.reset();
+        auto state = nova::node::OpenDurableNodeState(
+            root_ / "node", nova::consensus::NetworkId::kRegtest, time_, time_->Now(), passphrase_);
+        if (!state)
+            return nullptr;
+        observer_ = state->session.get();
+        return nova::daemon::DurableRuntime::Create(std::move(state->session),
+                                                    std::move(state->workspace), passphrase_,
+                                                    {"127.0.0.1",
+                                                     "user",
+                                                     "pass",
+                                                     {8192U, 1000000U, 4096U},
+                                                     nova::consensus::NetworkId::kRegtest},
+                                                    std::move(state->directory_lease));
     }
     std::filesystem::path Selector() const
     {
@@ -149,6 +168,104 @@ class DurableShutdownTest : public ::testing::Test
             EXPECT_EQ(Read(Selector()), committed_root);
         }
     }
+    void CheckRpcTransactionRecovery(const bool wallet_send)
+    {
+        const auto address = node_->GenerateAddress();
+        ASSERT_TRUE(address);
+        ASSERT_TRUE(node_->Mine());
+        const auto before = node_->View();
+        const auto wallet_before = node_->Session().WalletView();
+        ASSERT_TRUE(before && wallet_before);
+        ASSERT_EQ(wallet_before->coins.size(), 1U);
+        const auto coin = wallet_before->coins.front();
+        const auto& network = node_->Session().network_params();
+        const auto limits = network.block_limits.transaction_limits;
+        const auto encoded_address =
+            nova::wallet::EncodeP2pkhAddress(address->public_key_hash, network);
+        ASSERT_TRUE(encoded_address);
+        const std::array<nova::wallet::Recipient, 1U> recipients{{{address->public_key_hash, 1}}};
+        const auto planned = node_->Session().BuildTransaction(recipients);
+        ASSERT_TRUE(planned && planned->built);
+        const auto& transaction = planned->built->transaction;
+        const auto planned_id = transaction.TxId(limits);
+        ASSERT_TRUE(planned_id);
+        nova::primitives::BinaryWriter serialized;
+        ASSERT_TRUE(transaction.Serialize(serialized, limits));
+        std::string hex;
+        constexpr std::string_view digits{"0123456789abcdef"};
+        for (const auto byte : serialized.bytes()) {
+            hex.push_back(digits[byte >> 4U]);
+            hex.push_back(digits[byte & 15U]);
+        }
+        const auto request =
+            wallet_send
+                ? std::string{R"({"jsonrpc":"2.0","id":1,"method":"sendtoaddress","params":{"amount":1,"address":")"} +
+                      *encoded_address + R"("}})"
+                : std::string{R"({"jsonrpc":"2.0","id":1,"method":"sendwallettransaction","params":{"hex":")"} +
+                      hex + R"("}})";
+        auto runtime = OpenRuntime();
+        ASSERT_TRUE(runtime);
+        constexpr std::string_view auth{"Basic dXNlcjpwYXNz"};
+        const auto prior = Read(Selector());
+        ASSERT_FALSE(prior.empty());
+        observer_->FailStoreForTesting(nova::storage::GenerationFailurePoint::kAfterWallet);
+        const auto rejected = runtime->Rpc().HandleHttpPost({"POST", auth, request});
+        EXPECT_EQ(rejected.status, 200U);
+        EXPECT_NE(rejected.body.find("transaction broadcast failed"), std::string::npos);
+        EXPECT_EQ(rejected.body.find("may have committed"), std::string::npos);
+        const auto unchanged = runtime->View();
+        const auto unchanged_wallet = observer_->WalletView();
+        ASSERT_TRUE(unchanged && unchanged_wallet);
+        EXPECT_EQ(unchanged->mempool_size, 0U);
+        EXPECT_EQ(unchanged_wallet->confirmed, wallet_before->confirmed);
+        ASSERT_EQ(unchanged_wallet->coins.size(), 1U);
+        EXPECT_FALSE(unchanged_wallet->coins.front().pending_spend);
+        EXPECT_EQ(Read(Selector()), prior);
+
+        observer_->FailAdvanceForTesting();
+        const auto uncertain = runtime->Rpc().HandleHttpPost({"POST", auth, request});
+        EXPECT_EQ(uncertain.status, 200U);
+        EXPECT_NE(uncertain.body.find("operation outcome may have committed"), std::string::npos);
+        constexpr std::string_view label{"transaction id "};
+        const auto position = uncertain.body.find(label);
+        ASSERT_NE(position, std::string::npos);
+        const auto id = nova::crypto::Hash256::FromHex(
+            std::string_view{uncertain.body}.substr(position + label.size(), 64U));
+        ASSERT_TRUE(id);
+        if (!wallet_send)
+            EXPECT_EQ(id, planned_id);
+        EXPECT_FALSE(runtime->Ready());
+        const auto committed = Read(Selector());
+        EXPECT_NE(committed, prior);
+        const auto refused = runtime->Rpc().HandleHttpPost({"POST", auth, request});
+        EXPECT_NE(refused.body.find("node state unavailable"), std::string::npos);
+        EXPECT_EQ(Read(Selector()), committed);
+        runtime.reset();
+
+        for (unsigned restart = 0U; restart < 2U; ++restart) {
+            node_ = Open();
+            ASSERT_TRUE(node_);
+            const auto recovered = node_->View();
+            ASSERT_TRUE(recovered);
+            EXPECT_EQ(recovered->tip, before->tip);
+            EXPECT_EQ(recovered->chain_work, before->chain_work);
+            EXPECT_EQ(recovered->receiving_address_count, before->receiving_address_count);
+            EXPECT_EQ(recovered->mempool_size, 1U);
+            const auto pending = node_->Session().FindMempoolEntry(*id);
+            ASSERT_TRUE(pending.available && pending.entry);
+            EXPECT_EQ(pending.entry->transaction.TxId(limits), id);
+            const auto wallet = node_->Session().WalletView();
+            ASSERT_TRUE(wallet);
+            EXPECT_EQ(wallet->confirmed, 0);
+            const auto spent = std::find_if(wallet->coins.begin(), wallet->coins.end(),
+                                            [&](const auto& item) { return item.key == coin.key; });
+            ASSERT_NE(spent, wallet->coins.end());
+            EXPECT_TRUE(spent->confirmed && spent->pending_spend);
+            EXPECT_EQ(Read(Selector()), committed);
+            node_.reset();
+        }
+    }
+
     std::filesystem::path root_;
     const std::vector<std::uint8_t> passphrase_{'t', 'e', 's', 't'};
     std::shared_ptr<nova::chain::FixedValidationTimeSource> time_;
@@ -336,6 +453,114 @@ TEST_F(DurableShutdownTest, FailedLivePublicationRequiresRecoveryOfCommittedKey)
     const auto next = node_->GenerateAddress();
     ASSERT_TRUE(next);
     EXPECT_EQ(next->index, 1U);
+}
+
+TEST_F(DurableShutdownTest, RpcAddressFailureDistinguishesRejectionFromDurableRecovery)
+{
+    auto runtime = OpenRuntime();
+    ASSERT_TRUE(runtime);
+    constexpr std::string_view auth{"Basic dXNlcjpwYXNz"};
+    constexpr std::string_view request{R"({"jsonrpc":"2.0","id":1,"method":"getnewaddress"})"};
+    const auto prior = Read(Selector());
+    ASSERT_FALSE(prior.empty());
+    observer_->FailStoreForTesting(nova::storage::GenerationFailurePoint::kAfterWallet);
+    const auto rejected = runtime->Rpc().HandleHttpPost({"POST", auth, request});
+    EXPECT_EQ(rejected.status, 200U);
+    EXPECT_NE(rejected.body.find("address generation failed"), std::string::npos);
+    EXPECT_EQ(rejected.body.find("may have committed"), std::string::npos);
+    const auto unchanged = runtime->View();
+    ASSERT_TRUE(unchanged);
+    EXPECT_EQ(unchanged->receiving_address_count, 0U);
+    EXPECT_EQ(Read(Selector()), prior);
+
+    observer_->FailAdvanceForTesting();
+    const auto uncertain = runtime->Rpc().HandleHttpPost({"POST", auth, request});
+    EXPECT_EQ(uncertain.status, 200U);
+    EXPECT_NE(uncertain.body.find("operation outcome may have committed"), std::string::npos);
+    EXPECT_FALSE(runtime->Ready());
+    const auto committed = Read(Selector());
+    EXPECT_NE(committed, prior);
+    const auto refused = runtime->Rpc().HandleHttpPost({"POST", auth, request});
+    EXPECT_NE(refused.body.find("node state unavailable"), std::string::npos);
+    EXPECT_EQ(Read(Selector()), committed);
+
+    runtime.reset();
+    for (unsigned restart = 0U; restart < 2U; ++restart) {
+        node_ = Open();
+        ASSERT_TRUE(node_);
+        const auto recovered = node_->View();
+        ASSERT_TRUE(recovered);
+        EXPECT_EQ(recovered->receiving_address_count, 1U);
+        EXPECT_EQ(Read(Selector()), committed);
+        node_.reset();
+    }
+}
+
+TEST_F(DurableShutdownTest, RpcMiningRecoversBlockAfterUncertainPublication)
+{
+    auto runtime = OpenRuntime();
+    ASSERT_TRUE(runtime);
+    constexpr std::string_view auth{"Basic dXNlcjpwYXNz"};
+    constexpr std::string_view address{R"({"jsonrpc":"2.0","id":1,"method":"getnewaddress"})"};
+    constexpr std::string_view mine{R"({"jsonrpc":"2.0","id":2,"method":"generateregtestblock"})"};
+    ASSERT_NE(runtime->Rpc().HandleHttpPost({"POST", auth, address}).body.find("\"result\""),
+              std::string::npos);
+    const auto before = runtime->View();
+    ASSERT_TRUE(before);
+    const auto prior = Read(Selector());
+    ASSERT_FALSE(prior.empty());
+
+    observer_->FailStoreForTesting(nova::storage::GenerationFailurePoint::kAfterWallet);
+    const auto rejected = runtime->Rpc().HandleHttpPost({"POST", auth, mine});
+    EXPECT_EQ(rejected.status, 200U);
+    EXPECT_NE(rejected.body.find("regtest block generation failed"), std::string::npos);
+    EXPECT_EQ(rejected.body.find("may have committed"), std::string::npos);
+    const auto unchanged = runtime->View();
+    ASSERT_TRUE(unchanged);
+    EXPECT_EQ(unchanged->tip, before->tip);
+    EXPECT_EQ(unchanged->chain_work, before->chain_work);
+    EXPECT_EQ(Read(Selector()), prior);
+
+    observer_->FailAdvanceForTesting();
+    const auto uncertain = runtime->Rpc().HandleHttpPost({"POST", auth, mine});
+    EXPECT_EQ(uncertain.status, 200U);
+    EXPECT_NE(uncertain.body.find("operation outcome may have committed"), std::string::npos);
+    EXPECT_FALSE(runtime->Ready());
+    const auto committed = Read(Selector());
+    EXPECT_NE(committed, prior);
+    const auto refused = runtime->Rpc().HandleHttpPost({"POST", auth, mine});
+    EXPECT_NE(refused.body.find("node state unavailable"), std::string::npos);
+    EXPECT_EQ(Read(Selector()), committed);
+    runtime.reset();
+
+    std::optional<nova::node::DurableSessionView> first_recovery;
+    for (unsigned restart = 0U; restart < 2U; ++restart) {
+        node_ = Open();
+        ASSERT_TRUE(node_);
+        const auto recovered = node_->View();
+        ASSERT_TRUE(recovered);
+        EXPECT_EQ(recovered->height, before->height + 1U);
+        EXPECT_NE(recovered->tip, before->tip);
+        EXPECT_LT(before->chain_work, recovered->chain_work);
+        EXPECT_EQ(recovered->receiving_address_count, before->receiving_address_count);
+        EXPECT_EQ(Read(Selector()), committed);
+        if (first_recovery) {
+            EXPECT_EQ(recovered->tip, first_recovery->tip);
+            EXPECT_EQ(recovered->chain_work, first_recovery->chain_work);
+        }
+        first_recovery = recovered;
+        node_.reset();
+    }
+}
+
+TEST_F(DurableShutdownTest, RpcWalletSendRecoversTransactionAfterUncertainPublication)
+{
+    CheckRpcTransactionRecovery(true);
+}
+
+TEST_F(DurableShutdownTest, RpcTransactionSubmissionRecoversAfterUncertainPublication)
+{
+    CheckRpcTransactionRecovery(false);
 }
 
 TEST_F(DurableShutdownTest, CandidateCloseErrorsRejectNodeWritersWithoutPublishingAcrossRestarts)

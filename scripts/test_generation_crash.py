@@ -68,6 +68,7 @@ def main():
         "partial-root", "root-close", "before-root", "after-root", "barrier",
     )
     results = []
+    print("Recovery matrix: startup", flush=True)
     for testnet in (False, True):
         for checkpoint in ("partial", "close", "prepare-barrier", "before-root",
                            "after-root", "barrier", "recovery-barrier"):
@@ -102,6 +103,7 @@ def main():
             "mempool", "partial-descriptor", "partial-root", "before-descriptor", "descriptor", "before-root", "after-root", "barrier"
         )
     ]
+    print("Recovery matrix: store publication", flush=True)
     for with_mempool, checkpoint in cases:
         with recovery_fixture() as temporary:
             fixture = Path(temporary).resolve(strict=True)
@@ -277,6 +279,7 @@ def main():
                             "child_exit": 42, "restart_observations": 2,
                             "before": before, "after": after,
                             "utxo_sha256": hashlib.sha256(after_utxos).hexdigest()})
+    print("Recovery matrix: wallet send, transaction admission, and pending-transaction mining", flush=True)
     for operation in ("pay", "admit", "mine-pending"):
         for checkpoint in writer_checkpoints:
             with recovery_fixture() as temporary:
@@ -420,6 +423,7 @@ def main():
                             "before": before, "after": after,
                             "utxo_sha256": hashlib.sha256(actual_utxos).hexdigest()})
     # Legacy migration prepares journal and wallet images without a mempool image.
+    print("Recovery matrix: final writer checkpoints", flush=True)
     for checkpoint in (point for point in writer_checkpoints if "mempool" not in point):
         with recovery_fixture() as temporary:
             fixture = Path(temporary).resolve(strict=True)

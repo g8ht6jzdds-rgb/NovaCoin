@@ -72,6 +72,10 @@ MigrateDurableNode(const std::filesystem::path& source, const std::filesystem::p
         if (!std::filesystem::create_directory(target / "generations", error) || error ||
             !std::filesystem::create_directory(target / "staging", error) || error)
             return nullptr;
+#ifndef _WIN32
+        if (!storage::SyncDirectoryHierarchy(target))
+            return nullptr;
+#endif
         auto workspace = node::StagingWorkspace::Open(target / "staging");
         storage::GenerationError store_error{};
         auto store = storage::GenerationStore::Open(target / "generations", network, store_error);

@@ -8,6 +8,10 @@
 
 namespace nova::storage
 {
+#ifndef _WIN32
+// Persist the directory entries that name an existing node directory and its ancestors.
+[[nodiscard]] bool SyncDirectoryHierarchy(const std::filesystem::path& path) noexcept;
+#endif
 
 // This is a local storage admission guard, not a consensus serialization.
 // It prevents an operator from accidentally replaying one network's journal
