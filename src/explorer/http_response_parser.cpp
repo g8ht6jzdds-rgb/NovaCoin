@@ -77,4 +77,26 @@ ParseRpcSnapshotHttpResponse(const std::string_view response,
     return response.substr(body_offset, *length);
 }
 
+std::optional<std::string_view> ExtractRpcSnapshotHex(const std::string_view body,
+                                                      const std::size_t max_body_bytes) noexcept
+{
+    constexpr std::string_view kPrefix{"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{"};
+    constexpr std::string_view kEncoding{"\"encoding\":\"nova-snapshot-v1\""};
+    constexpr std::string_view kData{"\"data\":\""};
+    if (body.size() > max_body_bytes || !body.starts_with(kPrefix) ||
+        body.find(kEncoding) == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto start = body.find(kData);
+    if (start == std::string_view::npos) {
+        return std::nullopt;
+    }
+    const auto data_start = start + kData.size();
+    const auto data_end = body.find('\"', data_start);
+    if (data_end == std::string_view::npos || body.substr(data_end) != "\"}}") {
+        return std::nullopt;
+    }
+    return body.substr(data_start, data_end - data_start);
+}
+
 } // namespace nova::explorer::detail

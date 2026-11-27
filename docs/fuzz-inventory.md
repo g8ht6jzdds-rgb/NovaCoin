@@ -14,13 +14,13 @@ exit code, crashes/sanitizer findings and measured coverage when available.
 | DER/signature/public-key input | fuzz_script_signature | Cryptographic correctness and script authorization require independent vectors |
 | Compact target | fuzz_compact_target | Signed/overflow/nonminimal/PoW-limit boundaries |
 | Address/explorer request input | fuzz_address_parser | Does not automatically cover JSON-RPC or full HTTP grammar |
-| Explorer authenticated RPC HTTP response framing | fuzz_explorer_http_response | Bounded to the configured 32 MiB snapshot-response maximum; RPC JSON/body decoding and other service HTTP parsers remain separate |
+| Explorer authenticated RPC HTTP framing and fixed snapshot JSON envelope | fuzz_explorer_http_response; fuzz_explorer_snapshot_json | Each target is bounded to the configured 32 MiB snapshot-response maximum; hex decoding, binary snapshot semantics and other service HTTP parsers remain separate |
 | Peer discovery | fuzz_peer_discovery | Queue/backoff/capacity state controls |
 | Synchronization/admitted headers | fuzz_sync_admission | Transactional saturation/reconciliation |
 | Body request retry state | fuzz_body_request_recovery | Budget/expiry/allocation failure controls |
 | Bootstrap file reader | fuzz_bootstrap_reader | Byte cap not a time bound for arbitrary blocking streams |
 | Offline journal/identity/replay | fuzz_offline_inspection | Canonical/corruption/report/resource/state immutability |
-| RPC JSON/HTTP, encrypted wallet file, supporting-service HTTP/config parsers | PARTIAL TARGET MAPPING | RPC request framing and explorer response framing have direct bounded targets; RPC JSON semantics, wallet persistence/recovery and faucet HTTP/config parsers remain separately incomplete. |
+| RPC JSON/HTTP, encrypted wallet file, supporting-service HTTP/config parsers | PARTIAL TARGET MAPPING | RPC request framing and explorer response framing/envelope extraction have direct bounded targets; RPC request JSON semantics, snapshot hex/binary validation, wallet persistence/recovery and faucet HTTP/config parsers remain separately incomplete. |
 
 Use bounded smoke runs with fixed seed and input/RSS limits to validate targets;
 real coverage-based campaigns require independently reviewed duration/corpora and

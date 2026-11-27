@@ -251,26 +251,6 @@ class Socket final
     return std::string{*body};
 }
 
-[[nodiscard]] std::optional<std::string_view> SnapshotHex(const std::string_view body) noexcept
-{
-    constexpr std::string_view kEncoding{"\"encoding\":\"nova-snapshot-v1\""};
-    constexpr std::string_view kData{"\"data\":\""};
-    if (!body.starts_with("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{") ||
-        body.find(kEncoding) == std::string_view::npos) {
-        return std::nullopt;
-    }
-    const auto start = body.find(kData);
-    if (start == std::string_view::npos) {
-        return std::nullopt;
-    }
-    const auto data_start = start + kData.size();
-    const auto data_end = body.find('"', data_start);
-    if (data_end == std::string_view::npos || body.substr(data_end) != "\"}}") {
-        return std::nullopt;
-    }
-    return body.substr(data_start, data_end - data_start);
-}
-
 } // namespace
 
 AuthenticatedRpcSnapshotSource::AuthenticatedRpcSnapshotSource(RpcSnapshotConfig config) noexcept
@@ -296,7 +276,10 @@ AuthenticatedRpcSnapshotSource::Create(RpcSnapshotConfig config) noexcept
 std::optional<ExplorerSnapshot> AuthenticatedRpcSnapshotSource::ReadSnapshot() const noexcept
 {
     const auto response = RequestSnapshot(config_);
-    const auto encoded = response.has_value() ? SnapshotHex(*response) : std::nullopt;
+    const auto encoded = response.has_value()
+                             ? detail::ExtractRpcSnapshotHex(*response,
+                                                             config_.max_response_bytes)
+                             : std::nullopt;
     const auto bytes =
         encoded.has_value() ? DecodeHex(*encoded, config_.max_response_bytes) : std::nullopt;
     if (!bytes.has_value()) {

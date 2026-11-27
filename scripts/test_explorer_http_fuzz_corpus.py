@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the bounded explorer HTTP response fuzz corpus and SHA-256 manifest."""
+"""Verify a bounded explorer parser fuzz corpus and SHA-256 manifest."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def main() -> int:
         digest = hashlib.sha256(actual[name].read_bytes()).hexdigest()
         if digest != expected[name]:
             return fail(f"SHA-256 mismatch: {name}")
-    print(f"verified {len(expected)} explorer HTTP response seed files")
+    print(f"verified {len(expected)} explorer parser seed files")
     return 0
 
 
