@@ -118,9 +118,9 @@ struct SyntheticFixture final {
     SyntheticFixture(chain::ChainStateParams parameters_value, chain::ChainAnchor anchor_value,
                      primitives::Transaction genesis_value, chain::UTXOKey key_value,
                      crypto::PrivateKey signing_key_value, crypto::PublicKey public_key_value)
-        : parameters(std::move(parameters_value)), anchor(std::move(anchor_value)),
-          genesis(std::move(genesis_value)), key(std::move(key_value)),
-          signing_key(std::move(signing_key_value)), public_key(std::move(public_key_value))
+        : parameters(std::move(parameters_value)), anchor(anchor_value),
+          genesis(std::move(genesis_value)), key(key_value),
+          signing_key(std::move(signing_key_value)), public_key(public_key_value)
     {
     }
 
