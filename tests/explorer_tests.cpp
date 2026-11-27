@@ -47,10 +47,12 @@ using nova::primitives::Transaction;
 
 std::vector<std::uint8_t> P2pkhScript(const std::uint8_t value)
 {
-    std::vector<std::uint8_t> script{0x76U, 0xA9U, 0x14U};
-    script.insert(script.end(), 20U, value);
-    script.push_back(0x88U);
-    script.push_back(0xACU);
+    std::vector<std::uint8_t> script(25U, value);
+    script[0] = 0x76U;
+    script[1] = 0xA9U;
+    script[2] = 0x14U;
+    script[23] = 0x88U;
+    script[24] = 0xACU;
     return script;
 }
 
