@@ -63,15 +63,13 @@ TEST(ExplorerHttpResponseParser, EnforcesProductionResponseBoundary)
     const auto header_size = response.size();
     response.append(body_size, 'x');
     ASSERT_EQ(response.size(), kExplorerRpcSnapshotMaxResponseBytes);
-    const auto body = ParseRpcSnapshotHttpResponse(
-        response, kExplorerRpcSnapshotMaxResponseBytes);
+    const auto body = ParseRpcSnapshotHttpResponse(response, kExplorerRpcSnapshotMaxResponseBytes);
     ASSERT_TRUE(body.has_value());
     EXPECT_EQ(body->size(), kExplorerRpcSnapshotMaxResponseBytes - header_size);
 
     response.push_back('x');
-    EXPECT_FALSE(ParseRpcSnapshotHttpResponse(
-                     response, kExplorerRpcSnapshotMaxResponseBytes)
-                     .has_value());
+    EXPECT_FALSE(
+        ParseRpcSnapshotHttpResponse(response, kExplorerRpcSnapshotMaxResponseBytes).has_value());
 }
 
 } // namespace
