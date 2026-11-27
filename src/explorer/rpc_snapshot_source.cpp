@@ -277,8 +277,7 @@ std::optional<ExplorerSnapshot> AuthenticatedRpcSnapshotSource::ReadSnapshot() c
 {
     const auto response = RequestSnapshot(config_);
     const auto encoded = response.has_value()
-                             ? detail::ExtractRpcSnapshotHex(*response,
-                                                             config_.max_response_bytes)
+                             ? detail::ExtractRpcSnapshotHex(*response, config_.max_response_bytes)
                              : std::nullopt;
     const auto bytes =
         encoded.has_value() ? DecodeHex(*encoded, config_.max_response_bytes) : std::nullopt;

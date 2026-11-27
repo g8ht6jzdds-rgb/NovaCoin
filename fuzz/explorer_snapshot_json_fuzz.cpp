@@ -8,8 +8,7 @@
 namespace
 {
 
-constexpr std::size_t kMaxInputBytes =
-    nova::explorer::detail::kExplorerRpcSnapshotMaxResponseBytes;
+constexpr std::size_t kMaxInputBytes = nova::explorer::detail::kExplorerRpcSnapshotMaxResponseBytes;
 
 } // namespace
 

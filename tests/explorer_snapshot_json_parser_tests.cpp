@@ -13,8 +13,7 @@ namespace
 
 constexpr std::size_t kSmallLimit = 128U;
 constexpr std::string_view kPrefix{"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{"};
-constexpr std::string_view kFields{
-    "\"encoding\":\"nova-snapshot-v1\",\"data\":\"0102\"}}"};
+constexpr std::string_view kFields{"\"encoding\":\"nova-snapshot-v1\",\"data\":\"0102\"}}"};
 
 TEST(ExplorerSnapshotJsonParser, ExtractsBoundedHexView)
 {
