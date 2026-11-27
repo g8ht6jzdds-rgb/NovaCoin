@@ -57,8 +57,9 @@ namespace
 
 } // namespace
 
-std::optional<std::string_view> ParseRpcSnapshotHttpResponse(
-    const std::string_view response, const std::size_t max_response_bytes) noexcept
+std::optional<std::string_view>
+ParseRpcSnapshotHttpResponse(const std::string_view response,
+                             const std::size_t max_response_bytes) noexcept
 {
     if (response.size() > max_response_bytes) {
         return std::nullopt;
