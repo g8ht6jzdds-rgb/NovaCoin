@@ -1,9 +1,9 @@
 #include "explorer/explorer.hpp"
+#include "explorer/http_response_parser.hpp"
 
 #include "primitives/serialization.hpp"
 
 #include <array>
-#include <cctype>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -181,50 +181,6 @@ class Socket final
     }
 }
 
-[[nodiscard]] std::optional<std::size_t> ContentLength(const std::string_view headers) noexcept
-{
-    constexpr std::string_view kName{"content-length:"};
-    std::optional<std::size_t> result;
-    std::size_t position{};
-    while (position < headers.size()) {
-        const auto line_end = headers.find("\r\n", position);
-        const auto end = line_end == std::string_view::npos ? headers.size() : line_end;
-        const auto line = headers.substr(position, end - position);
-        std::string lower;
-        lower.reserve(line.size());
-        for (const auto character : line) {
-            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
-        }
-        if (lower.starts_with(kName)) {
-            if (result.has_value()) {
-                return std::nullopt;
-            }
-            const auto value = std::string_view{lower}.substr(kName.size());
-            std::size_t first{};
-            while (first < value.size() && value[first] == ' ') {
-                ++first;
-            }
-            if (first == value.size()) {
-                return std::nullopt;
-            }
-            std::size_t parsed{};
-            for (const auto character : value.substr(first)) {
-                if (character < '0' || character > '9' ||
-                    parsed > (std::numeric_limits<std::size_t>::max() - 9U) / 10U) {
-                    return std::nullopt;
-                }
-                parsed = parsed * 10U + static_cast<std::size_t>(character - '0');
-            }
-            result = parsed;
-        }
-        if (line_end == std::string_view::npos) {
-            break;
-        }
-        position = line_end + 2U;
-    }
-    return result;
-}
-
 [[nodiscard]] std::optional<std::string> RequestSnapshot(const RpcSnapshotConfig& config) noexcept
 {
 #ifdef _WIN32
@@ -288,17 +244,11 @@ class Socket final
         }
         response.append(buffer.data(), static_cast<std::size_t>(received));
     }
-    const auto headers_end = response.find("\r\n\r\n");
-    if (headers_end == std::string::npos || !response.starts_with("HTTP/1.1 200 ")) {
+    const auto body = detail::ParseRpcSnapshotHttpResponse(response, config.max_response_bytes);
+    if (!body.has_value()) {
         return std::nullopt;
     }
-    const auto length = ContentLength(std::string_view{response}.substr(0U, headers_end));
-    const auto body_offset = headers_end + 4U;
-    if (!length.has_value() || *length > config.max_response_bytes ||
-        *length != response.size() - body_offset) {
-        return std::nullopt;
-    }
-    return response.substr(body_offset);
+    return std::string{*body};
 }
 
 [[nodiscard]] std::optional<std::string_view> SnapshotHex(const std::string_view body) noexcept
