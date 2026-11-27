@@ -83,7 +83,7 @@ add_test(NAME nova.http_fuzz_corpus_manifest
 set_tests_properties(nova.http_fuzz_corpus_manifest PROPERTIES
     TIMEOUT 10 LABELS "fuzz;rpc;parser;manifest")
 add_test(NAME nova.http_request_fuzz_smoke
-    COMMAND $<TARGET_FILE:fuzz_http_request> -seed=20261122 -runs=500 -max_len=8448
+    COMMAND $<TARGET_FILE:fuzz_http_request> -seed=20261127 -runs=500 -max_len=1008192
         -rss_limit_mb=256 -timeout=2 ${CMAKE_SOURCE_DIR}/fuzz/corpus/http_request)
 set_tests_properties(nova.http_request_fuzz_smoke PROPERTIES
     TIMEOUT 30 LABELS "fuzz;rpc;parser;smoke")

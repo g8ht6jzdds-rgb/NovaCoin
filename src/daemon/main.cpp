@@ -3,6 +3,7 @@
 #include "node/network_selection.hpp"
 #include "node/peer_service.hpp"
 #include "node/regtest_node.hpp"
+#include "rpc/http_limits.hpp"
 #include "rpc/rpc.hpp"
 
 #include <algorithm>
@@ -417,11 +418,12 @@ int main(const int argc, char* argv[])
          },
          [&peer_service]() { peer_service->DisconnectPeers(); },
          [&node]() { return node->metrics(); }});
-    auto rpc_server =
-        rpc_service == nullptr
-            ? nullptr
-            : nova::rpc::LoopbackHttpServer::Create(
-                  {"127.0.0.1", *rpc_port, 32U, 8'192U, 1'000'000U, 30U}, *rpc_service);
+    auto rpc_server = rpc_service == nullptr
+                          ? nullptr
+                          : nova::rpc::LoopbackHttpServer::Create(
+                                {"127.0.0.1", *rpc_port, 32U, nova::rpc::kNodeRpcHttpHeaderBytes,
+                                 nova::rpc::kNodeRpcHttpBodyBytes, 30U},
+                                *rpc_service);
     if (rpc_server == nullptr) {
         std::cerr << nova::node::NetworkName(*network) << " node RPC initialization failed\n";
         return 1;

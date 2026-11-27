@@ -1,3 +1,4 @@
+#include "rpc/http_limits.hpp"
 #include "rpc/http_request_parser.hpp"
 
 #include <gtest/gtest.h>
@@ -111,6 +112,47 @@ TEST(RpcHttpParser, AcceptsHeaderAtExactConfiguredBoundary)
     const auto header_bytes = input.size();
     EXPECT_EQ(ParseHttpRequest(input, header_bytes, kBodyLimit, parsed), HttpParseState::kReady);
     EXPECT_TRUE(parsed.body.empty());
+}
+
+TEST(RpcHttpParser, EnforcesNodeConfiguredHeaderBoundary)
+{
+    const std::string prefix = "POST /rpc HTTP/1.1\r\nX: ";
+    const std::string suffix = "\r\nContent-Length: 0\r\n\r\n";
+    ASSERT_LT(prefix.size() + suffix.size(), nova::rpc::kNodeRpcHttpHeaderBytes);
+    const std::string value(nova::rpc::kNodeRpcHttpHeaderBytes - prefix.size() - suffix.size(),
+                            'a');
+    const auto at_limit = prefix + value + suffix;
+    ASSERT_EQ(at_limit.size(), nova::rpc::kNodeRpcHttpHeaderBytes);
+
+    ParsedHttpRequest parsed{};
+    EXPECT_EQ(ParseHttpRequest(at_limit, nova::rpc::kNodeRpcHttpHeaderBytes,
+                               nova::rpc::kNodeRpcHttpBodyBytes, parsed),
+              HttpParseState::kReady);
+
+    const auto over_limit = prefix + value + "a" + suffix;
+    EXPECT_EQ(ParseHttpRequest(over_limit, nova::rpc::kNodeRpcHttpHeaderBytes,
+                               nova::rpc::kNodeRpcHttpBodyBytes, parsed),
+              HttpParseState::kInvalid);
+}
+
+TEST(RpcHttpParser, EnforcesNodeConfiguredBodyBoundary)
+{
+    const std::string at_limit_body(nova::rpc::kNodeRpcHttpBodyBytes, 'b');
+    const auto at_limit =
+        Request("Content-Length: " + std::to_string(at_limit_body.size()), at_limit_body);
+    ParsedHttpRequest parsed{};
+    ASSERT_EQ(ParseHttpRequest(at_limit, nova::rpc::kNodeRpcHttpHeaderBytes,
+                               nova::rpc::kNodeRpcHttpBodyBytes, parsed),
+              HttpParseState::kReady);
+    EXPECT_EQ(parsed.body.size(), nova::rpc::kNodeRpcHttpBodyBytes);
+
+    const std::string over_limit_body(nova::rpc::kNodeRpcHttpBodyBytes + 1U, 'b');
+    const auto over_limit =
+        Request("Content-Length: " + std::to_string(over_limit_body.size()), over_limit_body);
+    EXPECT_EQ(ParseHttpRequest(over_limit, nova::rpc::kNodeRpcHttpHeaderBytes,
+                               nova::rpc::kNodeRpcHttpBodyBytes, parsed),
+              HttpParseState::kInvalid);
+    EXPECT_EQ(parsed.body.size(), nova::rpc::kNodeRpcHttpBodyBytes);
 }
 
 } // namespace
