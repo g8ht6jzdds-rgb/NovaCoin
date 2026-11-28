@@ -75,7 +75,10 @@ void BodyRequestRecovery::Outcome(const net::InventoryMessage& batch,
     else if (retry)
         Increment(counters_.retry_admitted); // admission, never completion
     for (const auto& item : batch.inventory) {
-        auto& entry = entries_.find(item.hash)->second;
+        const auto found = entries_.find(item.hash);
+        if (found == entries_.end())
+            continue;
+        auto& entry = found->second;
         if (retry && entry.failed)
             ++entry.failure_retries;
         entry.last = now;

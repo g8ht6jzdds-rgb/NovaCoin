@@ -153,7 +153,14 @@ bool DirectoryInventory(const int descriptor)
     auto* raw = fdopendir(openat(descriptor, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC));
     if (raw == nullptr)
         return false;
-    std::unique_ptr<DIR, decltype(&closedir)> directory{raw, &closedir};
+    struct DirectoryCloser final {
+        void operator()(DIR* directory) const noexcept
+        {
+            if (directory != nullptr)
+                static_cast<void>(closedir(directory));
+        }
+    };
+    std::unique_ptr<DIR, DirectoryCloser> directory{raw};
     std::size_t count = 0U;
     errno = 0;
     while (const auto* entry = readdir(directory.get())) {

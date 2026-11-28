@@ -3,6 +3,7 @@
 #include "node/body_request_recovery.hpp"
 
 #include <array>
+#include <functional>
 #include <iostream>
 
 namespace
@@ -21,6 +22,7 @@ Hash MakeHash(const std::uint32_t serial)
 
 struct Sink final : Recovery::Sink {
     Error result{Error::kQueueLimit};
+    std::function<void()> on_queue;
     std::optional<Hash> validated;
     bool stale{};
     std::size_t calls{}, count{};
@@ -42,6 +44,9 @@ struct Sink final : Recovery::Sink {
             return Error::kInvalidParameters;
         count = inventory->inventory.size();
         first = inventory->inventory.front().hash;
+        auto callback = std::move(on_queue);
+        if (callback)
+            callback();
         return result;
     }
 };
@@ -85,6 +90,26 @@ TEST(BodyRequestRecovery, FailedEnqueueAdmissionIsNotCompletionAndDisconnectCanc
     recovery.Tick(13U, Peers(), sink);
     EXPECT_EQ(sink.calls, 3U);
     EXPECT_EQ(recovery.size(), 1U);
+}
+
+TEST(BodyRequestRecovery, ReentrantClockRollbackDoesNotDereferenceRemovedBatchEntry)
+{
+    Recovery recovery;
+    Sink sink;
+    bool nested = false;
+    sink.on_queue = [&] {
+        if (nested)
+            return;
+        nested = true;
+        recovery.Submit(8U, Inventory(2U), 1U, sink);
+    };
+
+    recovery.Submit(7U, Inventory(1U), 10U, sink);
+
+    EXPECT_TRUE(nested);
+    ASSERT_EQ(recovery.size(), 1U);
+    EXPECT_EQ(recovery.counters().clock_resets, 1U);
+    EXPECT_EQ(recovery.counters().queue_failures, 2U);
 }
 
 TEST(BodyRequestRecovery, DuplicateOffersDoNotResetBudgetsAndFailuresStop)
