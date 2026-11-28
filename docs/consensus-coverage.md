@@ -28,9 +28,15 @@ missing dedicated coverage and blocks Gate 2. No case is skipped to obtain PASS.
 | C20 MTP/future clock | chain/chainstate.cpp; chain/validation.cpp | `ChainStateSelection.ExtendsAStraightChainByCumulativeWork` | `ChainStateSecurity.RejectsFarFutureHeadersWithoutChangingTheActiveTip` | `MainnetConsensusBoundary.CoversLowerEvenMedianAndFutureBoundaries` |
 | C21 Work/cumulative selection | consensus/pow.cpp; chain/chainstate.cpp | `PowWork.CalculatesExactWorkWithoutFloatingPoint` | `ChainStateSelection.RejectsInvalidCompetingBlocksWithoutChangingActiveState` | `ChainWork.AccumulatesExactRegtestPowLimitWork` |
 | C22 Equal-work tie and Uint512 overflow | chain/chainstate.cpp | `MainnetConsensusBoundary.EqualWorkTieDoesNotDependOnArrivalOrder` | `MainnetConsensusBoundary.ChainworkOverflowLeavesTheAccumulatorUnchanged` | `MainnetConsensusBoundary.ChainworkOverflowLeavesTheAccumulatorUnchanged` |
-| C23 Atomic rollback/deep reorg | chain/chainstate.cpp; chain/utxo.cpp | `MainnetReadiness.ReorganizationsCheckEveryActiveCoinAtDepthsOneTenAndHundred` | `ChainStateSelection.RejectsInvalidCompetingBlocksWithoutChangingActiveState` | `MainnetReadiness.ReorganizationsCheckEveryActiveCoinAtDepthsOneTenAndHundred` |
+| C23 Atomic rollback/deep reorg | chain/chainstate.cpp; chain/utxo.cpp | `MainnetReadiness.ReorganizationsCheckEveryActiveCoinAtDepthsOneTenAndHundred`; `MainnetReadiness.ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndHundred` | `ChainStateSelection.RejectsInvalidCompetingBlocksWithoutChangingActiveState`; `MainnetReadiness.ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndHundred` | `MainnetReadiness.ReorganizationsCheckEveryActiveCoinAtDepthsOneTenAndHundred`; `MainnetReadiness.ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndHundred` |
 | C24 Exact network/genesis commitment | consensus/network_params.cpp | `NetworkParams.CommitsExactTestnetGenesisSerializationEvidence` | `NetworkParams.RejectsAnyTestnetGenesisMutation` | `NetworkParams.RejectsAlteredEnabledNetworkParameters` |
 | C25 Immutable-v0 version policy | primitives/block.cpp; primitives/transaction.cpp; net/p2p.cpp | `VersionPolicy.SerializedVersionsDoNotSelectConsensusRules` | NONE: no alternate rule exists to activate | `VersionPolicy.HeaderVersionsDoNotSelectConsensusRules`; `VersionPolicy.TransportVersionsAboveTheMinimumDoNotSelectConsensusRules` |
+
+PR #71 adds signed-spend coverage to C23 at depths 1, 10, and 100. Its test
+reconstructs the active UTXO projection after each accepted block and checks
+tip, height, cumulative work, and losing/winning outputs; an invalid overpaying
+extension must leave that projection unchanged. This synthetic ChainState
+fixture does not cover wallet-visible state or durable storage recovery.
 
 ## Stable clause-to-triad trace
 
