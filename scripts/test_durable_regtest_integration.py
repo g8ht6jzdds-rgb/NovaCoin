@@ -97,8 +97,8 @@ def send_testnet_block(port_number, block, expect_disconnect=False):
             time.sleep(0.2)
 
 
-def rpc(port_number, method, params=None):
-    connection = http.client.HTTPConnection("127.0.0.1", port_number, timeout=30)
+def rpc(port_number, method, params=None, *, timeout=30):
+    connection = http.client.HTTPConnection("127.0.0.1", port_number, timeout=timeout)
     auth = base64.b64encode(b"novacoin:disposable-rpc-password").decode("ascii")
     request = {"jsonrpc": "2.0", "id": 1, "method": method}
     if params is not None:

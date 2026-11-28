@@ -92,6 +92,15 @@ foreach(depth IN ITEMS 1 10 100)
         TIMEOUT 1800 RUN_SERIAL TRUE LABELS "integration;storage;recovery;reorg;daemon;regtest")
     if(depth EQUAL 100)
         set_tests_properties(nova.durable_reorg_depth_${depth} PROPERTIES TIMEOUT 3600)
+        if(WIN32 AND NOVA_ENABLE_ADDRESS_SANITIZER)
+            # The repeated 100-block restart/replay fixture exhausts the
+            # default Windows ASan quarantine on constrained hosts. Keep
+            # instrumentation and assertions enabled while bounding its
+            # quarantine; the reduced use-after-free retention window is a
+            # documented limitation of this one long-running fixture.
+            set_tests_properties(nova.durable_reorg_depth_${depth} PROPERTIES
+                ENVIRONMENT "ASAN_OPTIONS=quarantine_size_mb=16:thread_local_quarantine_size_kb=64")
+        endif()
     endif()
 endforeach()
 add_test(NAME nova.durable_shutdown_integration

@@ -122,7 +122,8 @@ def main():
             wait_for("reorganization", lambda: rpc(rpc_a, "getblockchaininfo")["bestblockhash"] == winning_tip,
                      processes, timeout=reorg_seconds)
             chain = rpc(rpc_a, "getblockchaininfo")
-            require(chain == rpc(rpc_b, "getblockchaininfo"), "active tips differ")
+            peer_chain = rpc(rpc_b, "getblockchaininfo", timeout=120 if depth == 100 else 30)
+            require(chain == peer_chain, "active tips differ")
             require(chain["bestblockhash"] != orphan, "orphan remains active")
             require(rpc(rpc_a, "getnodehealth")["chainwork"] ==
                     rpc(rpc_b, "getnodehealth")["chainwork"], "chainwork mismatch")

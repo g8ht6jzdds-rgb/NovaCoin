@@ -873,7 +873,7 @@ TEST_F(DurableShutdownTest, WriteAndSyncErrorsRejectWriterIngressWithoutLosingSt
     EXPECT_EQ(current->tip, before->tip);
 }
 
-TEST(DurableStartup, UnknownNetworkRejectsBeforeFilesystemMutation)
+TEST(DurableStartup, NonAdmittedNetworkRejectsBeforeFilesystemMutation)
 {
     struct Cleanup final {
         std::filesystem::path path;
@@ -892,7 +892,7 @@ TEST(DurableStartup, UnknownNetworkRejectsBeforeFilesystemMutation)
     const auto time = std::make_shared<nova::chain::FixedValidationTimeSource>(1'704'067'800U);
     constexpr std::array<std::uint8_t, 1U> passphrase{0x61U};
 
-    for (const auto raw : {3U, 255U}) {
+    for (const auto raw : {static_cast<unsigned>(nova::consensus::NetworkId::kMainnet), 3U, 255U}) {
         SCOPED_TRACE(raw);
         const auto node_directory = root / ("node-" + std::to_string(raw));
         const auto state = nova::node::OpenDurableNodeState(
