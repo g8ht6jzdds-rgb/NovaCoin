@@ -4,7 +4,6 @@
 #include "chain/validation.hpp"
 #include "consensus/network_params.hpp"
 
-#include "consensus/network_params.hpp"
 #include <array>
 #include <cstdint>
 #include <limits>
