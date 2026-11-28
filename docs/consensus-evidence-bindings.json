@@ -92,9 +92,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerFinalityZeroAndThresholdSwitch",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 746,
+            "line": 747,
             "token": "TEST(MainnetConsensusBoundary, OwnerFinalityZeroAndThresholdSwitch)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         },
         "negative": {
@@ -102,9 +102,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerFinalityZeroAndThresholdSwitch",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 746,
+            "line": 747,
             "token": "TEST(MainnetConsensusBoundary, OwnerFinalityZeroAndThresholdSwitch)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         },
         "boundary": {
@@ -112,9 +112,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerFinalityZeroAndThresholdSwitch",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 746,
+            "line": 747,
             "token": "TEST(MainnetConsensusBoundary, OwnerFinalityZeroAndThresholdSwitch)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         }
       },
@@ -208,9 +208,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerCoinbaseHeightSuffixAndSizeBounds",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 769,
+            "line": 770,
             "token": "TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         },
         "negative": {
@@ -218,9 +218,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerCoinbaseHeightSuffixAndSizeBounds",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 769,
+            "line": 770,
             "token": "TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         },
         "boundary": {
@@ -228,9 +228,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerCoinbaseHeightSuffixAndSizeBounds",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 769,
+            "line": 770,
             "token": "TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         }
       },
@@ -463,9 +463,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerFutureClockExactOverflowThreshold",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 816,
+            "line": 862,
             "token": "TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         },
         "negative": {
@@ -473,9 +473,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerFutureClockExactOverflowThreshold",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 816,
+            "line": 862,
             "token": "TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         },
         "boundary": {
@@ -483,9 +483,9 @@
           "assertion": "MainnetConsensusBoundary.OwnerFutureClockExactOverflowThreshold",
           "binding": {
             "path": "tests/validation_tests.cpp",
-            "line": 816,
+            "line": 862,
             "token": "TEST(MainnetConsensusBoundary, OwnerFutureClockExactOverflowThreshold)",
-            "sha256": "1e381b4d3b8bea7705f1737e8ec13b428a16a4917a90bfc956fc75f50e731f5a"
+            "sha256": "1c21f1ad7d8b91e811c42d9a177f9106a29c24d5771bfb41abecce5d9d20bfe1"
           }
         }
       },

@@ -24,6 +24,30 @@ require Clang or GCC.
 GoogleTest supplies the unit-test framework and CTest supplies test execution.
 CTest covers unit, consensus and bounded loopback REGTEST integration fixtures.
 See the retained readiness limitations before making platform or release claims.
+
+All supported REGTEST and TESTNET daemon startup uses the experimental generation
+coordinator. `--durable-regtest` and `--durable-testnet` remain compatible explicit
+selectors; neither is required. `--legacy-regtest` is retired and rejects before
+opening storage. There is no legacy daemon writer fallback. REGTEST P2P and all
+RPC listeners remain IPv4 loopback-only by default; existing TESTNET P2P bind,
+static bootstrap and opt-in DNS settings are supported by the same coordinator.
+This implementation does not authorize public exposure or establish TESTNET
+operational acceptance.
+
+Legacy wallet/journal directories and mixed or ambiguous destinations refuse
+startup. An offline legacy directory can be copied to a **new** destination with
+`--migrate-regtest-from <source>` or `--migrate-testnet-from <source>` on the matching
+network. The source identity, encrypted wallet and block journal must exist and
+match a validated private replay. Active or mixed-generation sources are refused;
+source images are retained. Unpersisted legacy pending transactions cannot be
+reconstructed. Older wallet-only directories require separate recovery rather
+than recreation of a missing journal.
+
+The legacy `RegtestNode` API remains in development/test fixtures and has not
+been converted to the coordinator. It must not be used to claim durable application
+publication. Platform durability and the full recovery acceptance matrix remain
+incomplete; Gate 6 is **FAIL** and MAINNET remains locked.
+
 ## Local C++ dependencies
 
 The project declares its build dependencies in `vcpkg.json`: GoogleTest,

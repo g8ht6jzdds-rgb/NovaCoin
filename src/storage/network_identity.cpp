@@ -5,12 +5,16 @@
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 namespace nova::storage
@@ -39,12 +43,33 @@ void WriteU32(std::array<std::uint8_t, kMarkerSize>& output, const std::size_t o
            (static_cast<std::uint32_t>(input[offset + 3U]) << 24U);
 }
 
-[[nodiscard]] bool IsEmptyDirectory(const std::filesystem::path& directory,
-                                    std::error_code& error) noexcept
+[[nodiscard]] bool IsEmptyDirectory(const std::filesystem::path& directory, std::error_code& error,
+                                    const bool allow_lease) noexcept
 {
     const std::filesystem::directory_iterator end;
-    return std::filesystem::directory_iterator{directory, error} == end && !error;
+    auto it = std::filesystem::directory_iterator{directory, error};
+    if (error || it == end)
+        return !error;
+    if (!allow_lease || it->path().filename() != ".node-lease")
+        return false;
+    const auto status = it->symlink_status(error);
+    if (error || !std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+        return false;
+    it.increment(error);
+    return !error && it == end;
 }
+
+#ifndef _WIN32
+[[nodiscard]] bool SyncPath(const std::filesystem::path& path, const int flags) noexcept
+{
+    const int descriptor = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | flags);
+    if (descriptor < 0)
+        return false;
+    const bool synced = fsync(descriptor) == 0;
+    const bool closed = close(descriptor) == 0;
+    return synced && closed;
+}
+#endif
 
 [[nodiscard]] bool WriteAtomically(const std::filesystem::path& path,
                                    const std::array<std::uint8_t, kMarkerSize>& bytes) noexcept
@@ -60,9 +85,8 @@ void WriteU32(std::array<std::uint8_t, kMarkerSize>& output, const std::size_t o
             }
             output.write(reinterpret_cast<const char*>(bytes.data()),
                          static_cast<std::streamsize>(bytes.size()));
-            output.flush();
+            output.close();
             if (!output.good()) {
-                output.close();
                 std::filesystem::remove(temporary, error);
                 return false;
             }
@@ -84,11 +108,17 @@ void WriteU32(std::array<std::uint8_t, kMarkerSize>& output, const std::size_t o
             return false;
         }
 #else
+        if (!SyncPath(temporary, 0)) {
+            std::filesystem::remove(temporary, error);
+            return false;
+        }
         std::filesystem::rename(temporary, path, error);
         if (error) {
             std::filesystem::remove(temporary, error);
             return false;
         }
+        if (!SyncPath(path.parent_path(), O_DIRECTORY))
+            return false;
 #endif
         return true;
     } catch (...) {
@@ -99,14 +129,39 @@ void WriteU32(std::array<std::uint8_t, kMarkerSize>& output, const std::size_t o
 
 } // namespace
 
+#ifndef _WIN32
+bool SyncDirectoryHierarchy(const std::filesystem::path& path) noexcept
+{
+    try {
+        std::error_code error;
+        auto current = std::filesystem::canonical(path, error);
+        if (error || current.empty())
+            return false;
+        for (;;) {
+            if (!SyncPath(current, O_DIRECTORY))
+                return false;
+            auto parent = current.parent_path();
+            if (parent == current)
+                return true;
+            if (parent.empty())
+                return false;
+            current = std::move(parent);
+        }
+    } catch (...) {
+        return false;
+    }
+}
+#endif
+
 std::filesystem::path
 NetworkIdentityMarkerPath(const std::filesystem::path& data_directory) noexcept
 {
     return data_directory / "network.identity";
 }
 
-NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_directory,
-                                           const consensus::NetworkParams& network) noexcept
+static NetworkIdentityError EnsureNetworkIdentityImpl(const std::filesystem::path& data_directory,
+                                                      const consensus::NetworkParams& network,
+                                                      const bool allow_lease) noexcept
 {
     if (data_directory.empty() ||
         consensus::CheckNetworkParams(network) != consensus::NetworkParamsError::kNone) {
@@ -124,7 +179,7 @@ NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_dir
             return NetworkIdentityError::kFilesystemFailure;
         }
         if (!exists) {
-            if (!IsEmptyDirectory(data_directory, error)) {
+            if (!IsEmptyDirectory(data_directory, error, allow_lease)) {
                 return error ? NetworkIdentityError::kFilesystemFailure
                              : NetworkIdentityError::kLegacyDirectoryWithoutMarker;
             }
@@ -152,10 +207,30 @@ NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_dir
         if (input.gcount() != static_cast<std::streamsize>(encoded.size()) || input.peek() != EOF) {
             return NetworkIdentityError::kMalformedMarker;
         }
-        return ValidateNetworkIdentity(encoded, network);
+        const auto result = ValidateNetworkIdentity(encoded, network);
+#ifndef _WIN32
+        // A valid marker may be visible after an earlier directory barrier failed.
+        if (result == NetworkIdentityError::kNone &&
+            (!SyncPath(path, 0) || !SyncPath(data_directory, O_DIRECTORY)))
+            return NetworkIdentityError::kWriteFailure;
+#endif
+        return result;
     } catch (...) {
         return NetworkIdentityError::kFilesystemFailure;
     }
+}
+
+NetworkIdentityError EnsureNetworkIdentity(const std::filesystem::path& data_directory,
+                                           const consensus::NetworkParams& network) noexcept
+{
+    return EnsureNetworkIdentityImpl(data_directory, network, false);
+}
+
+NetworkIdentityError
+EnsureNetworkIdentityWithLease(const std::filesystem::path& data_directory,
+                               const consensus::NetworkParams& network) noexcept
+{
+    return EnsureNetworkIdentityImpl(data_directory, network, true);
 }
 
 NetworkIdentityError ValidateNetworkIdentity(const std::span<const std::uint8_t> bytes,

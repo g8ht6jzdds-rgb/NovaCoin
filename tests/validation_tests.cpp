@@ -2,6 +2,7 @@
 
 #include "chain/validation.hpp"
 #include "consensus/network_params.hpp"
+#include "node/mining_helpers.hpp"
 
 #include <array>
 #include <cstdint>
@@ -801,6 +802,51 @@ TEST(MainnetConsensusBoundary, OwnerCoinbaseHeightSuffixAndSizeBounds)
         ASSERT_EQ(connected.error, BlockValidationError::kNone);
         ASSERT_TRUE(connected.connected.has_value());
         ASSERT_EQ(DisconnectBlock(*connected.connected, scenario.utxos),
+                  BlockValidationError::kNone);
+        script.front() ^= 1U;
+        ASSERT_TRUE(
+            FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+        EXPECT_EQ(
+            ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos)
+                .error,
+            BlockValidationError::kInvalidCoinbaseHeight);
+        EXPECT_TRUE(scenario.utxos.HaveCoin(scenario.spent_key));
+    }
+}
+
+TEST(BlockValidation, LocalMiningCoinbaseHeightEncodingMatchesValidatorBoundaries)
+{
+    struct Case {
+        std::uint32_t height;
+        std::vector<std::uint8_t> bytes;
+    };
+    const std::vector<Case> cases{
+        {127U, {1U, 0x7FU}},
+        {128U, {2U, 0x80U, 0U}},
+        {32767U, {2U, 0xFFU, 0x7FU}},
+        {32768U, {3U, 0U, 0x80U, 0U}},
+        {65535U, {3U, 0xFFU, 0xFFU, 0U}},
+        {65536U, {3U, 0U, 0U, 1U}},
+        {std::numeric_limits<std::uint32_t>::max(), {5U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0U}}};
+    EXPECT_EQ(nova::node::CoinbaseHeightScript(0U), std::vector<std::uint8_t>{0U});
+    for (const auto& item : cases) {
+        Scenario scenario;
+        PopulateScenario(scenario);
+        scenario.context.height = item.height;
+        const auto subsidy =
+            nova::consensus::GetBlockSubsidy(item.height, scenario.parameters.chain_parameters);
+        ASSERT_TRUE(subsidy.has_value());
+        scenario.block.transactions.front().outputs.front().value = *subsidy + COIN;
+        auto& script = scenario.block.transactions.front().inputs.front().script_sig;
+        script = nova::node::CoinbaseHeightScript(item.height);
+        EXPECT_EQ(script, item.bytes);
+        ASSERT_TRUE(
+            FinalizeBlock(scenario.block, scenario.parameters.block_limits.transaction_limits));
+        const auto accepted =
+            ConnectBlock(scenario.block, scenario.context, scenario.parameters, scenario.utxos);
+        ASSERT_EQ(accepted.error, BlockValidationError::kNone);
+        ASSERT_TRUE(accepted.connected.has_value());
+        ASSERT_EQ(DisconnectBlock(*accepted.connected, scenario.utxos),
                   BlockValidationError::kNone);
         script.front() ^= 1U;
         ASSERT_TRUE(

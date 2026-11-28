@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "node/peer_service.hpp"
+#include "node/staging_workspace.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -43,7 +44,7 @@ class PeerServiceTestAccess final
                 state.mode == Fault::Mode::kLoseFirst) {
                 state.admitted = true;
                 try {
-                    const auto& network = state.service->node_.network_params();
+                    const auto& network = state.service->node_->network_params();
                     const net::P2PParams params{network.network_magic,
                                                 network.minimum_peer_protocol_version,
                                                 network.block_limits.max_serialized_size,
@@ -121,6 +122,11 @@ struct Fixture final {
         ("nova-pending-loopback-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::unique_ptr<nova::node::RegtestNode> node;
+    std::unique_ptr<nova::node::DurableSession> durable;
+    std::unique_ptr<nova::node::StagingWorkspace> workspace;
+    std::shared_ptr<const nova::chain::ValidationTimeSource> time_source;
+    std::vector<std::uint8_t> passphrase{'t', 'e', 's', 't'};
+    std::uint32_t stage_number{};
     std::unique_ptr<nova::node::PeerService> service;
     std::unique_ptr<nova::net::TcpTransport> peer;
     std::uint64_t id{};
@@ -137,6 +143,8 @@ struct Fixture final {
     {
         peer.reset();
         service.reset();
+        durable.reset();
+        workspace.reset();
         node.reset();
         std::error_code error;
         // Only this fixture's newly-created, fixed-prefix temp directory.
@@ -144,7 +152,7 @@ struct Fixture final {
             std::filesystem::remove_all(root, error);
     }
 
-    void Open()
+    void Open(const bool use_durable = false)
     {
         if (!std::filesystem::create_directory(root))
             throw std::runtime_error{"unique fixture directory unavailable"};
@@ -162,7 +170,34 @@ struct Fixture final {
                                                 nova::consensus::NetworkId::kRegtest});
         if (!node)
             throw std::runtime_error{"node fixture failed"};
-        service = nova::node::PeerService::Create(*node);
+        if (use_durable) {
+            if (!std::filesystem::create_directory(root / "store"))
+                throw std::runtime_error{"generation directory failed"};
+            nova::storage::GenerationError error{};
+            auto store = nova::storage::GenerationStore::Open(root / "store", network, error);
+            time_source = std::make_shared<nova::chain::SystemValidationTimeSource>();
+            durable = nova::node::DurableSession::CreateFresh(
+                std::move(store), nova::consensus::NetworkId::kRegtest, time_source,
+                network.genesis_block.header.time + 10'000U, passphrase, root / "initial");
+            if (!durable)
+                throw std::runtime_error{"durable session failed"};
+            if (!std::filesystem::create_directory(root / "staging"))
+                throw std::runtime_error{"staging directory failed"};
+            workspace = nova::node::StagingWorkspace::Open(root / "staging");
+            if (!workspace)
+                throw std::runtime_error{"staging workspace failed"};
+            service = nova::node::PeerService::Create(
+                *durable, [this]() -> std::optional<nova::node::DurablePeerWriteContext> {
+                    const auto path = workspace->Next();
+                    if (!path)
+                        return std::nullopt;
+                    ++stage_number;
+                    return nova::node::DurablePeerWriteContext{
+                        *path, passphrase, [this, path] { return workspace->Cleanup(*path); }};
+                });
+        } else {
+            service = nova::node::PeerService::Create(*node);
+        }
         if (!service || service->Listen({"127.0.0.1", port}) != TransportError::kNone)
             throw std::runtime_error{"loopback listen failed"};
         const nova::net::P2PParams protocol{network.network_magic,
@@ -270,6 +305,99 @@ struct Fixture final {
         return block;
     }
 };
+
+TEST(DurablePeerLoopback, HeaderBodyAndRestartUseDurableOwner)
+{
+    Fixture fixture;
+    fixture.Open(true);
+    ASSERT_TRUE(fixture.Until([&] { return fixture.handshake; }));
+    const auto block = fixture.Make(1U);
+    const auto hash = nova::primitives::ComputeBlockHash(block.header);
+    ASSERT_TRUE(hash.has_value());
+    ASSERT_TRUE(fixture.Send({Command::kHeaders, nova::net::HeadersMessage{{block.header}}}));
+    ASSERT_TRUE(fixture.Until([&] { return fixture.requested.contains(Hex(*hash)); }));
+    ASSERT_TRUE(fixture.Send({Command::kBlock, block}));
+    ASSERT_TRUE(fixture.Until([&] {
+        const auto view = fixture.durable->View();
+        return view.has_value() && view->height == 1U;
+    }));
+    ASSERT_TRUE(fixture.durable->View().has_value());
+    EXPECT_EQ(fixture.durable->View()->tip, *hash);
+    EXPECT_TRUE(std::filesystem::is_empty(fixture.root / "staging"));
+    fixture.peer.reset();
+    fixture.service.reset();
+    fixture.durable.reset();
+    nova::storage::GenerationError error{};
+    auto store =
+        nova::storage::GenerationStore::Open(fixture.root / "store", fixture.network, error);
+    ASSERT_NE(store, nullptr);
+    fixture.durable = nova::node::DurableSession::Open(
+        std::move(store), nova::consensus::NetworkId::kRegtest, fixture.time_source,
+        fixture.network.genesis_block.header.time + 10'000U, fixture.passphrase);
+    ASSERT_NE(fixture.durable, nullptr);
+    ASSERT_TRUE(fixture.durable->View().has_value());
+    EXPECT_EQ(fixture.durable->View()->height, 1U);
+    EXPECT_EQ(fixture.durable->View()->tip, *hash);
+    EXPECT_TRUE(fixture.durable->FindBlock(*hash).block.has_value());
+}
+
+TEST(DurablePeerLoopback, TransactionStorageFailureDoesNotPublishAndRetrySurvivesRestart)
+{
+    Fixture fixture;
+    fixture.Open(true);
+    ASSERT_TRUE(fixture.Until([&] { return fixture.handshake; }));
+    const auto mined = fixture.node->MineBlock();
+    ASSERT_EQ(mined.error, nova::node::RegtestNodeError::kNone);
+    ASSERT_TRUE(mined.block_hash.has_value());
+    const auto index = fixture.node->chain_state().GetBlockIndex(*mined.block_hash);
+    ASSERT_TRUE(index.has_value());
+    ASSERT_TRUE(index->block.has_value());
+    ASSERT_TRUE(fixture.Send({Command::kBlock, *index->block}));
+    ASSERT_TRUE(fixture.Until([&] {
+        const auto view = fixture.durable->View();
+        return view.has_value() && view->height == 1U;
+    }));
+    const auto address =
+        fixture.durable->GenerateAddress(fixture.root / "receive-address", fixture.passphrase);
+    ASSERT_EQ(address.error, nova::node::DurableSessionError::kNone);
+    ASSERT_TRUE(address.address.has_value());
+    const std::array<nova::wallet::Recipient, 1U> recipients{
+        nova::wallet::Recipient{address.address->public_key_hash, 1}};
+    const auto payment = fixture.node->CreateAndBroadcast(recipients);
+    ASSERT_EQ(payment.error, nova::node::RegtestNodeError::kNone);
+    ASSERT_TRUE(payment.transaction.has_value());
+    const auto txid = payment.transaction->TxId(fixture.network.block_limits.transaction_limits);
+    ASSERT_TRUE(txid.has_value());
+    fixture.durable->FailStoreForTesting(nova::storage::GenerationFailurePoint::kAfterMempool);
+    ASSERT_TRUE(fixture.Send({Command::kTx, *payment.transaction}));
+    ASSERT_TRUE(fixture.Until([&] { return fixture.stage_number >= 2U; }));
+    ASSERT_TRUE(fixture.durable->View().has_value());
+    EXPECT_EQ(fixture.durable->View()->mempool_size, 0U);
+    EXPECT_FALSE(fixture.durable->FindMempoolEntry(*txid).entry.has_value());
+    EXPECT_TRUE(std::filesystem::is_empty(fixture.root / "staging"));
+    ASSERT_TRUE(fixture.Send({Command::kTx, *payment.transaction}));
+    ASSERT_TRUE(fixture.Until([&] {
+        const auto view = fixture.durable->View();
+        return view.has_value() && view->mempool_size == 1U;
+    }));
+    EXPECT_TRUE(fixture.durable->FindMempoolEntry(*txid).entry.has_value());
+    EXPECT_TRUE(std::filesystem::is_empty(fixture.root / "staging"));
+    fixture.peer.reset();
+    fixture.service.reset();
+    fixture.durable.reset();
+    nova::storage::GenerationError error{};
+    auto store =
+        nova::storage::GenerationStore::Open(fixture.root / "store", fixture.network, error);
+    ASSERT_NE(store, nullptr);
+    fixture.durable = nova::node::DurableSession::Open(
+        std::move(store), nova::consensus::NetworkId::kRegtest, fixture.time_source,
+        fixture.network.genesis_block.header.time + 10'000U, fixture.passphrase);
+    ASSERT_NE(fixture.durable, nullptr);
+    ASSERT_TRUE(fixture.durable->View().has_value());
+    EXPECT_EQ(fixture.durable->View()->tip, *mined.block_hash);
+    EXPECT_EQ(fixture.durable->View()->mempool_size, 1U);
+    EXPECT_TRUE(fixture.durable->FindMempoolEntry(*txid).entry.has_value());
+}
 
 TEST(PendingHeaderLoopback, RuntimeQuotaRejectsOverflowThenRecoversThroughPeerService)
 {

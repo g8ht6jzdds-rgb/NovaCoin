@@ -11,6 +11,17 @@ namespace nova::node
 namespace
 {
 
+template <typename Object, typename Limits>
+[[nodiscard]] bool SameSerialized(const Object& left, const Object& right,
+                                  const Limits& limits) noexcept
+{
+    primitives::BinaryWriter left_bytes;
+    primitives::BinaryWriter right_bytes;
+    return left.Serialize(left_bytes, limits) && right.Serialize(right_bytes, limits) &&
+           std::equal(left_bytes.bytes().begin(), left_bytes.bytes().end(),
+                      right_bytes.bytes().begin(), right_bytes.bytes().end());
+}
+
 [[nodiscard]] std::uint64_t NowSeconds() noexcept
 {
     const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
@@ -27,19 +38,6 @@ namespace
     return value <= 0 ? 0U : static_cast<std::uint64_t>(value);
 }
 
-[[nodiscard]] chain::BlockValidationParams
-ValidationParams(const consensus::NetworkParams& network) noexcept
-{
-    return {network.block_limits,
-            network.pow,
-            network.monetary,
-            0U,
-            500'000'000U,
-            std::numeric_limits<std::uint32_t>::max(),
-            1U,
-            600U};
-}
-
 [[nodiscard]] net::P2PParams P2PParams(const consensus::NetworkParams& network) noexcept
 {
     return {network.network_magic,
@@ -54,17 +52,9 @@ ValidationParams(const consensus::NetworkParams& network) noexcept
             network.block_limits};
 }
 
-} // namespace
-
-PeerService::PeerService(RegtestNode& node, std::unique_ptr<net::TcpTransport> transport,
-                         Synchronizer synchronizer) noexcept
-    : node_(node), transport_(std::move(transport)), synchronizer_(std::move(synchronizer))
+[[nodiscard]] std::unique_ptr<net::TcpTransport>
+MakeTransport(const consensus::NetworkParams& network) noexcept
 {
-}
-
-std::unique_ptr<PeerService> PeerService::Create(RegtestNode& node) noexcept
-{
-    const auto& network = node.network_params();
     const auto now = NowSeconds();
     net::ConnectionParams connection{P2PParams(network),
                                      {network.protocol_version, 0U, static_cast<std::int64_t>(now),
@@ -75,17 +65,76 @@ std::unique_ptr<PeerService> PeerService::Create(RegtestNode& node) noexcept
                                      1'000U,
                                      1'000U,
                                      8U * 1024U * 1024U};
-    auto transport =
-        net::TcpTransport::Create({{connection, 64U, 16U}, 64U * 1024U, 8U * 1024U * 1024U, 16U});
-    if (transport == nullptr) {
+    return net::TcpTransport::Create(
+        {{connection, 64U, 16U}, 64U * 1024U, 8U * 1024U * 1024U, 16U});
+}
+
+} // namespace
+
+std::unique_ptr<net::TcpTransport>
+PeerService::MakeLegacyTestTransport(const consensus::NetworkParams& network) noexcept
+{
+    return MakeTransport(network);
+}
+
+PeerService::PeerService(
+    DurableSession& session, std::unique_ptr<net::TcpTransport> transport,
+    std::function<DurableSessionResult(const primitives::Block&)> accept_block,
+    std::function<DurableSessionError(const primitives::Transaction&)> accept_transaction) noexcept
+    : network_(&session.network_params()), durable_(&session),
+      durable_block_(std::move(accept_block)), durable_transaction_(std::move(accept_transaction)),
+      transport_(std::move(transport))
+{
+}
+
+std::unique_ptr<PeerService>
+PeerService::Create(DurableSession& session,
+                    std::function<std::optional<DurablePeerWriteContext>()> write_context) noexcept
+{
+    if (!write_context)
+        return nullptr;
+    try {
+        auto provider = std::make_shared<decltype(write_context)>(std::move(write_context));
+        return Create(
+            session,
+            [&session, provider](const primitives::Block& block) {
+                const auto context = (*provider)();
+                if (!context)
+                    return DurableSessionResult{};
+                const auto result =
+                    session.ApplyBlock(block, {}, context->staging_directory, context->passphrase);
+                if (context->cleanup && !context->cleanup())
+                    return DurableSessionResult{};
+                return result;
+            },
+            [&session, provider](const primitives::Transaction& transaction) {
+                const auto context = (*provider)();
+                if (!context)
+                    return DurableSessionError::kUnavailable;
+                const auto result = session.AdmitTransaction(
+                    transaction, context->staging_directory, context->passphrase);
+                if (context->cleanup && !context->cleanup())
+                    return DurableSessionError::kUnavailable;
+                return result;
+            });
+    } catch (...) {
         return nullptr;
     }
+}
+
+std::unique_ptr<PeerService> PeerService::Create(
+    DurableSession& session,
+    std::function<DurableSessionResult(const primitives::Block&)> accept_block,
+    std::function<DurableSessionError(const primitives::Transaction&)> accept_transaction) noexcept
+{
+    if (!accept_block || !accept_transaction || !session.View())
+        return nullptr;
+    auto transport = MakeTransport(session.network_params());
+    if (!transport)
+        return nullptr;
     try {
-        return std::unique_ptr<PeerService>{
-            new PeerService{node, std::move(transport),
-                            Synchronizer{{ValidationParams(network), network.difficulty,
-                                          network.protocol_version, 2U, 2'000U, 4'096U},
-                                         node.chain_state()}}};
+        return std::unique_ptr<PeerService>{new PeerService{
+            session, std::move(transport), std::move(accept_block), std::move(accept_transaction)}};
     } catch (...) {
         return nullptr;
     }
@@ -93,17 +142,23 @@ std::unique_ptr<PeerService> PeerService::Create(RegtestNode& node) noexcept
 
 net::TransportError PeerService::Listen(const net::TcpEndpoint& endpoint) noexcept
 {
+    if (durable_ != nullptr && (durable_failed_ || !durable_->View()))
+        return net::TransportError::kInvalidParameters;
     return transport_->Listen(endpoint);
 }
 
 std::optional<std::uint64_t> PeerService::Dial(const net::TcpEndpoint& endpoint,
                                                const std::uint64_t now) noexcept
 {
+    if (durable_ != nullptr && (durable_failed_ || !durable_->View()))
+        return std::nullopt;
     return transport_->Dial(endpoint, now);
 }
 
 net::TransportResult PeerService::Pump(const std::uint64_t now) noexcept
 {
+    if (durable_ != nullptr && (durable_failed_ || !durable_->View()))
+        return {net::TransportError::kSocketFailure, 0U, 0U};
     recovery_now_ = clock_override_ == nullptr ? DiscoverySeconds() : *clock_override_;
     if (discovery_ != nullptr) {
         try {
@@ -121,7 +176,8 @@ net::TransportResult PeerService::Pump(const std::uint64_t now) noexcept
         now, [this](const std::uint64_t peer_id, const net::FramedMessage& message) {
             Handle(peer_id, message);
         });
-    node_.RecordTransportResult(result);
+    if (legacy_)
+        legacy_->record_transport(result);
     if (recovery_.size() != 0U) {
         const auto recovery_peers = transport_->Peers();
         if (recovery_peers.has_value())
@@ -163,7 +219,8 @@ net::TransportResult PeerService::Pump(const std::uint64_t now) noexcept
 
 bool PeerService::EnableDiscovery(const std::uint16_t listening_port) noexcept
 {
-    if (node_.network_params().id != consensus::NetworkId::kRegtest || listening_port == 0U) {
+    const auto& network = *network_;
+    if (network.id != consensus::NetworkId::kRegtest || listening_port == 0U) {
         return false;
     }
     try {
@@ -184,11 +241,22 @@ net::PeerManager& PeerService::peer_manager() noexcept
 }
 void PeerService::RelayBlock(const primitives::Block& block) noexcept
 {
+    if (durable_ != nullptr && (durable_failed_ || !durable_->View()))
+        return;
     transport_->Broadcast({net::Command::kBlock, block});
 }
 void PeerService::RelayTransaction(const primitives::Transaction& transaction) noexcept
 {
+    if (durable_ != nullptr && (durable_failed_ || !durable_->View()))
+        return;
     transport_->Broadcast({net::Command::kTx, transaction});
+}
+void PeerService::QuarantineDurable() noexcept
+{
+    if (durable_ != nullptr) {
+        durable_failed_ = true;
+        recovery_.SnapshotUnavailable();
+    }
 }
 void PeerService::DisconnectPeers() noexcept
 {
@@ -208,10 +276,23 @@ const BodyRequestRecovery::Counters& PeerService::recovery_counters() const noex
 
 BodyRequestRecovery::BodyState PeerService::State(const crypto::Hash256& hash) const noexcept
 {
-    if (node_.chain_state().GetHeaderMetadata(hash).has_value())
-        return BodyRequestRecovery::BodyState::kValidated;
-    return synchronizer_.MissingBody(hash) ? BodyRequestRecovery::BodyState::kPending
-                                           : BodyRequestRecovery::BodyState::kStale;
+    if (durable_ != nullptr) {
+        if (durable_failed_)
+            return BodyRequestRecovery::BodyState::kUnavailable;
+        const auto state = durable_->HeaderBodyState(hash);
+        if (!state)
+            return BodyRequestRecovery::BodyState::kUnavailable;
+        switch (*state) {
+        case DurableBodyState::kValidated:
+            return BodyRequestRecovery::BodyState::kValidated;
+        case DurableBodyState::kPending:
+            return BodyRequestRecovery::BodyState::kPending;
+        case DurableBodyState::kStale:
+            return BodyRequestRecovery::BodyState::kStale;
+        }
+        return BodyRequestRecovery::BodyState::kUnavailable;
+    }
+    return legacy_->body_state(hash);
 }
 
 net::TransportError PeerService::QueueBody(const std::uint64_t peer,
@@ -235,6 +316,10 @@ void PeerService::QueueRequests(const std::uint64_t peer_id, const SyncResult& r
 
 void PeerService::Handle(const std::uint64_t peer_id, const net::FramedMessage& message) noexcept
 {
+    if (durable_ != nullptr && (durable_failed_ || !durable_->View())) {
+        recovery_.SnapshotUnavailable();
+        return;
+    }
     if (discovery_ != nullptr &&
         (message.command == net::Command::kAddr || message.command == net::Command::kGetAddr)) {
         try {
@@ -267,17 +352,49 @@ void PeerService::Handle(const std::uint64_t peer_id, const net::FramedMessage& 
                 discovery_.reset();
             }
         }
-        QueueRequests(peer_id, synchronizer_.Start());
+        QueueRequests(peer_id,
+                      durable_ != nullptr ? durable_->StartHeaderSync() : legacy_->start());
         return;
     }
     if (message.command == net::Command::kHeaders) {
-        QueueRequests(peer_id, synchronizer_.Handle(message));
+        QueueRequests(peer_id, durable_ != nullptr ? durable_->HandleSyncHeaders(message)
+                                                   : legacy_->headers(message));
         return;
     }
     if (message.command == net::Command::kBlock) {
         const auto* block = std::get_if<primitives::Block>(&message.message);
+        if (durable_ != nullptr) {
+            if (block == nullptr) {
+                transport_->ClosePeer(peer_id);
+                return;
+            }
+            try {
+                const auto result = durable_block_(*block);
+                if (result.error == DurableSessionError::kNone) {
+                    const auto hash = primitives::ComputeBlockHash(block->header);
+                    const auto accepted = hash ? durable_->FindBlock(*hash) : DurableBlockLookup{};
+                    if (!accepted.available || !accepted.block || !accepted.block->block ||
+                        !SameSerialized(*block, *accepted.block->block,
+                                        durable_->network_params().block_limits)) {
+                        durable_failed_ = true;
+                        recovery_.SnapshotUnavailable();
+                        return;
+                    }
+                    transport_->Broadcast(message, peer_id);
+                } else if (result.error == DurableSessionError::kUnavailable) {
+                    durable_failed_ = true;
+                    recovery_.SnapshotUnavailable();
+                } else if (result.error == DurableSessionError::kChain &&
+                           result.chain_result.error != chain::ChainError::kDuplicateBlock)
+                    transport_->ClosePeer(peer_id);
+            } catch (...) {
+                durable_failed_ = true;
+                recovery_.SnapshotUnavailable();
+            }
+            return;
+        }
         const auto result =
-            block == nullptr ? RegtestNodeError::kBlockRejected : node_.ReceiveBlock(*block);
+            block == nullptr ? RegtestNodeError::kBlockRejected : legacy_->block(*block);
         if (result != RegtestNodeError::kNone && result != RegtestNodeError::kDuplicateBlock) {
             transport_->ClosePeer(peer_id);
         } else if (result == RegtestNodeError::kNone) {
@@ -287,33 +404,28 @@ void PeerService::Handle(const std::uint64_t peer_id, const net::FramedMessage& 
     }
     if (message.command == net::Command::kGetHeaders) {
         const auto* request = std::get_if<net::GetHeadersMessage>(&message.message);
-        const auto active = node_.chain_state().GetActiveBlockIndexes();
-        if (request == nullptr || !active.has_value() || request->locator_hashes.size() > 101U) {
+        if (durable_ != nullptr) {
+            if (request == nullptr || request->locator_hashes.size() > 101U) {
+                transport_->ClosePeer(peer_id);
+                return;
+            }
+            const auto response = durable_->HeadersForLocator(*request);
+            if (response)
+                static_cast<void>(transport_->Queue(peer_id, {net::Command::kHeaders, *response}));
+            else
+                recovery_.SnapshotUnavailable();
+            return;
+        }
+        if (request == nullptr || request->locator_hashes.size() > 101U) {
             transport_->ClosePeer(peer_id);
             return;
         }
-        std::size_t start{};
-        for (const auto& locator : request->locator_hashes) {
-            const auto found =
-                std::find_if(active->begin(), active->end(),
-                             [&locator](const auto& index) { return index.hash == locator; });
-            if (found != active->end()) {
-                start = static_cast<std::size_t>(std::distance(active->begin(), found)) + 1U;
-                break;
-            }
+        const auto response = legacy_->headers_for_locator(*request);
+        if (!response) {
+            transport_->ClosePeer(peer_id);
+            return;
         }
-        net::HeadersMessage response;
-        for (std::size_t index = start; index < active->size() && response.headers.size() < 2'000U;
-             ++index) {
-            const auto& entry = active->at(index);
-            if (!entry.block.has_value())
-                continue;
-            response.headers.push_back(entry.block->header);
-            if (entry.hash == request->stop_hash)
-                break;
-        }
-        static_cast<void>(
-            transport_->Queue(peer_id, {net::Command::kHeaders, std::move(response)}));
+        static_cast<void>(transport_->Queue(peer_id, {net::Command::kHeaders, *response}));
         return;
     }
     if (message.command == net::Command::kGetData) {
@@ -323,7 +435,16 @@ void PeerService::Handle(const std::uint64_t peer_id, const net::FramedMessage& 
             return;
         }
         for (const auto& item : request->inventory) {
-            const auto index = node_.chain_state().GetBlockIndex(item.hash);
+            if (item.type != 2U)
+                continue;
+            const auto lookup = durable_ != nullptr
+                                    ? durable_->FindBlock(item.hash)
+                                    : DurableBlockLookup{true, legacy_->find_block(item.hash)};
+            if (!lookup.available) {
+                recovery_.SnapshotUnavailable();
+                return;
+            }
+            const auto& index = lookup.block;
             if (item.type == 2U && index.has_value() && index->block.has_value()) {
                 static_cast<void>(
                     transport_->Queue(peer_id, {net::Command::kBlock, *index->block}));
@@ -342,8 +463,40 @@ void PeerService::Handle(const std::uint64_t peer_id, const net::FramedMessage& 
     }
     if (message.command == net::Command::kTx) {
         const auto* transaction = std::get_if<primitives::Transaction>(&message.message);
+        if (durable_ != nullptr) {
+            if (transaction == nullptr) {
+                transport_->ClosePeer(peer_id);
+                return;
+            }
+            try {
+                const auto result = durable_transaction_(*transaction);
+                if (result == DurableSessionError::kNone) {
+                    const auto id = transaction->TxId(
+                        durable_->network_params().block_limits.transaction_limits);
+                    const auto accepted =
+                        id ? durable_->FindMempoolEntry(*id) : DurableMempoolLookup{};
+                    if (!accepted.available || !accepted.entry ||
+                        !SameSerialized(
+                            *transaction, accepted.entry->transaction,
+                            durable_->network_params().block_limits.transaction_limits)) {
+                        durable_failed_ = true;
+                        recovery_.SnapshotUnavailable();
+                        return;
+                    }
+                    transport_->Broadcast(message, peer_id);
+                } else if (result == DurableSessionError::kUnavailable) {
+                    durable_failed_ = true;
+                    recovery_.SnapshotUnavailable();
+                } else if (result == DurableSessionError::kMempool)
+                    transport_->ClosePeer(peer_id);
+            } catch (...) {
+                durable_failed_ = true;
+                recovery_.SnapshotUnavailable();
+            }
+            return;
+        }
         if (transaction == nullptr ||
-            node_.ReceiveTransaction(*transaction) != RegtestNodeError::kNone) {
+            legacy_->transaction(*transaction) != RegtestNodeError::kNone) {
             transport_->ClosePeer(peer_id);
         } else {
             transport_->Broadcast(message, peer_id);

@@ -6,6 +6,7 @@
 #include "net/transport.hpp"
 #include "observability/metrics.hpp"
 #include "storage/block_journal.hpp"
+#include "storage/generation_store.hpp"
 #include "wallet/wallet.hpp"
 
 #include <chrono>
@@ -86,6 +87,9 @@ class RegtestNode final
     [[nodiscard]] chain::Mempool& mempool() noexcept;
     [[nodiscard]] wallet::Wallet& wallet() noexcept;
     [[nodiscard]] const wallet::Wallet& wallet() const noexcept;
+    // Node-owned address publication: persist the prepared key before exposing it.
+    // Legacy storage still lacks joint chain/wallet/mempool generations.
+    [[nodiscard]] std::optional<wallet::WalletAddress> GenerateReceivingAddress() noexcept;
     [[nodiscard]] bool PersistWalletForRpc() const noexcept;
     [[nodiscard]] const RegtestNodeConfig& config() const noexcept;
     [[nodiscard]] const consensus::NetworkParams& network_params() const noexcept;
@@ -93,19 +97,24 @@ class RegtestNode final
     void RecordTransportResult(const net::TransportResult& result) noexcept;
 
   private:
-    RegtestNode(RegtestNodeConfig config, storage::BlockJournal journal,
-                std::unique_ptr<chain::UTXOSet> utxos, std::unique_ptr<chain::ChainState> chain,
-                std::unique_ptr<chain::Mempool> mempool, std::unique_ptr<wallet::Wallet> wallet,
+    RegtestNode(std::unique_ptr<storage::GenerationStore> directory_lease, RegtestNodeConfig config,
+                storage::BlockJournal journal, std::unique_ptr<chain::UTXOSet> utxos,
+                std::unique_ptr<chain::ChainState> chain, std::unique_ptr<chain::Mempool> mempool,
+                std::unique_ptr<wallet::Wallet> wallet,
                 std::shared_ptr<const chain::ValidationTimeSource> validation_time_source,
                 const consensus::NetworkParams& network) noexcept;
 
     [[nodiscard]] RegtestNodeError AcceptBlock(const primitives::Block& block,
                                                bool persist) noexcept;
+    [[nodiscard]] RegtestNodeError AdmitTransaction(const primitives::Transaction& transaction,
+                                                    bool observe_wallet) noexcept;
     [[nodiscard]] bool PersistWallet() const noexcept;
     void RelayBlock(const primitives::Block& block) noexcept;
     void RelayTransaction(const primitives::Transaction& transaction) noexcept;
     void Log(const std::string& message) const noexcept;
 
+    // Declared first so the lease outlives all state using this directory.
+    std::unique_ptr<storage::GenerationStore> directory_lease_;
     RegtestNodeConfig config_;
     storage::BlockJournal journal_;
     std::unique_ptr<chain::UTXOSet> utxos_;

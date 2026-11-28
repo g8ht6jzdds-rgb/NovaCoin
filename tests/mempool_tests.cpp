@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include "chain/mempool.hpp"
+#include "chain/mempool_image.hpp"
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <new>
 #include <type_traits>
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -12,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -156,6 +159,107 @@ nova::crypto::Hash256 TransactionId(const Transaction& transaction, const Mempoo
         transaction.TxId(scenario.parameters.validation.block_limits.transaction_limits);
     EXPECT_TRUE(transaction_id.has_value());
     return transaction_id.value_or(nova::crypto::Hash256{});
+}
+
+TEST(MempoolImage, CanonicalDependencyOrderRoundTripsAndRejectsMalformedImages)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    const auto parent = MakeSpend(scenario, AddSpendableCoin(scenario, 0xC1U), 49LL * COIN);
+    ASSERT_TRUE(parent.has_value());
+    const auto child =
+        MakeSpend(scenario, UTXOKey{TransactionId(*parent, scenario), 0U}, 48LL * COIN);
+    const auto independent = MakeSpend(scenario, AddSpendableCoin(scenario, 0xC2U), 49LL * COIN);
+    ASSERT_TRUE(child.has_value());
+    ASSERT_TRUE(independent.has_value());
+    using nova::chain::MempoolImageRecord;
+    const std::array first{MempoolImageRecord{*child, 3U}, MempoolImageRecord{*parent, 2U},
+                           MempoolImageRecord{*independent, 1U}};
+    const std::array second{first[2], first[1], first[0]};
+    const auto encoded = nova::chain::EncodeMempoolImage(first, scenario.parameters);
+    ASSERT_TRUE(encoded.has_value());
+    EXPECT_EQ(encoded, nova::chain::EncodeMempoolImage(second, scenario.parameters));
+    const auto decoded = nova::chain::DecodeMempoolImage(*encoded, scenario.parameters);
+    ASSERT_TRUE(decoded.has_value());
+    ASSERT_EQ(decoded->size(), 3U);
+    const auto parent_id = TransactionId(*parent, scenario);
+    const auto child_id = TransactionId(*child, scenario);
+    std::size_t parent_index = decoded->size();
+    std::size_t child_index = decoded->size();
+    for (std::size_t i = 0; i < decoded->size(); ++i) {
+        const auto id = TransactionId((*decoded)[i].transaction, scenario);
+        if (id == parent_id) {
+            parent_index = i;
+            EXPECT_EQ((*decoded)[i].time_received, 2U);
+        }
+        if (id == child_id)
+            child_index = i;
+    }
+    EXPECT_LT(parent_index, child_index);
+    auto view = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(view.has_value());
+    auto replay =
+        nova::chain::ReplayMempoolImage(*encoded, scenario.parameters, scenario.context, *view);
+    ASSERT_NE(replay, nullptr);
+    EXPECT_EQ(replay->size(), 3U);
+    ASSERT_TRUE(replay->GetEntry(parent_id).has_value());
+    EXPECT_EQ(replay->GetEntry(parent_id)->time_received, 2U);
+    EXPECT_EQ(scenario.utxos.size(), 2U);
+    auto invalid = *parent;
+    invalid.outputs.front().value -= 1;
+    const std::array rejected{MempoolImageRecord{invalid, 2U}};
+    const auto invalid_image = nova::chain::EncodeMempoolImage(rejected, scenario.parameters);
+    ASSERT_TRUE(invalid_image.has_value());
+    EXPECT_EQ(nova::chain::ReplayMempoolImage(*invalid_image, scenario.parameters, scenario.context,
+                                              *view),
+              nullptr);
+    EXPECT_EQ(scenario.utxos.size(), 2U);
+    for (std::size_t n = 0; n < encoded->size(); ++n)
+        EXPECT_FALSE(
+            nova::chain::DecodeMempoolImage(std::span{*encoded}.first(n), scenario.parameters));
+    auto trailing = *encoded;
+    trailing.push_back(0U);
+    EXPECT_FALSE(nova::chain::DecodeMempoolImage(trailing, scenario.parameters));
+    auto noncanonical = *encoded;
+    noncanonical[8] = 0xFDU;
+    noncanonical.insert(noncanonical.begin() + 9, {3U, 0U});
+    EXPECT_FALSE(nova::chain::DecodeMempoolImage(noncanonical, scenario.parameters));
+    const std::array duplicate{first[1], first[1]};
+    EXPECT_FALSE(nova::chain::EncodeMempoolImage(duplicate, scenario.parameters));
+    auto limited = scenario.parameters;
+    limited.max_transactions = 2U;
+    EXPECT_FALSE(nova::chain::DecodeMempoolImage(*encoded, limited));
+    limited = scenario.parameters;
+    limited.max_total_serialized_size = 1U;
+    EXPECT_FALSE(nova::chain::DecodeMempoolImage(*encoded, limited));
+    limited.max_total_serialized_size = std::numeric_limits<std::uint64_t>::max();
+    EXPECT_FALSE(nova::chain::MempoolImageMaxSize(limited).has_value());
+    EXPECT_FALSE(nova::chain::DecodeMempoolImage(*encoded, limited));
+    const auto empty = nova::chain::EncodeMempoolImage({}, scenario.parameters);
+    ASSERT_TRUE(empty.has_value());
+    const std::string image_bytes(encoded->begin(), encoded->end());
+    std::istringstream good_stream{image_bytes};
+    EXPECT_EQ(nova::chain::ReadMempoolImage(good_stream, scenario.parameters), encoded);
+    std::istringstream bad_stream{image_bytes + "x"};
+    EXPECT_FALSE(nova::chain::ReadMempoolImage(bad_stream, scenario.parameters));
+    auto small = scenario.parameters;
+    small.max_total_serialized_size = 0U;
+    small.max_transactions = 0U;
+    std::istringstream oversized{image_bytes};
+    EXPECT_FALSE(nova::chain::ReadMempoolImage(oversized, small));
+    EXPECT_EQ(*empty, (std::vector<std::uint8_t>{'N', 'V', 'M', 'P', 'O', 'O', 'L', '1', 0U}));
+    EXPECT_TRUE(nova::chain::DecodeMempoolImage(*empty, scenario.parameters)->empty());
+    const auto parent_image =
+        nova::chain::EncodeMempoolImage(std::span{&first[1], 1U}, scenario.parameters);
+    const auto child_image =
+        nova::chain::EncodeMempoolImage(std::span{&first[0], 1U}, scenario.parameters);
+    ASSERT_TRUE(parent_image.has_value());
+    ASSERT_TRUE(child_image.has_value());
+    auto reversed = *empty;
+    reversed.back() = 2U;
+    reversed.insert(reversed.end(), child_image->begin() + 9, child_image->end());
+    reversed.insert(reversed.end(), parent_image->begin() + 9, parent_image->end());
+    EXPECT_FALSE(nova::chain::DecodeMempoolImage(reversed, scenario.parameters));
 }
 
 TEST(Mempool, AcceptsValidTransactionsAndTracksCheckedMetadata)
@@ -333,6 +437,78 @@ TEST(Mempool, HandlesDeterministicStressAdmissionAndFeeRateSelection)
     ASSERT_EQ(selected.error, MempoolError::kNone);
     ASSERT_EQ(selected.transactions.size(), 32U);
     EXPECT_EQ(TransactionId(selected.transactions.front(), scenario), *highest_fee_id);
+}
+
+TEST(MempoolPrepared, AdmissionPreservesResultsAndDoesNotPublishUntilCommit)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    scenario.parameters.max_transactions = 1U;
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto input = AddSpendableCoin(scenario, 0xB1U);
+    const auto second_input = AddSpendableCoin(scenario, 0xB2U);
+    const auto spend = MakeSpend(scenario, input, 49LL * COIN);
+    const auto second = MakeSpend(scenario, second_input, 49LL * COIN);
+    const auto missing = MakeSpend(scenario, UTXOKey{HashWithLastByte(0xB3U), 0U}, 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    ASSERT_TRUE(second.has_value());
+    ASSERT_TRUE(missing.has_value());
+    auto view = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(view.has_value());
+    auto rejected = pool->PrepareAdmission(*missing, scenario.context, *view, 1U);
+    EXPECT_EQ(rejected.result.error, MempoolError::kMissingInput);
+    EXPECT_EQ(rejected.prepared, nullptr);
+    pool->SetFailurePointForTesting(Mempool::FailurePoint::kBeforePreparedCopy);
+    auto failed = pool->PrepareAdmission(*spend, scenario.context, *view, 2U);
+    EXPECT_EQ(failed.result.error, MempoolError::kAllocationFailure);
+    EXPECT_EQ(failed.prepared, nullptr);
+    auto prepared = pool->PrepareAdmission(*spend, scenario.context, *view, 3U);
+    ASSERT_EQ(prepared.result.error, MempoolError::kNone);
+    ASSERT_NE(prepared.prepared, nullptr);
+    const auto image =
+        nova::chain::EncodePreparedMempoolImage(*pool, *prepared.prepared, scenario.parameters);
+    ASSERT_TRUE(image.has_value());
+    const auto decoded = nova::chain::DecodeMempoolImage(*image, scenario.parameters);
+    ASSERT_TRUE(decoded.has_value());
+    ASSERT_EQ(decoded->size(), 1U);
+    EXPECT_EQ(decoded->front().time_received, 3U);
+    EXPECT_EQ(pool->size(), 0U);
+    EXPECT_TRUE(view->HaveCoin(input));
+    ASSERT_TRUE(pool->CommitPrepared(*prepared.prepared));
+    EXPECT_FALSE(
+        nova::chain::EncodePreparedMempoolImage(*pool, *prepared.prepared, scenario.parameters));
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_EQ(pool->PrepareAdmission(*spend, scenario.context, *view, 4U).result.error,
+              MempoolError::kDuplicateTransaction);
+    const auto direct = pool->AcceptToMempool(*second, scenario.context, *view, 5U);
+    const auto capacity = pool->PrepareAdmission(*second, scenario.context, *view, 5U);
+    EXPECT_NE(direct.error, MempoolError::kNone);
+    EXPECT_EQ(capacity.result.error, direct.error);
+    EXPECT_EQ(capacity.prepared, nullptr);
+    EXPECT_EQ(pool->size(), 1U);
+    EXPECT_TRUE(view->HaveCoin(input));
+    EXPECT_TRUE(view->HaveCoin(second_input));
+}
+
+TEST(MempoolPrepared, AdmissionRejectsStaleMempoolAndUtxoViews)
+{
+    MempoolScenario scenario;
+    PopulateScenario(scenario);
+    auto pool = CreateMempool(scenario);
+    ASSERT_NE(pool, nullptr);
+    const auto spend = MakeSpend(scenario, AddSpendableCoin(scenario, 0xB4U), 49LL * COIN);
+    ASSERT_TRUE(spend.has_value());
+    auto view = scenario.utxos.BeginBatch();
+    ASSERT_TRUE(view.has_value());
+    auto prepared = pool->PrepareAdmission(*spend, scenario.context, *view, 1U);
+    ASSERT_NE(prepared.prepared, nullptr);
+    ASSERT_EQ(pool->RemoveForBlock({}).error, MempoolError::kNone);
+    EXPECT_FALSE(pool->CommitPrepared(*prepared.prepared));
+    AddSpendableCoin(scenario, 0xB5U);
+    EXPECT_EQ(pool->PrepareAdmission(*spend, scenario.context, *view, 1U).result.error,
+              MempoolError::kStateUnavailable);
+    EXPECT_EQ(pool->size(), 0U);
 }
 
 TEST(MempoolPrepared, ReconcilesCandidateCoinsPrivatelyAndPreservesDependencies)

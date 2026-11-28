@@ -635,9 +635,88 @@ std::optional<WalletAddress> Wallet::GenerateReceivingAddress() noexcept
     return key_store_.GenerateReceivingAddress();
 }
 
+std::unique_ptr<Wallet::PreparedAddress> Wallet::PrepareReceivingAddress() const noexcept
+{
+    if (!CanAdvanceRevision() ||
+        key_store_.next_index_ == std::numeric_limits<std::uint32_t>::max() ||
+        key_store_.keys_.size() >= kMaximumWalletKeys) {
+        return nullptr;
+    }
+    try {
+        auto pair = crypto::KeyPair::Generate();
+        if (!pair.has_value())
+            return nullptr;
+        const auto public_key = pair->public_key();
+        const auto hash = crypto::Hash160Digest(public_key.SerializeCompressed());
+        if (!hash.has_value() || key_store_.keys_.contains(*hash))
+            return nullptr;
+        auto prepared = std::unique_ptr<PreparedAddress>{new PreparedAddress{}};
+        prepared->owner_ = identity_;
+        prepared->revision_ = revision_;
+        prepared->identity_ = std::make_shared<const std::uint8_t>(0U);
+        prepared->address_ = WalletAddress{*hash, public_key, key_store_.next_index_};
+        if (!prepared->key_
+                 .emplace(*hash, KeyStore::StoredKey{std::move(*pair), key_store_.next_index_})
+                 .second)
+            return nullptr;
+        return prepared;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+bool Wallet::CanCommitPreparedAddress(const PreparedAddress& prepared) const noexcept
+{
+    const auto owner = prepared.owner_.lock();
+    return owner != nullptr && owner == identity_ && !prepared.consumed_ &&
+           prepared.revision_ == revision_ && CanAdvanceRevision() &&
+           prepared.address_.has_value() && prepared.key_.size() == 1U &&
+           key_store_.next_index_ != std::numeric_limits<std::uint32_t>::max() &&
+           prepared.address_->index == key_store_.next_index_ &&
+           !key_store_.keys_.contains(prepared.address_->public_key_hash);
+}
+
+bool Wallet::CommitPreparedAddress(PreparedAddress& prepared) noexcept
+{
+    if (!CanCommitPreparedAddress(prepared))
+        return false;
+    try {
+        auto node = prepared.key_.extract(prepared.key_.begin());
+        auto result = key_store_.keys_.insert(std::move(node));
+        if (!result.inserted) {
+            prepared.key_.insert(std::move(result.node));
+            return false;
+        }
+        ++key_store_.next_index_;
+        prepared.consumed_ = true;
+        ++revision_;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool Wallet::SavePreparedAddressEncrypted(
+    const PreparedAddress& prepared, const std::filesystem::path& path,
+    const std::span<const std::uint8_t> passphrase) const noexcept
+{
+    return CanCommitPreparedAddress(prepared) &&
+           SaveCoinsEncrypted(coins_, path, passphrase, &prepared);
+}
+
 std::vector<WalletAddress> Wallet::ListReceivingAddresses() const
 {
     return key_store_.ReceivingAddresses();
+}
+
+std::size_t Wallet::ReceivingAddressCount() const noexcept
+{
+    return key_store_.keys_.size();
+}
+
+std::uint32_t Wallet::NextReceivingAddressIndex() const noexcept
+{
+    return key_store_.next_index_;
 }
 
 std::vector<WalletUTXO> Wallet::ListUTXOs() const
@@ -684,6 +763,20 @@ const primitives::TransactionLimits& Wallet::transaction_limits() const noexcept
     return parameters_.transaction_limits;
 }
 
+Wallet::StateCheckpoint Wallet::CaptureCheckpoint() const noexcept
+{
+    StateCheckpoint result;
+    result.owner_ = identity_;
+    result.revision_ = revision_;
+    return result;
+}
+
+bool Wallet::IsCheckpointCurrent(const StateCheckpoint& checkpoint) const noexcept
+{
+    const auto owner = checkpoint.owner_.lock();
+    return owner != nullptr && owner == identity_ && checkpoint.revision_ == revision_;
+}
+
 bool Wallet::CanAdvanceRevision() const noexcept
 {
     return revision_ != std::numeric_limits<std::uint64_t>::max();
@@ -700,7 +793,8 @@ bool Wallet::ObserveTransaction(const primitives::Transaction& transaction,
 }
 
 bool Wallet::ObserveInto(Coins& coins, const primitives::Transaction& transaction,
-                         const std::uint32_t height, const bool confirmed) const noexcept
+                         const std::uint32_t height, const bool confirmed,
+                         const crypto::Hash160* candidate) const noexcept
 {
     if (primitives::CheckTransactionStructure(transaction, parameters_.transaction_limits) !=
         primitives::TransactionStructureError::kNone) {
@@ -727,7 +821,10 @@ bool Wallet::ObserveInto(Coins& coins, const primitives::Transaction& transactio
         }
         for (std::size_t index = 0U; index < transaction.outputs.size(); ++index) {
             const auto& output = transaction.outputs[index];
-            if (!key_store_.OwnsScript(output.script_pubkey)) {
+            const auto candidate_hash =
+                candidate != nullptr ? ParseP2pkhScript(output.script_pubkey) : std::nullopt;
+            if (!key_store_.OwnsScript(output.script_pubkey) &&
+                !(candidate_hash.has_value() && *candidate_hash == *candidate)) {
                 continue;
             }
             const chain::UTXOKey key{*transaction_id, static_cast<std::uint32_t>(index)};
@@ -748,22 +845,172 @@ bool Wallet::IsCurrent(const PreparedConfirmedState& prepared) const noexcept
            prepared.revision_ == revision_ && CanAdvanceRevision();
 }
 
-std::unique_ptr<Wallet::PreparedConfirmedState>
-Wallet::PrepareConfirmedState(const std::span<const chain::BlockIndex> active) const noexcept
+bool Wallet::CanCommitPrepared(const PreparedConfirmedState& prepared) const noexcept
 {
-    if (!CanAdvanceRevision()) {
+    return IsCurrent(prepared) && !prepared.requires_address_;
+}
+
+bool Wallet::ConfirmedStateMatches(const PreparedConfirmedState& prepared) const noexcept
+{
+    if (!CanCommitPrepared(prepared))
+        return false;
+    auto matches = [](const Coins& left, const Coins& right) {
+        for (const auto& [key, coin] : left) {
+            if (!coin.confirmed)
+                continue;
+            const auto found = right.find(key);
+            if (found == right.end() || !found->second.confirmed ||
+                coin.output.value != found->second.output.value ||
+                coin.output.script_pubkey != found->second.output.script_pubkey ||
+                coin.height != found->second.height ||
+                coin.is_coinbase != found->second.is_coinbase)
+                return false;
+        }
+        return true;
+    };
+    return matches(coins_, prepared.coins_) && matches(prepared.coins_, coins_);
+}
+
+std::unique_ptr<Wallet::PreparedConfirmedState>
+Wallet::PrepareObservedState(const primitives::Transaction& transaction, const std::uint32_t height,
+                             const bool confirmed) const noexcept
+{
+    if (!CanAdvanceRevision())
+        return nullptr;
+    try {
+        auto prepared = std::unique_ptr<PreparedConfirmedState>{new PreparedConfirmedState{}};
+        prepared->owner_ = identity_;
+        prepared->revision_ = revision_;
+        prepared->coins_ = coins_;
+        if (!ObserveInto(prepared->coins_, transaction, height, confirmed))
+            return nullptr;
+        return prepared;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+bool Wallet::MatchesFullReplay(const std::span<const chain::BlockIndex> active,
+                               const std::span<const primitives::Transaction> pending,
+                               const bool allow_empty_anchor) const noexcept
+{
+    return MatchesCoinsReplay(coins_, active, pending, allow_empty_anchor, nullptr);
+}
+
+bool Wallet::MatchesPreparedReplay(const PreparedConfirmedState& prepared,
+                                   const std::span<const chain::BlockIndex> active,
+                                   const std::span<const primitives::Transaction> pending,
+                                   const bool allow_empty_anchor,
+                                   const PreparedAddress* address) const noexcept
+{
+    if (address == nullptr ? !CanCommitPrepared(prepared)
+                           : !CanCommitPreparedJoint(prepared, *address))
+        return false;
+    return MatchesCoinsReplay(prepared.coins_, active, pending, allow_empty_anchor,
+                              address == nullptr ? nullptr : &address->address_->public_key_hash);
+}
+
+bool Wallet::MatchesCoinsReplay(const Coins& coins, const std::span<const chain::BlockIndex> active,
+                                const std::span<const primitives::Transaction> pending,
+                                const bool allow_empty_anchor,
+                                const crypto::Hash160* candidate) const noexcept
+{
+    try {
+        Coins replayed;
+        for (std::size_t i = 0; i < active.size(); ++i) {
+            const auto& index = active[i];
+            if (!index.block.has_value()) {
+                if (allow_empty_anchor && i == 0U && index.height == 0U)
+                    continue;
+                return false;
+            }
+            for (const auto& transaction : index.block->transactions)
+                if (!ObserveInto(replayed, transaction, index.height, true, candidate))
+                    return false;
+        }
+        for (const auto& transaction : pending)
+            if (!ObserveInto(replayed, transaction, 0U, false, candidate))
+                return false;
+        if (replayed.size() != coins.size())
+            return false;
+        for (const auto& [key, expected] : replayed) {
+            const auto found = coins.find(key);
+            if (found == coins.end())
+                return false;
+            const auto& actual = found->second;
+            if (actual.output.value != expected.output.value ||
+                actual.output.script_pubkey != expected.output.script_pubkey ||
+                actual.height != expected.height || actual.is_coinbase != expected.is_coinbase ||
+                actual.confirmed != expected.confirmed ||
+                actual.pending_spend != expected.pending_spend)
+                return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::unique_ptr<Wallet::PreparedConfirmedState>
+Wallet::PrepareReplayState(const std::span<const chain::BlockIndex> active,
+                           const std::span<const primitives::Transaction> pending,
+                           const bool allow_empty_anchor,
+                           const PreparedAddress* address) const noexcept
+{
+    if (!CanAdvanceRevision() || (address != nullptr && !CanCommitPreparedAddress(*address)))
+        return nullptr;
+    try {
+        auto prepared = std::unique_ptr<PreparedConfirmedState>{new PreparedConfirmedState{}};
+        prepared->owner_ = identity_;
+        prepared->revision_ = revision_;
+        if (address != nullptr) {
+            prepared->requires_address_ = true;
+            prepared->address_identity_ = address->identity_;
+        }
+        const auto* candidate = address == nullptr ? nullptr : &address->address_->public_key_hash;
+        for (std::size_t i = 0; i < active.size(); ++i) {
+            const auto& index = active[i];
+            if (!index.block.has_value()) {
+                if (allow_empty_anchor && i == 0U && index.height == 0U)
+                    continue;
+                return nullptr;
+            }
+            for (const auto& transaction : index.block->transactions)
+                if (!ObserveInto(prepared->coins_, transaction, index.height, true, candidate))
+                    return nullptr;
+        }
+        for (const auto& transaction : pending)
+            if (!ObserveInto(prepared->coins_, transaction, 0U, false, candidate))
+                return nullptr;
+        return prepared;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+std::unique_ptr<Wallet::PreparedConfirmedState>
+Wallet::PrepareConfirmedState(const std::span<const chain::BlockIndex> active,
+                              const PreparedAddress* address) const noexcept
+{
+    if (!CanAdvanceRevision() || (address != nullptr && !CanCommitPreparedAddress(*address))) {
         return nullptr;
     }
     try {
         auto prepared = std::unique_ptr<PreparedConfirmedState>{new PreparedConfirmedState{}};
         prepared->owner_ = identity_;
         prepared->revision_ = revision_;
+        if (address != nullptr) {
+            prepared->requires_address_ = true;
+            prepared->address_identity_ = address->identity_;
+        }
         prepared->coins_ = coins_;
         ClearConfirmedCoins(prepared->coins_);
         for (const auto& index : active) {
             if (index.block.has_value()) {
                 for (const auto& transaction : index.block->transactions) {
-                    if (!ObserveInto(prepared->coins_, transaction, index.height, true)) {
+                    if (!ObserveInto(prepared->coins_, transaction, index.height, true,
+                                     address != nullptr ? &address->address_->public_key_hash
+                                                        : nullptr)) {
                         return nullptr;
                     }
                 }
@@ -777,7 +1024,7 @@ Wallet::PrepareConfirmedState(const std::span<const chain::BlockIndex> active) c
 
 bool Wallet::CommitPreparedState(PreparedConfirmedState& prepared) noexcept
 {
-    if (!IsCurrent(prepared)) {
+    if (!CanCommitPrepared(prepared)) {
         return false;
     }
     static_assert(noexcept(coins_.swap(prepared.coins_)));
@@ -791,7 +1038,34 @@ bool Wallet::SavePreparedEncrypted(const PreparedConfirmedState& prepared,
                                    const std::filesystem::path& path,
                                    const std::span<const std::uint8_t> passphrase) const noexcept
 {
-    return IsCurrent(prepared) && SaveCoinsEncrypted(prepared.coins_, path, passphrase);
+    return CanCommitPrepared(prepared) && SaveCoinsEncrypted(prepared.coins_, path, passphrase);
+}
+
+bool Wallet::CanCommitPreparedJoint(const PreparedConfirmedState& state,
+                                    const PreparedAddress& address) const noexcept
+{
+    const auto bound = state.address_identity_.lock();
+    return state.requires_address_ && bound != nullptr && bound == address.identity_ &&
+           IsCurrent(state) && CanCommitPreparedAddress(address);
+}
+
+bool Wallet::CommitPreparedJoint(PreparedConfirmedState& state, PreparedAddress& address) noexcept
+{
+    if (!CanCommitPreparedJoint(state, address) || !CommitPreparedAddress(address))
+        return false;
+    static_assert(noexcept(coins_.swap(state.coins_)));
+    coins_.swap(state.coins_);
+    state.consumed_ = true;
+    return true;
+}
+
+bool Wallet::SavePreparedJointEncrypted(
+    const PreparedConfirmedState& state, const PreparedAddress& address,
+    const std::filesystem::path& path,
+    const std::span<const std::uint8_t> passphrase) const noexcept
+{
+    return CanCommitPreparedJoint(state, address) &&
+           SaveCoinsEncrypted(state.coins_, path, passphrase, &address);
 }
 
 bool Wallet::RebuildConfirmedState(const std::span<const chain::BlockIndex> active) noexcept
@@ -927,28 +1201,47 @@ bool Wallet::SaveEncrypted(const std::filesystem::path& path,
     return SaveCoinsEncrypted(coins_, path, passphrase);
 }
 
+bool Wallet::VerifyEncryptedImage(const std::filesystem::path& path,
+                                  const std::span<const std::uint8_t> passphrase) const noexcept
+{
+    return LoadEncrypted(parameters_, path, passphrase) != nullptr;
+}
+
 bool Wallet::SaveCoinsEncrypted(const Coins& coins, const std::filesystem::path& path,
-                                const std::span<const std::uint8_t> passphrase) const noexcept
+                                const std::span<const std::uint8_t> passphrase,
+                                const PreparedAddress* address) const noexcept
 {
     if (path.empty() || passphrase.empty() || !IsValidParameters(parameters_) ||
-        key_store_.keys_.size() > kMaximumWalletKeys || coins.size() > kMaximumWalletCoins) {
+        key_store_.keys_.size() > kMaximumWalletKeys || coins.size() > kMaximumWalletCoins ||
+        (address != nullptr &&
+         (!CanCommitPreparedAddress(*address) || key_store_.keys_.size() >= kMaximumWalletKeys))) {
         return false;
     }
     try {
         constexpr auto maximum_plaintext = static_cast<std::size_t>(kMaximumWalletFileSize);
         detail::SensitiveWriter plaintext{maximum_plaintext};
         if (!plaintext.WriteU32(kWalletFileVersion) ||
-            !plaintext.WriteU32(key_store_.next_index_) ||
-            !plaintext.WriteCompactSize(key_store_.keys_.size())) {
+            !plaintext.WriteU32(key_store_.next_index_ + (address != nullptr ? 1U : 0U)) ||
+            !plaintext.WriteCompactSize(key_store_.keys_.size() + (address != nullptr ? 1U : 0U))) {
             return false;
         }
+        const auto write_key = [&plaintext](const KeyStore::StoredKey& stored_key) {
+            return plaintext.WriteFixedBytes(stored_key.key_pair.private_key().bytes()) &&
+                   plaintext.WriteU32(stored_key.index);
+        };
+        bool pending = address != nullptr;
         for (const auto& [key_hash, stored_key] : key_store_.keys_) {
-            (void)key_hash;
-            if (!plaintext.WriteFixedBytes(stored_key.key_pair.private_key().bytes()) ||
-                !plaintext.WriteU32(stored_key.index)) {
+            if (pending && address->key_.begin()->first < key_hash) {
+                if (!write_key(address->key_.begin()->second))
+                    return false;
+                pending = false;
+            }
+            if (!write_key(stored_key)) {
                 return false;
             }
         }
+        if (pending && !write_key(address->key_.begin()->second))
+            return false;
         if (!plaintext.WriteCompactSize(coins.size())) {
             return false;
         }

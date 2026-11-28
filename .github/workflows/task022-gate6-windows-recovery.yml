@@ -1,0 +1,202 @@
+name: TASK022 Gate 6 Windows recovery matrix
+
+on:
+  push:
+    branches:
+      - codex/task022-gate6-integration
+  pull_request:
+    branches:
+      - codex/task021-engineering-candidate
+
+permissions:
+  contents: read
+
+jobs:
+  windows-depth-100-recovery:
+    name: Windows recovery matrix
+    runs-on: windows-2022
+    timeout-minutes: 360
+    env:
+      VCPKG_DISABLE_METRICS: "1"
+      EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify runner capacity and bind source/tool identities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidencePath = Join-Path $PWD 'build/gate6-windows-evidence.txt'
+          New-Item -ItemType Directory -Force -Path (Split-Path $evidencePath) | Out-Null
+          $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+          $minimumFreeBytes = 5GB
+          if ([int64]$drive.FreeSpace -lt $minimumFreeBytes) {
+            throw "Gate 6 depth-100 matrix requires at least 5 GiB free on C: before configuration; observed $([math]::Round($drive.FreeSpace / 1GB, 2)) GiB."
+          }
+          $sourceCommit = (git rev-parse HEAD).Trim()
+          $sourceTree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($sourceCommit -notmatch '^[0-9a-f]{40}$' -or $sourceTree -notmatch '^[0-9a-f]{40}$') {
+            throw 'Could not bind full source commit/tree identities.'
+          }
+          if ($sourceCommit -ne $env:EXPECTED_SOURCE_SHA) {
+            throw "Exact source binding failed: expected $env:EXPECTED_SOURCE_SHA, checked out $sourceCommit."
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw 'vswhere.exe is unavailable on the selected runner.' }
+          $vsInstall = (& $vswhere -latest -products '*' -property installationPath | Select-Object -First 1).Trim()
+          if (-not $vsInstall) { throw 'Visual Studio 2022 installation was not found.' }
+          $vsDevCmd = Join-Path $vsInstall 'Common7/Tools/VsDevCmd.bat'
+          if (-not (Test-Path -LiteralPath $vsDevCmd)) { throw 'VsDevCmd.bat is unavailable.' }
+          $vcpkgConfig = Get-Content -LiteralPath 'vcpkg-configuration.json' -Raw | ConvertFrom-Json
+          $vcpkgCommit = $vcpkgConfig.'default-registry'.baseline
+          if ($vcpkgCommit -notmatch '^[0-9a-f]{40}$') { throw 'Invalid pinned vcpkg registry baseline.' }
+          @(
+            "source_commit=$sourceCommit"
+            "source_tree=$sourceTree"
+            "runner_os=$env:ImageOS"
+            "runner_image_version=$env:ImageVersion"
+            "windows_caption=$((Get-CimInstance Win32_OperatingSystem).Caption)"
+            "windows_version=$((Get-CimInstance Win32_OperatingSystem).Version)"
+            "windows_build=$((Get-CimInstance Win32_OperatingSystem).BuildNumber)"
+            "visual_studio_installation=$vsInstall"
+            "visual_studio_version=$((& $vswhere -latest -products '*' -property installationVersion | Select-Object -First 1).Trim())"
+            "vcpkg_tool_commit=$vcpkgCommit"
+            "free_bytes_before_configuration=$([int64]$drive.FreeSpace)"
+          ) | Set-Content -LiteralPath $evidencePath -Encoding utf8
+          "VCPKG_COMMIT=$vcpkgCommit" >> $env:GITHUB_ENV
+          "VS_INSTALL=$vsInstall" >> $env:GITHUB_ENV
+
+      - name: Bootstrap pinned vcpkg tool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'novacoin-vcpkg'
+          New-Item -ItemType Directory -Force -Path $vcpkgRoot | Out-Null
+          git -C $vcpkgRoot init
+          if ($LASTEXITCODE -ne 0) { throw 'git init failed.' }
+          git -C $vcpkgRoot remote add origin https://github.com/microsoft/vcpkg.git
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure the pinned vcpkg source.' }
+          git -C $vcpkgRoot fetch --depth=1 origin $env:VCPKG_COMMIT
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the pinned vcpkg commit.' }
+          git -C $vcpkgRoot checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check out the pinned vcpkg commit.' }
+          $actual = (git -C $vcpkgRoot rev-parse HEAD).Trim()
+          if ($actual -ne $env:VCPKG_COMMIT) { throw "vcpkg source mismatch: $actual" }
+          & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed.' }
+          $vcpkgExe = Join-Path $vcpkgRoot 'vcpkg.exe'
+          $vcpkgVersion = ((& $vcpkgExe version 2>&1 | Out-String).Trim() -replace '[\r\n]+', '; ')
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg version query failed.' }
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "vcpkg_version=$($vcpkgVersion.Trim())"
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "vcpkg_executable_sha256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $vcpkgExe).Hash.ToLowerInvariant())"
+          "VCPKG_ROOT=$vcpkgRoot" >> $env:GITHUB_ENV
+
+      - name: Configure pinned Windows release build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vsDevCmd = Join-Path $env:VS_INSTALL 'Common7/Tools/VsDevCmd.bat'
+          $configureCmd = Join-Path $env:RUNNER_TEMP 'novacoin-gate6-configure.cmd'
+          $evidencePath = (Resolve-Path -LiteralPath 'build/gate6-windows-evidence.txt').Path
+          $compilerProbe = Join-Path $env:RUNNER_TEMP 'gate6-toolchain-probe.cpp'
+          $compilerProbeObject = Join-Path $env:RUNNER_TEMP 'gate6-toolchain-probe.obj'
+          @"
+          @echo off
+          call "$vsDevCmd" -no_logo -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b 1
+          where cl >nul
+          if errorlevel 1 exit /b 1
+          echo int nova_gate6_toolchain_probe; > "$compilerProbe"
+          cl /Bv /nologo /c "$compilerProbe" /Fo"$compilerProbeObject" >> "$evidencePath" 2>&1
+          if errorlevel 1 exit /b 1
+          cmake --preset vcpkg-release -DNOVA_ENABLE_CLANG_TIDY=OFF > build/gate6-windows-configure.log 2>&1
+          exit /b %errorlevel%
+          "@ | Set-Content -LiteralPath $configureCmd -Encoding ascii
+          & cmd.exe /d /c "`"$configureCmd`""
+          if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed with exit code $LASTEXITCODE." }
+          cmake --version | Add-Content -LiteralPath 'build/gate6-windows-evidence.txt'
+          ninja --version | Add-Content -LiteralPath 'build/gate6-windows-evidence.txt'
+          python --version 2>&1 | Add-Content -LiteralPath 'build/gate6-windows-evidence.txt'
+          Get-Content -LiteralPath 'build/vcpkg-release/CMakeCache.txt' |
+            Select-String -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=|^CMAKE_CXX_COMPILER_VERSION:INTERNAL=|^VCPKG_TARGET_TRIPLET:STRING=' |
+            ForEach-Object { Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value $_.Line }
+          $pythonCacheLine = Get-Content -LiteralPath 'build/vcpkg-release/CMakeCache.txt' |
+            Select-String -Pattern '^_Python3_EXECUTABLE:INTERNAL=' | Select-Object -First 1
+          if (-not $pythonCacheLine) { throw 'CMake-selected Python interpreter is missing from CMakeCache.' }
+          $ctestPython = $pythonCacheLine.Line.Split('=', 2)[1]
+          if (-not (Test-Path -LiteralPath $ctestPython)) { throw "CMake-selected Python interpreter is missing: $ctestPython" }
+          $ctestPythonVersion = (& $ctestPython --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'CMake-selected Python version query failed.' }
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "ctest_python_executable=$ctestPython"
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "ctest_python_version=$ctestPythonVersion"
+          $cacheHash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'build/vcpkg-release/CMakeCache.txt').Hash.ToLowerInvariant()
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "cmake_cache_sha256=$cacheHash"
+
+      - name: Build recovery executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vsDevCmd = Join-Path $env:VS_INSTALL 'Common7/Tools/VsDevCmd.bat'
+          $buildCmd = Join-Path $env:RUNNER_TEMP 'novacoin-gate6-build.cmd'
+          @"
+          @echo off
+          call "$vsDevCmd" -no_logo -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b 1
+          cmake --build --preset vcpkg-release --target novacoind nova_generation_crash_worker nova_utxo_replay_inspector --parallel 2 > build/gate6-windows-build.log 2>&1
+          exit /b %errorlevel%
+          "@ | Set-Content -LiteralPath $buildCmd -Encoding ascii
+          & cmd.exe /d /c "`"$buildCmd`""
+          if ($LASTEXITCODE -ne 0) { throw "Recovery executable build failed with exit code $LASTEXITCODE." }
+          $targets = @(
+            'build/vcpkg-release/src/daemon/novacoind.exe',
+            'build/vcpkg-release/tests/nova_generation_crash_worker.exe',
+            'build/vcpkg-release/tests/nova_utxo_replay_inspector.exe'
+          )
+          foreach ($target in $targets) {
+            if (-not (Test-Path -LiteralPath $target)) { throw "Expected recovery executable is missing: $target" }
+          }
+          Get-FileHash -Algorithm SHA256 -LiteralPath $targets |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $($_.Path)" } |
+            Set-Content -LiteralPath 'build/gate6-windows-executable-sha256.txt' -Encoding ascii
+          $volume = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "free_bytes_before_recovery_tests=$([int64]$volume.FreeSpace)"
+          if ([int64]$volume.FreeSpace -lt 5GB) {
+            throw "Gate 6 depth-100 tests require at least 5 GiB free on C: after build; observed $([math]::Round($volume.FreeSpace / 1GB, 2)) GiB."
+          }
+
+      - name: Run all 12 registered Windows recovery tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PATH = "$(Resolve-Path -LiteralPath 'build/vcpkg-release/vcpkg_installed/x64-windows/bin');$env:PATH"
+          $regex = '^nova\.(generation_crash|generation_reorg_depth_(1|10|100)|generation_replay_interruptions|durable_rpc_configuration|durable_node_integration|durable_reorg_depth_(1|10|100)|durable_shutdown_integration|durable_root_denial)$'
+          $selection = ctest --test-dir build/vcpkg-release --tests-regex $regex --show-only
+          if ($LASTEXITCODE -ne 0) { throw 'CTest failed while enumerating the Windows recovery matrix.' }
+          if (($selection -join "`n") -notmatch 'Total Tests: 12') {
+            throw "CTest recovery selection must contain exactly 12 tests: $($selection -join '; ')"
+          }
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value 'selected_windows_recovery_tests=12'
+          ctest --test-dir build/vcpkg-release --tests-regex $regex --output-on-failure --verbose --parallel 1 --output-log build/gate6-windows-ctest.log
+          if ($LASTEXITCODE -ne 0) { throw "Windows recovery matrix failed with exit code $LASTEXITCODE." }
+          $volume = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "free_bytes_after_recovery_tests=$([int64]$volume.FreeSpace)"
+
+      - name: Upload exact-head Windows recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gate6-windows-recovery-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/gate6-windows-evidence.txt
+            build/gate6-windows-executable-sha256.txt
+            build/gate6-windows-configure.log
+            build/gate6-windows-build.log
+            build/gate6-windows-ctest.log
+            build/vcpkg-release/CMakeCache.txt
+            build/vcpkg-release/Testing/Temporary/LastTest.log
+            build/vcpkg-release/Testing/Temporary/CTestCostData.txt
+          if-no-files-found: ignore
+          retention-days: 30

@@ -40,7 +40,11 @@ endif()
 # the release dynamic CRT for test binaries. libFuzzer instead requires the
 # static release CRT, so fuzzers are built in their own configuration with
 # NOVA_SANITIZER_STATIC_RUNTIME=ON. This affects instrumentation only.
-if(NOVA_ENABLE_SANITIZERS AND WIN32)
+if(WIN32 AND NOVA_BUILD_FUZZERS AND NOT NOVA_SANITIZER_STATIC_RUNTIME)
+    message(FATAL_ERROR "Windows libFuzzer requires NOVA_SANITIZER_STATIC_RUNTIME=ON.")
+endif()
+
+if((NOVA_ENABLE_SANITIZERS OR NOVA_BUILD_FUZZERS) AND WIN32)
     if(NOVA_SANITIZER_STATIC_RUNTIME)
         set(nova_windows_sanitizer_runtime "MultiThreaded")
     else()
@@ -52,6 +56,14 @@ endif()
 
 add_library(nova_project_options INTERFACE)
 
+# CMake invokes link.exe/lld-link directly for clang-cl. Driver-only
+# -fsanitize link options therefore do not select its compiler-rt libraries.
+set(nova_clang_cl_sanitizer_link FALSE)
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+   AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(nova_clang_cl_sanitizer_link TRUE)
+endif()
+
 # Instrument parser implementations as well as harnesses. fuzzer-no-link
 # supplies coverage without introducing libFuzzer's main into ordinary targets.
 if(NOVA_BUILD_FUZZERS)
@@ -60,8 +72,10 @@ if(NOVA_BUILD_FUZZERS)
     endif()
     target_compile_options(nova_project_options INTERFACE
         -fsanitize=fuzzer-no-link,address,undefined)
-    target_link_options(nova_project_options INTERFACE
-        -fsanitize=fuzzer-no-link,address,undefined)
+    if(NOT nova_clang_cl_sanitizer_link)
+        target_link_options(nova_project_options INTERFACE
+            -fsanitize=fuzzer-no-link,address,undefined)
+    endif()
 endif()
 
 if(MSVC)
@@ -92,7 +106,9 @@ if(NOVA_ENABLE_SANITIZERS)
         list(APPEND nova_sanitizer_flags -fsanitize=undefined)
     endif()
     target_compile_options(nova_project_options INTERFACE ${nova_sanitizer_flags})
-    target_link_options(nova_project_options INTERFACE ${nova_sanitizer_flags})
+    if(NOT nova_clang_cl_sanitizer_link)
+        target_link_options(nova_project_options INTERFACE ${nova_sanitizer_flags})
+    endif()
 
     if(WIN32 AND NOVA_ENABLE_ADDRESS_SANITIZER)
         execute_process(
@@ -109,6 +125,55 @@ if(NOVA_ENABLE_SANITIZERS)
         if(NOT EXISTS "${NOVA_ASAN_RUNTIME_DLL}")
             message(FATAL_ERROR "AddressSanitizer runtime is missing: ${NOVA_ASAN_RUNTIME_DLL}")
         endif()
+    endif()
+endif()
+
+if(nova_clang_cl_sanitizer_link AND (NOVA_ENABLE_SANITIZERS OR NOVA_BUILD_FUZZERS))
+    if(NOT DEFINED nova_clang_resource_dir)
+        execute_process(
+            COMMAND "${CMAKE_CXX_COMPILER}" -print-resource-dir
+            OUTPUT_VARIABLE nova_clang_resource_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE nova_resource_dir_result)
+        if(NOT nova_resource_dir_result EQUAL 0 OR nova_clang_resource_dir STREQUAL "")
+            message(FATAL_ERROR "Unable to locate the Clang sanitizer resource directory.")
+        endif()
+    endif()
+    set(nova_clang_sanitizer_library_dir "${nova_clang_resource_dir}/lib/windows")
+    target_link_options(nova_project_options INTERFACE
+        "/LIBPATH:${nova_clang_sanitizer_library_dir}" /INCREMENTAL:NO)
+    if(NOVA_ENABLE_ADDRESS_SANITIZER OR NOVA_BUILD_FUZZERS)
+        set(nova_asan_import_library
+            "${nova_clang_sanitizer_library_dir}/clang_rt.asan_dynamic-x86_64.lib")
+        if(NOVA_SANITIZER_STATIC_RUNTIME)
+            set(nova_asan_thunk_library
+                "${nova_clang_sanitizer_library_dir}/clang_rt.asan_static_runtime_thunk-x86_64.lib")
+        else()
+            set(nova_asan_thunk_library
+                "${nova_clang_sanitizer_library_dir}/clang_rt.asan_dynamic_runtime_thunk-x86_64.lib")
+            target_link_options(nova_project_options INTERFACE /INCLUDE:__asan_seh_interceptor)
+        endif()
+        set(NOVA_ASAN_RUNTIME_DLL
+            "${nova_clang_sanitizer_library_dir}/clang_rt.asan_dynamic-x86_64.dll")
+        foreach(nova_runtime_file IN ITEMS
+                "${nova_asan_import_library}" "${nova_asan_thunk_library}" "${NOVA_ASAN_RUNTIME_DLL}")
+            if(NOT EXISTS "${nova_runtime_file}")
+                message(FATAL_ERROR "Clang sanitizer runtime is missing: ${nova_runtime_file}")
+            endif()
+        endforeach()
+        target_link_libraries(nova_project_options INTERFACE "${nova_asan_import_library}")
+        target_link_options(nova_project_options INTERFACE
+            "/WHOLEARCHIVE:${nova_asan_thunk_library}" /INFERASANLIBS:NO)
+        # This ASan runtime also supplies the UBSan handlers, matching clang-cl.
+    elseif(NOVA_ENABLE_UNDEFINED_BEHAVIOR_SANITIZER)
+        foreach(nova_runtime_name IN ITEMS ubsan_standalone ubsan_standalone_cxx)
+            set(nova_runtime_file
+                "${nova_clang_sanitizer_library_dir}/clang_rt.${nova_runtime_name}-x86_64.lib")
+            if(NOT EXISTS "${nova_runtime_file}")
+                message(FATAL_ERROR "Clang sanitizer runtime is missing: ${nova_runtime_file}")
+            endif()
+            target_link_libraries(nova_project_options INTERFACE "${nova_runtime_file}")
+        endforeach()
     endif()
 endif()
 

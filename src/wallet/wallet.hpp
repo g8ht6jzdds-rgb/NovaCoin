@@ -142,6 +142,16 @@ class Wallet final
     Wallet(Wallet&&) = delete;
     Wallet& operator=(Wallet&&) = delete;
 
+    class StateCheckpoint final
+    {
+      private:
+        std::weak_ptr<const std::uint8_t> owner_;
+        std::uint64_t revision_{};
+        friend class Wallet;
+    };
+    [[nodiscard]] StateCheckpoint CaptureCheckpoint() const noexcept;
+    [[nodiscard]] bool IsCheckpointCurrent(const StateCheckpoint& checkpoint) const noexcept;
+
     class PreparedConfirmedState final
     {
       public:
@@ -155,15 +165,82 @@ class Wallet final
         std::weak_ptr<const std::uint8_t> owner_;
         std::uint64_t revision_{};
         std::map<chain::UTXOKey, WalletUTXO> coins_;
+        std::weak_ptr<const std::uint8_t> address_identity_;
+        bool requires_address_{};
         bool consumed_{};
         friend class Wallet;
     };
 
+    class PreparedAddress final
+    {
+      public:
+        PreparedAddress(const PreparedAddress&) = delete;
+        PreparedAddress& operator=(const PreparedAddress&) = delete;
+        PreparedAddress(PreparedAddress&&) = delete;
+        PreparedAddress& operator=(PreparedAddress&&) = delete;
+        [[nodiscard]] const WalletAddress& address() const noexcept
+        {
+            return *address_;
+        }
+
+      private:
+        PreparedAddress() = default;
+        std::weak_ptr<const std::uint8_t> owner_;
+        std::uint64_t revision_{};
+        std::shared_ptr<const std::uint8_t> identity_;
+        std::map<crypto::Hash160, KeyStore::StoredKey> key_;
+        std::optional<WalletAddress> address_;
+        bool consumed_{};
+        friend class Wallet;
+    };
+
+    // The candidate key is private to the token until commit. The caller must
+    // retain exclusive wallet ownership through staging and publication.
+    [[nodiscard]] std::unique_ptr<PreparedAddress> PrepareReceivingAddress() const noexcept;
+    [[nodiscard]] bool CanCommitPreparedAddress(const PreparedAddress& prepared) const noexcept;
+    [[nodiscard]] bool CommitPreparedAddress(PreparedAddress& prepared) noexcept;
+    [[nodiscard]] bool
+    SavePreparedAddressEncrypted(const PreparedAddress& prepared, const std::filesystem::path& path,
+                                 std::span<const std::uint8_t> passphrase) const noexcept;
+
     // Exclusive, non-reentrant owner access is required throughout preparation,
     // encrypted-image staging and commit. Payloads must already be validated.
     [[nodiscard]] std::unique_ptr<PreparedConfirmedState>
-    PrepareConfirmedState(std::span<const chain::BlockIndex> active) const noexcept;
+    PrepareConfirmedState(std::span<const chain::BlockIndex> active,
+                          const PreparedAddress* address = nullptr) const noexcept;
+    [[nodiscard]] std::unique_ptr<PreparedConfirmedState>
+    PrepareReplayState(std::span<const chain::BlockIndex> active,
+                       std::span<const primitives::Transaction> pending, bool allow_empty_anchor,
+                       const PreparedAddress* address = nullptr) const noexcept;
+    // Prepare a validated observation without publishing wallet bookkeeping.
+    [[nodiscard]] std::unique_ptr<PreparedConfirmedState>
+    PrepareObservedState(const primitives::Transaction& transaction, std::uint32_t height,
+                         bool confirmed) const noexcept;
+    // Valid only while exclusive, non-reentrant ownership is retained. A later
+    // wallet mutation can invalidate this result before publication.
+    [[nodiscard]] bool CanCommitPrepared(const PreparedConfirmedState& prepared) const noexcept;
+    // Compares confirmed ownership/value/height against a replay, excluding
+    // unconfirmed observations and pending-spend policy state.
+    [[nodiscard]] bool ConfirmedStateMatches(const PreparedConfirmedState& prepared) const noexcept;
+    // Compare all wallet bookkeeping with a fresh replay of validated chain and
+    // dependency-ordered mempool transactions. Does not mutate wallet state.
+    [[nodiscard]] bool MatchesFullReplay(std::span<const chain::BlockIndex> active,
+                                         std::span<const primitives::Transaction> pending,
+                                         bool allow_empty_anchor = false) const noexcept;
+    [[nodiscard]] bool
+    MatchesPreparedReplay(const PreparedConfirmedState& prepared,
+                          std::span<const chain::BlockIndex> active,
+                          std::span<const primitives::Transaction> pending, bool allow_empty_anchor,
+                          const PreparedAddress* address = nullptr) const noexcept;
     [[nodiscard]] bool CommitPreparedState(PreparedConfirmedState& prepared) noexcept;
+    [[nodiscard]] bool CanCommitPreparedJoint(const PreparedConfirmedState& state,
+                                              const PreparedAddress& address) const noexcept;
+    [[nodiscard]] bool CommitPreparedJoint(PreparedConfirmedState& state,
+                                           PreparedAddress& address) noexcept;
+    [[nodiscard]] bool
+    SavePreparedJointEncrypted(const PreparedConfirmedState& state, const PreparedAddress& address,
+                               const std::filesystem::path& path,
+                               std::span<const std::uint8_t> passphrase) const noexcept;
     // Writes only the caller-selected staging path; does not publish live state
     // or jointly commit it with a chain/journal generation.
     [[nodiscard]] bool
@@ -173,6 +250,8 @@ class Wallet final
     [[nodiscard]] static std::unique_ptr<Wallet> Create(const WalletParams& parameters) noexcept;
     [[nodiscard]] std::optional<WalletAddress> GenerateReceivingAddress() noexcept;
     [[nodiscard]] std::vector<WalletAddress> ListReceivingAddresses() const;
+    [[nodiscard]] std::size_t ReceivingAddressCount() const noexcept;
+    [[nodiscard]] std::uint32_t NextReceivingAddressIndex() const noexcept;
     [[nodiscard]] std::vector<WalletUTXO> ListUTXOs() const;
     [[nodiscard]] primitives::Amount ConfirmedBalance() const noexcept;
     [[nodiscard]] primitives::Amount UnconfirmedBalance() const noexcept;
@@ -199,6 +278,10 @@ class Wallet final
     // plaintext private-key export are deliberately unsupported.
     [[nodiscard]] bool SaveEncrypted(const std::filesystem::path& path,
                                      std::span<const std::uint8_t> passphrase) const noexcept;
+    // Verifies the current encrypted image credentials without publishing state.
+    [[nodiscard]] bool
+    VerifyEncryptedImage(const std::filesystem::path& path,
+                         std::span<const std::uint8_t> passphrase) const noexcept;
     [[nodiscard]] static std::unique_ptr<Wallet>
     LoadEncrypted(const WalletParams& parameters, const std::filesystem::path& path,
                   std::span<const std::uint8_t> passphrase) noexcept;
@@ -206,12 +289,19 @@ class Wallet final
   private:
     explicit Wallet(WalletParams parameters);
     using Coins = std::map<chain::UTXOKey, WalletUTXO>;
+    [[nodiscard]] bool MatchesCoinsReplay(const Coins& coins,
+                                          std::span<const chain::BlockIndex> active,
+                                          std::span<const primitives::Transaction> pending,
+                                          bool allow_empty_anchor,
+                                          const crypto::Hash160* candidate) const noexcept;
     [[nodiscard]] bool ObserveInto(Coins& coins, const primitives::Transaction& transaction,
-                                   std::uint32_t height, bool confirmed) const noexcept;
+                                   std::uint32_t height, bool confirmed,
+                                   const crypto::Hash160* candidate = nullptr) const noexcept;
     static void ClearConfirmedCoins(Coins& coins) noexcept;
     [[nodiscard]] bool IsCurrent(const PreparedConfirmedState& prepared) const noexcept;
     [[nodiscard]] bool SaveCoinsEncrypted(const Coins& coins, const std::filesystem::path& path,
-                                          std::span<const std::uint8_t> passphrase) const noexcept;
+                                          std::span<const std::uint8_t> passphrase,
+                                          const PreparedAddress* address = nullptr) const noexcept;
     [[nodiscard]] bool CanAdvanceRevision() const noexcept;
     std::shared_ptr<const std::uint8_t> identity_;
     std::uint64_t revision_{};

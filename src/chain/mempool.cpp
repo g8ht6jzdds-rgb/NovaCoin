@@ -391,6 +391,11 @@ std::uint64_t Mempool::total_serialized_size() const noexcept
     return total_serialized_size_;
 }
 
+bool Mempool::Contains(const crypto::Hash256& transaction_id) const noexcept
+{
+    return entries_.contains(transaction_id);
+}
+
 std::optional<MempoolEntry> Mempool::GetEntry(const crypto::Hash256& transaction_id) const noexcept
 {
     const auto found = entries_.find(transaction_id);
@@ -718,6 +723,46 @@ Mempool::GetPreparedEntries(const PreparedState& prepared) const noexcept
         return result;
     } catch (...) {
         return std::nullopt;
+    }
+}
+
+Mempool::PreparationResult Mempool::PrepareAdmission(const primitives::Transaction& transaction,
+                                                     const TransactionValidationContext& context,
+                                                     const UTXOView& active_utxos,
+                                                     const std::uint64_t time_received) noexcept
+{
+    ReadOnlyBatchFactory base{active_utxos};
+    if (!CanAdvanceRevision() || !base.IsCurrent())
+        return {{MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
+                 std::nullopt, 0U},
+                nullptr};
+    const auto failure = std::exchange(failure_point_, FailurePoint::kNone);
+    try {
+        if (failure == FailurePoint::kBeforePreparedCopy)
+            throw std::bad_alloc{};
+        auto prepared = std::unique_ptr<PreparedState>{new PreparedState{}};
+        prepared->owner_ = identity_;
+        prepared->revision_ = revision_;
+        Mempool staged{ConstructionKey{}, parameters_};
+        staged.entries_ = entries_;
+        staged.spends_ = spends_;
+        staged.total_serialized_size_ = total_serialized_size_;
+        staged.failure_point_ = failure;
+        auto result = staged.AcceptImpl(transaction, context, base, time_received);
+        if (result.error != MempoolError::kNone)
+            return {result, nullptr};
+        if (!base.IsCurrent())
+            return {{MempoolError::kStateUnavailable, BlockValidationError::kInvalidContext,
+                     std::nullopt, 0U},
+                    nullptr};
+        prepared->pool_.entries.swap(staged.entries_);
+        prepared->pool_.spends.swap(staged.spends_);
+        prepared->pool_.total_serialized_size = staged.total_serialized_size_;
+        return {result, std::move(prepared)};
+    } catch (...) {
+        return {{MempoolError::kAllocationFailure, BlockValidationError::kAllocationFailure,
+                 std::nullopt, 0U},
+                nullptr};
     }
 }
 

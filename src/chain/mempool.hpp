@@ -95,6 +95,12 @@ class Mempool final
     };
     // Per-instance one-shot seam, never selected through RPC/network input.
     void SetFailurePointForTesting(FailurePoint point) noexcept;
+    // Prepare ordinary admission without publishing it. The coordinator must
+    // separately bind the UTXO view and validation context through commit.
+    [[nodiscard]] PreparationResult PrepareAdmission(const primitives::Transaction& transaction,
+                                                     const TransactionValidationContext& context,
+                                                     const UTXOView& active_utxos,
+                                                     std::uint64_t time_received) noexcept;
     // Candidate UTXOs must already be validated; this does not commit them.
     // Exclusive, non-reentrant access. The coordinator must bind the matching
     // chain/context before publication; the token owns no borrowed UTXO view.
@@ -138,9 +144,14 @@ class Mempool final
     SelectForBlock(std::uint64_t max_serialized_size) const noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] const MempoolParams& parameters() const noexcept
+    {
+        return parameters_;
+    }
     [[nodiscard]] std::uint64_t total_serialized_size() const noexcept;
     [[nodiscard]] std::optional<MempoolEntry>
     GetEntry(const crypto::Hash256& transaction_id) const noexcept;
+    [[nodiscard]] bool Contains(const crypto::Hash256& transaction_id) const noexcept;
 
     // The private construction key keeps construction routed through Create.
     Mempool(ConstructionKey, MempoolParams parameters);

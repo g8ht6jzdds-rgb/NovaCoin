@@ -44,6 +44,8 @@ struct RpcConfig final {
     consensus::NetworkId network{consensus::NetworkId::kRegtest};
     std::vector<RpcRestrictedPrincipal> restricted_principals;
     primitives::Amount maximum_faucet_payout{};
+    // A durable owner can disable all legacy wallet/mempool mutation fallbacks.
+    bool require_node_mutation_callbacks{false};
 
     RpcConfig() = default;
     RpcConfig(std::string bind, std::string administrator, std::string secret, RpcLimits rpc_limits,
@@ -54,12 +56,55 @@ struct RpcConfig final {
     }
 };
 
+struct RpcWalletSnapshot final {
+    primitives::Amount confirmed{};
+    primitives::Amount unconfirmed{};
+    std::vector<wallet::WalletUTXO> coins;
+};
+struct RpcBlockLookup final {
+    bool available{};
+    std::optional<chain::BlockIndex> block;
+};
+struct RpcMempoolLookup final {
+    bool available{};
+    std::optional<chain::MempoolEntry> entry;
+};
+struct RpcChainSnapshot final {
+    std::uint32_t height{};
+    crypto::Hash256 tip;
+    std::optional<chain::ChainWork> chain_work;
+    std::size_t mempool_size{};
+    std::uint64_t mempool_bytes{};
+};
+
+template <typename T> class RpcOptionalRef final
+{
+  public:
+    RpcOptionalRef() noexcept = default;
+    RpcOptionalRef(T& value) noexcept : pointer_(&value) {}
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return pointer_ != nullptr;
+    }
+    [[nodiscard]] T* operator->() const noexcept
+    {
+        return pointer_;
+    }
+    [[nodiscard]] T& operator*() const noexcept
+    {
+        return *pointer_;
+    }
+
+  private:
+    T* pointer_{};
+};
+
 struct RpcDependencies final {
-    chain::ChainState& chain_state;
-    chain::UTXOSet& utxos;
-    chain::Mempool& mempool;
+    RpcOptionalRef<const chain::ChainState> chain_state;
+    RpcOptionalRef<chain::UTXOSet> utxos;
+    RpcOptionalRef<chain::Mempool> mempool;
     net::PeerManager& peers;
-    wallet::Wallet& wallet;
+    RpcOptionalRef<wallet::Wallet> wallet;
     chain::TransactionValidationContext transaction_context;
     std::uint64_t current_time{};
     std::function<bool()> persist_wallet;
@@ -72,6 +117,27 @@ struct RpcDependencies final {
     // Read-only process-local telemetry supplied by the daemon. It has no
     // authority over consensus state and is optional for embedders.
     std::function<observability::MetricsSnapshot()> read_metrics;
+    // Optional node-owned admission route; embedders without one retain the
+    // existing local broadcaster until their integration is migrated.
+    std::function<bool(const primitives::Transaction&)> submit_transaction{};
+    // When present, the node owns address generation and persistence together.
+    std::function<std::optional<wallet::WalletAddress>()> generate_address{};
+    // A durable owner must reject RPC access when its state is quarantined.
+    std::function<bool()> state_available{};
+    // Nullopt means the owner's verification state is unavailable.
+    std::function<std::optional<bool>(const primitives::Transaction&)> verify_transaction{};
+    std::function<std::optional<RpcWalletSnapshot>()> read_wallet{};
+    std::function<std::optional<wallet::TransactionBuildResult>(std::span<const wallet::Recipient>)>
+        build_transaction{};
+    std::function<std::optional<wallet::TransactionSignResult>(const primitives::Transaction&)>
+        sign_transaction{};
+    std::function<RpcBlockLookup(const crypto::Hash256&)> find_block{};
+    std::function<RpcMempoolLookup(const crypto::Hash256&)> find_mempool_entry{};
+    std::function<chain::CoinReadResult(const chain::UTXOKey&)> read_coin{};
+    std::function<std::optional<RpcChainSnapshot>()> read_chain{};
+    std::function<std::optional<std::vector<chain::BlockIndex>>()> read_active_blocks{};
+    // Optional candidate ID from the most recent uncertain local payment.
+    std::function<std::optional<crypto::Hash256>()> uncertain_payment_id{};
 };
 
 struct HttpRequest final {

@@ -19,6 +19,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, const std::size_
     const auto decoded = nova::storage::DecodeGenerationMetadata(root, descriptor, expected);
     using nova::storage::GenerationError;
     using nova::storage::GenerationState;
+    const bool two_images = descriptor.size() == 133U && !decoded.metadata.mempool_size;
+    const bool three_images =
+        descriptor.size() == 173U && decoded.metadata.mempool_size.has_value();
     if ((decoded.state == GenerationState::kUnavailable &&
          decoded.error == GenerationError::kNone) ||
         (decoded.state != GenerationState::kUnavailable &&
@@ -26,7 +29,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, const std::size_
         (decoded.state == GenerationState::kEmpty &&
          (decoded.metadata.sequence != 0U || !descriptor.empty())) ||
         (decoded.state == GenerationState::kPresent &&
-         (decoded.metadata.sequence == 0U || root.size() != 85U || descriptor.size() != 133U)))
+         (decoded.metadata.sequence == 0U || root.size() != 85U || (!two_images && !three_images))))
         std::abort();
     return 0;
 }

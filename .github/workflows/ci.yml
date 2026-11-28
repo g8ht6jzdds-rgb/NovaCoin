@@ -58,6 +58,23 @@ jobs:
       - name: Verify retained multi-process regtest evidence
         shell: bash
         run: bash scripts/verify_regtest_ci_evidence.sh build/debug
+      - name: Record Debug executable hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            build/debug/src/daemon/novacoind
+            build/debug/tests/nova_unit_tests
+            build/debug/tests/nova_generation_crash_worker
+            build/debug/tests/nova_utxo_replay_inspector
+          )
+          for file in "${files[@]}"; do test -x "$file"; done
+          {
+            printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'toolchain_manifest_sha256=%s\n' "$(sha256sum build-toolchain.txt | cut -d ' ' -f 1)"
+            sha256sum "${files[@]}"
+          } | tee build/debug/executable-sha256-manifest.txt
       - name: Check formatting
         run: cmake -P scripts/check-format.cmake
       - name: Upload strict-build evidence
@@ -68,6 +85,7 @@ jobs:
           path: |
             build/debug/ci-ctest.log
             build-toolchain.txt
+            build/debug/executable-sha256-manifest.txt
             build/debug/regtest-artifacts
             build/debug/Testing/Temporary
             build/debug/CMakeFiles/CMakeOutput.log
@@ -77,7 +95,7 @@ jobs:
 
   sanitizer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +132,26 @@ jobs:
       - name: Verify retained multi-process regtest evidence
         shell: bash
         run: bash scripts/verify_regtest_ci_evidence.sh build/${{ matrix.preset }}
+      - name: Record sanitizer executable hashes
+        shell: bash
+        env:
+          PRESET: ${{ matrix.preset }}
+        run: |
+          set -euo pipefail
+          files=(
+            "build/$PRESET/src/daemon/novacoind"
+            "build/$PRESET/tests/nova_unit_tests"
+            "build/$PRESET/tests/nova_generation_crash_worker"
+            "build/$PRESET/tests/nova_utxo_replay_inspector"
+          )
+          for file in "${files[@]}"; do test -x "$file"; done
+          {
+            printf 'source_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'source_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'preset=%s\n' "$PRESET"
+            printf 'toolchain_manifest_sha256=%s\n' "$(sha256sum build-toolchain.txt | cut -d ' ' -f 1)"
+            sha256sum "${files[@]}"
+          } | tee "build/$PRESET/executable-sha256-manifest.txt"
       - name: Run bounded fuzz smoke tests
         shell: bash
         run: |
@@ -146,6 +184,7 @@ jobs:
           path: |
             build/${{ matrix.preset }}/ci-ctest.log
             build-toolchain.txt
+            build/${{ matrix.preset }}/executable-sha256-manifest.txt
             build/${{ matrix.preset }}/regtest-artifacts
             build/${{ matrix.preset }}/Testing/Temporary
             build/${{ matrix.preset }}/fuzz-logs

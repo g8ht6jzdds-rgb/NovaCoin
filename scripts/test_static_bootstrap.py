@@ -131,6 +131,11 @@ def verify_evidence(directory):
                 event["persistence"] == "absent", "invalid rejection observation")
         require((directory / f"rejected-{event['case']}.txt").read_bytes() ==
                 b"invalid static bootstrap configuration\n", "wrong diagnostic")
+        if "diagnostic_hex" in event:
+            require(bytes.fromhex(event["diagnostic_hex"]) in
+                    (b"invalid static bootstrap configuration\n",
+                     b"invalid static bootstrap configuration\r\n"),
+                    "wrong raw diagnostic")
     sync = [event for event in events if "bootstrap_sync" in event]
     controls = [event for event in events if "restart_sync" in event]
     require(len(sync) == 1 and len(controls) == 1, "missing positive controls")
@@ -178,7 +183,9 @@ class Harness:
                    NOVACOIN_RPC_PASSWORD=PASSWORD)
         output = open(root / "output.log", "wb")
         self.outputs.append(output)
-        child = subprocess.Popen(args, env=env, stdout=output, stderr=subprocess.STDOUT)
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        child = subprocess.Popen(args, env=env, stdout=output, stderr=subprocess.STDOUT,
+                                 creationflags=creationflags)
         self.children.append(child)
         self.events.append({"launch": args, "pid": child.pid})
         return child
@@ -266,7 +273,10 @@ class Harness:
 
     def stop_child(self, child):
         if child.poll() is None:
-            child.terminate()
+            if os.name == "nt":
+                child.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                child.terminate()
         try:
             code = child.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -337,9 +347,11 @@ class Harness:
                 self.check_logs()
                 raw = (self.runtime / ("reject-" + case) / "output.log").read_bytes()
                 require(code == 2, f"{case}: expected exit 2, got {code}")
-                require(raw == b"invalid static bootstrap configuration\n",
+                expected = b"invalid static bootstrap configuration" + os.linesep.encode("ascii")
+                require(raw == expected,
                         f"{case}: wrong rejection diagnostic")
-                write(self.evidence / f"rejected-{case}.txt", raw.decode())
+                write(self.evidence / f"rejected-{case}.txt",
+                      "invalid static bootstrap configuration\n")
                 require(not any((self.runtime / ("reject-" + case) / "data").iterdir()),
                         "rejected configuration created persistence")
                 for port in (p2p, rpc):
@@ -353,7 +365,8 @@ class Harness:
             require(self.rpc(source_rpc, "getmempoolinfo") == baseline_pool,
                     "rejection changed source mempool")
             self.events.append({"case": case, "exit": code, "observer": observed,
-                                "persistence": "absent", "source_state": baseline})
+                                "persistence": "absent", "source_state": baseline,
+                                "diagnostic_hex": raw.hex()})
 
         config = self.evidence / "canonical-regtest.conf"
         write(config, IDENTITY + f"seed=127.0.0.1:{source_p2p}\n")
