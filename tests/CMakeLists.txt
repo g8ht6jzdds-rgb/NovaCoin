@@ -22,6 +22,7 @@ add_executable(nova_unit_tests
     wallet_tests.cpp
     address_tests.cpp
     rpc_tests.cpp
+    rpc_http_parser_tests.cpp
     network_selection_tests.cpp
     network_params_tests.cpp
     regtest_harness_tests.cpp
@@ -129,6 +130,9 @@ set_tests_properties(nova.freeze_corpus_cli PROPERTIES TIMEOUT 30 LABELS "unit;r
 
 add_test(NAME nova.unit COMMAND nova_unit_tests)
 set_tests_properties(nova.unit PROPERTIES LABELS "unit;crypto;primitives;chain")
+add_test(NAME nova.rpc_http_parser COMMAND $<TARGET_FILE:nova_unit_tests>
+    --gtest_filter=RpcHttpParser.*)
+set_tests_properties(nova.rpc_http_parser PROPERTIES TIMEOUT 30 LABELS "unit;rpc;parser")
 
 # Named release gates reuse real assertions instead of accepting hand-written PASS records.
 add_test(NAME nova.consensus COMMAND ${Python3_EXECUTABLE} -B
