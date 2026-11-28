@@ -32,6 +32,12 @@ jobs:
               -DCMAKE_CXX_FLAGS_RELEASE="$flags -DNDEBUG"
             cmake --build "build/$config" --parallel 2 --target nova_readiness_vectors novacoind
             "build/$config/tests/nova_readiness_vectors" > "readiness-results/$config.txt"
+            "build/$config/tests/nova_readiness_vectors" > "readiness-results/$config-repeat.txt"
+            if ! cmp -s "readiness-results/$config.txt" "readiness-results/$config-repeat.txt"; then
+              diff -u "readiness-results/$config.txt" "readiness-results/$config-repeat.txt" || true
+              echo "ERROR: repeated $config readiness corpus output differs" >&2
+              exit 1
+            fi
             ctest --test-dir "build/$config" --output-on-failure -R 'nova.(mainnet_lock|readiness_policy|readiness_vectors)$'
           done
           diff -u readiness-results/debug.txt readiness-results/release.txt
