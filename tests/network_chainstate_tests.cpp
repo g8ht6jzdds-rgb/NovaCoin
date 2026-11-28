@@ -482,7 +482,8 @@ TEST(NetworkInitialization, SyntheticSignedSpendRollbackReorgAndRestartReplay)
     EXPECT_FALSE(restarted_utxos.HaveCoin(fixture->key));
 }
 
-TEST(MainnetReadiness, ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndHundred)
+TEST(MainnetReadiness,
+     ReorganizationsPreserveSignedSpendStateAcrossRepeatedSwitchesAtDepthsOneTenAndHundred)
 {
     for (const auto depth : {1U, 10U, 100U}) {
         auto fixture = Synthetic();
@@ -494,12 +495,13 @@ TEST(MainnetReadiness, ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndH
         ASSERT_NE(state, nullptr);
         ASSERT_TRUE(ProjectActiveState(*fixture, *state, utxos).has_value());
 
-        chain::UTXOKey losing_last_reward{};
-        chain::UTXOKey losing_tip_output{};
+        std::vector<chain::UTXOKey> losing_last_rewards;
+        std::vector<chain::UTXOKey> losing_tip_outputs;
         chain::UTXOKey winning_tip_output{};
         chain::Coin winning_tip_coin{};
-        std::optional<chain::ChainWork> losing_work;
-        for (const auto branch : {0U, 1U}) {
+        std::vector<chain::ChainWork> losing_works;
+        std::size_t reorganization_count = 0U;
+        for (const auto branch : {0U, 1U, 2U}) {
             const auto branch_depth = depth + branch;
             auto parent = fixture->anchor.hash;
             auto previous_outpoint = fixture->key;
@@ -519,10 +521,13 @@ TEST(MainnetReadiness, ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndH
                           fixture->genesis.outputs.front().script_pubkey);
                 ASSERT_TRUE(block.has_value())
                     << "depth=" << depth << " branch=" << branch << " height=" << height;
+                const auto previous_tip = state->active_tip();
                 const auto accepted = state->AcceptBlock(*block);
                 ASSERT_EQ(accepted.error, chain::ChainError::kNone)
                     << "depth=" << depth << " branch=" << branch << " height=" << height;
                 ASSERT_TRUE(accepted.block_hash.has_value());
+                if (accepted.became_active && block->header.previous_block_id != previous_tip)
+                    ++reorganization_count;
                 parent = *accepted.block_hash;
 
                 const auto& last_transaction = block->transactions.back();
@@ -536,15 +541,15 @@ TEST(MainnetReadiness, ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndH
                 ASSERT_TRUE(snapshot.has_value())
                     << "depth=" << depth << " branch=" << branch << " height=" << height;
 
-                if (branch == 0U && height == branch_depth) {
+                if (branch < 2U && height == branch_depth) {
                     const auto reward_id = block->transactions.front().TxId(
                         fixture->parameters.block_validation.block_limits.transaction_limits);
                     ASSERT_TRUE(reward_id.has_value());
-                    losing_last_reward = {*reward_id, 0U};
-                    losing_tip_output = previous_outpoint;
-                    losing_work = snapshot->work;
+                    losing_last_rewards.emplace_back(*reward_id, 0U);
+                    losing_tip_outputs.push_back(previous_outpoint);
+                    losing_works.push_back(snapshot->work);
                 }
-                if (branch == 1U && height == branch_depth) {
+                if (branch == 2U && height == branch_depth) {
                     winning_tip_output = previous_outpoint;
                     winning_tip_coin = previous_coin;
                 }
@@ -554,9 +559,15 @@ TEST(MainnetReadiness, ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndH
                 << "depth=" << depth << " branch=" << branch;
         }
 
-        ASSERT_EQ(state->active_height(), depth + 1U);
-        EXPECT_FALSE(utxos.HaveCoin(losing_last_reward));
-        EXPECT_FALSE(utxos.HaveCoin(losing_tip_output));
+        ASSERT_GE(reorganization_count, 2U);
+        ASSERT_EQ(state->active_height(), depth + 2U);
+        ASSERT_EQ(losing_last_rewards.size(), 2U);
+        ASSERT_EQ(losing_tip_outputs.size(), 2U);
+        ASSERT_EQ(losing_works.size(), 2U);
+        for (const auto& outpoint : losing_last_rewards)
+            EXPECT_FALSE(utxos.HaveCoin(outpoint));
+        for (const auto& outpoint : losing_tip_outputs)
+            EXPECT_FALSE(utxos.HaveCoin(outpoint));
         EXPECT_TRUE(utxos.HaveCoin(winning_tip_output));
         const auto winner = utxos.GetCoin(winning_tip_output);
         ASSERT_TRUE(winner.has_value());
@@ -567,11 +578,11 @@ TEST(MainnetReadiness, ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndH
 
         const auto before = ProjectActiveState(*fixture, *state, utxos);
         ASSERT_TRUE(before.has_value());
-        ASSERT_TRUE(losing_work.has_value());
-        EXPECT_TRUE(*losing_work < before->work);
+        for (const auto& losing_work : losing_works)
+            EXPECT_TRUE(losing_work < before->work);
         const auto known_before = state->known_block_count();
         const auto candidate =
-            Child(*fixture, state->active_tip(), state->active_height() + 1U, 20'000U + depth,
+            Child(*fixture, state->active_tip(), state->active_height() + 1U, 30'000U + depth,
                   std::nullopt, fixture->genesis.outputs.front().script_pubkey);
         ASSERT_TRUE(candidate.has_value());
         auto invalid_overpay = *candidate;
@@ -589,7 +600,8 @@ TEST(MainnetReadiness, ReorganizationsPreserveSignedSpendStateAtDepthsOneTenAndH
         EXPECT_EQ(rejected.validation_error, chain::BlockValidationError::kInvalidCoinbaseReward);
         EXPECT_EQ(state->known_block_count(), known_before);
         EXPECT_EQ(ProjectActiveState(*fixture, *state, utxos), before);
-        EXPECT_FALSE(utxos.HaveCoin(losing_tip_output));
+        for (const auto& outpoint : losing_tip_outputs)
+            EXPECT_FALSE(utxos.HaveCoin(outpoint));
         EXPECT_TRUE(utxos.HaveCoin(winning_tip_output));
     }
 }
