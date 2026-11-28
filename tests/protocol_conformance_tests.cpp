@@ -18,6 +18,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -890,6 +891,251 @@ bool ReplayPureVector(const Record& record)
     return hash && nova::consensus::CheckProofOfWork(*hash, *target) == (result == "accept");
 }
 
+bool IsCanonicalUnsignedDecimal(const std::string_view text)
+{
+    return !text.empty() && (text.size() == 1U || text.front() != '0') &&
+           std::all_of(text.begin(), text.end(),
+                       [](const char value) { return value >= '0' && value <= '9'; });
+}
+
+std::optional<std::uint32_t> ParseCanonicalCompact(const std::string_view text)
+{
+    if (text.size() != 8U || !std::all_of(text.begin(), text.end(), [](const char value) {
+            return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+        })) {
+        return std::nullopt;
+    }
+    std::uint32_t value{};
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+    if (error != std::errc{} || end != text.data() + text.size()) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+bool DifficultyVectorSchema(const Record& record)
+{
+    static constexpr std::array<std::string_view, 32U> kFields{"candidate_bits",
+                                                               "candidate_delay_seconds",
+                                                               "candidate_height",
+                                                               "candidate_time",
+                                                               "clamped_elapsed_seconds",
+                                                               "expected_bits",
+                                                               "expected_elapsed_seconds",
+                                                               "expected_result",
+                                                               "genesis_time",
+                                                               "id",
+                                                               "kind",
+                                                               "network",
+                                                               "parent_bits",
+                                                               "parent_delta_seconds",
+                                                               "parent_height",
+                                                               "parent_time",
+                                                               "pow_limit_bits",
+                                                               "prefix_blocks",
+                                                               "prefix_spacing_seconds",
+                                                               "represented_target",
+                                                               "retarget_bits",
+                                                               "retarget_interval",
+                                                               "scale_product",
+                                                               "scale_quotient",
+                                                               "scale_remainder",
+                                                               "scenario",
+                                                               "source_refs",
+                                                               "spec_section",
+                                                               "status",
+                                                               "target_spacing_seconds",
+                                                               "target_timespan_seconds",
+                                                               "truncation_loss"};
+    const auto scenario_it = record.find("scenario");
+    if (scenario_it == record.end()) {
+        return false;
+    }
+    static constexpr std::array<std::string_view, 7U> kUpperHistoryFields{
+        "first_interval_height",
+        "first_interval_time",
+        "history_delay_height",
+        "history_delay_seconds",
+        "history_final_parent_delta_seconds",
+        "history_post_delay_blocks",
+        "history_post_delay_spacing_seconds"};
+    const bool has_upper_history = scenario_it->second == "testnet_retarget_upper_clamp";
+    if (record.size() != kFields.size() + (has_upper_history ? kUpperHistoryFields.size() : 0U)) {
+        return false;
+    }
+    for (const auto name : kFields) {
+        const auto found = record.find(std::string{name});
+        if (found == record.end() || found->second.empty()) {
+            return false;
+        }
+    }
+    if (has_upper_history) {
+        for (const auto name : kUpperHistoryFields) {
+            const auto found = record.find(std::string{name});
+            if (found == record.end() ||
+                !ParseCanonicalUnsigned<std::uint32_t>(found->second).has_value()) {
+                return false;
+            }
+        }
+    }
+    if (record.at("kind") != "difficulty_adjustment" ||
+        record.at("source_refs") != "ChainState.ExpectedBits,ChainState.AcceptBlock" ||
+        record.at("spec_section") != "15" || record.at("status") != "TEST_ONLY" ||
+        (record.at("expected_result") != "accept" &&
+         record.at("expected_result") != "unexpected_bits")) {
+        return false;
+    }
+    const auto network = record.at("network");
+    const auto scenario = record.at("scenario");
+    if (!((network == "TESTNET" &&
+           (scenario == "testnet_retarget" || scenario == "testnet_minimum_delay" ||
+            scenario == "testnet_retarget_upper_pow_limit_cap" || has_upper_history)) ||
+          (network == "REGTEST" && scenario == "regtest_no_retarget"))) {
+        return false;
+    }
+    for (const auto name :
+         {"candidate_delay_seconds", "candidate_height", "candidate_time", "genesis_time",
+          "parent_height", "parent_time", "prefix_blocks", "retarget_interval",
+          "target_spacing_seconds", "target_timespan_seconds"}) {
+        if (!ParseCanonicalUnsigned<std::uint32_t>(record.at(name)).has_value()) {
+            return false;
+        }
+    }
+    for (const auto name : {"parent_delta_seconds", "prefix_spacing_seconds",
+                            "expected_elapsed_seconds", "clamped_elapsed_seconds"}) {
+        if (record.at(name) != "none" &&
+            !ParseCanonicalUnsigned<std::uint32_t>(record.at(name)).has_value()) {
+            return false;
+        }
+    }
+    for (const auto name :
+         {"scale_product", "scale_quotient", "scale_remainder", "truncation_loss"}) {
+        if (record.at(name) != "none" && !IsCanonicalUnsignedDecimal(record.at(name))) {
+            return false;
+        }
+    }
+    for (const auto name : {"candidate_bits", "expected_bits", "parent_bits", "pow_limit_bits"}) {
+        if (!ParseCanonicalCompact(record.at(name)).has_value()) {
+            return false;
+        }
+    }
+    const auto parent_height = ParseCanonicalUnsigned<std::uint32_t>(record.at("parent_height"));
+    const auto candidate_height =
+        ParseCanonicalUnsigned<std::uint32_t>(record.at("candidate_height"));
+    const auto parent_time = ParseCanonicalUnsigned<std::uint32_t>(record.at("parent_time"));
+    const auto candidate_time = ParseCanonicalUnsigned<std::uint32_t>(record.at("candidate_time"));
+    const auto candidate_delay =
+        ParseCanonicalUnsigned<std::uint32_t>(record.at("candidate_delay_seconds"));
+    const auto parent_bits = ParseCanonicalCompact(record.at("parent_bits"));
+    const auto expected_bits = ParseCanonicalCompact(record.at("expected_bits"));
+    const auto candidate_bits = ParseCanonicalCompact(record.at("candidate_bits"));
+    if (!parent_height || !candidate_height || *candidate_height == 0U ||
+        *parent_height != *candidate_height - 1U || !parent_time || !candidate_time ||
+        !candidate_delay || *candidate_delay == 0U || *candidate_time <= *parent_time ||
+        *candidate_time - *parent_time != *candidate_delay || !parent_bits || !expected_bits ||
+        !candidate_bits ||
+        ((record.at("expected_result") == "accept") != (*candidate_bits == *expected_bits))) {
+        return false;
+    }
+    if (record.at("retarget_bits") != "none" &&
+        !ParseCanonicalCompact(record.at("retarget_bits")).has_value()) {
+        return false;
+    }
+    if (record.at("represented_target") != "none" &&
+        (record.at("represented_target").size() != 64U ||
+         !HexBytes(record.at("represented_target")).has_value())) {
+        return false;
+    }
+    for (const auto name :
+         {"parent_delta_seconds", "prefix_spacing_seconds", "expected_elapsed_seconds",
+          "clamped_elapsed_seconds", "scale_product", "scale_quotient", "scale_remainder",
+          "truncation_loss", "represented_target", "retarget_bits"}) {
+        const bool should_be_none = network == "REGTEST";
+        if ((record.at(name) == "none") != should_be_none) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::vector<std::uint8_t> DifficultyCoinbaseHeightScript(const std::uint32_t height,
+                                                         const std::uint32_t timestamp,
+                                                         const std::uint32_t bits)
+{
+    std::array<std::uint8_t, 5U> encoded{};
+    std::size_t encoded_size = 0U;
+    auto remaining = height;
+    while (remaining != 0U) {
+        encoded.at(encoded_size++) = static_cast<std::uint8_t>(remaining & 0xFFU);
+        remaining >>= 8U;
+    }
+    if (encoded_size != 0U && (encoded.at(encoded_size - 1U) & 0x80U) != 0U) {
+        encoded.at(encoded_size++) = 0U;
+    }
+    std::vector<std::uint8_t> script;
+    script.reserve(encoded_size + 5U);
+    script.push_back(static_cast<std::uint8_t>(encoded_size));
+    script.insert(script.end(), encoded.begin(),
+                  encoded.begin() + static_cast<std::ptrdiff_t>(encoded_size));
+    for (std::size_t index = 0U; index < sizeof(timestamp); ++index) {
+        script.push_back(static_cast<std::uint8_t>(timestamp >> (8U * index)));
+    }
+    for (std::size_t index = 0U; index < sizeof(bits); ++index) {
+        script.push_back(static_cast<std::uint8_t>(bits >> (8U * index)));
+    }
+    return script;
+}
+
+std::optional<nova::primitives::Block>
+MakeDifficultyBlock(const nova::crypto::Hash256& parent, const std::uint32_t height,
+                    const std::uint32_t time, const std::uint32_t bits,
+                    const nova::consensus::NetworkParams& network, const bool mine)
+{
+    const auto subsidy = nova::consensus::GetBlockSubsidy(height, network.monetary);
+    const auto target = nova::consensus::TargetFromCompact(bits, network.pow);
+    if (!subsidy.has_value() || !target.target.has_value()) {
+        return std::nullopt;
+    }
+    nova::primitives::Transaction coinbase{
+        1,
+        {nova::primitives::TxInput{
+            nova::primitives::OutPoint{nova::crypto::Hash256{}, 0xFFFF'FFFFU},
+            DifficultyCoinbaseHeightScript(height, time, bits), 0U}},
+        {nova::primitives::TxOutput{*subsidy, {0x51U}}},
+        0U};
+    nova::primitives::Block block{{1, parent, nova::crypto::Hash256{}, time, bits, 0U},
+                                  {std::move(coinbase)}};
+    const auto merkle = nova::primitives::ComputeMerkleRoot(
+        block.transactions, network.block_limits.transaction_limits);
+    if (!merkle.has_value()) {
+        return std::nullopt;
+    }
+    block.header.merkle_root = *merkle;
+    if (!mine) {
+        return block;
+    }
+    for (std::uint32_t nonce = 0U; nonce < 65'536U; ++nonce) {
+        block.header.nonce = nonce;
+        const auto hash = nova::primitives::ComputeBlockHash(block.header);
+        if (hash.has_value() && nova::consensus::CheckProofOfWork(*hash, *target.target)) {
+            return block;
+        }
+    }
+    return std::nullopt;
+}
+
+bool SameCoin(const std::optional<nova::chain::Coin>& left,
+              const std::optional<nova::chain::Coin>& right)
+{
+    if (left.has_value() != right.has_value()) {
+        return false;
+    }
+    return !left.has_value() ||
+           (left->output.value == right->output.value &&
+            left->output.script_pubkey == right->output.script_pubkey &&
+            left->height == right->height && left->is_coinbase == right->is_coinbase);
+}
+
 TEST(ProtocolConformance, PureConsensusVectorTriads)
 {
     std::size_t count = 0U;
@@ -908,6 +1154,722 @@ TEST(ProtocolConformance, PureConsensusVectorTriads)
         ++count;
     }
     EXPECT_EQ(count, 18U);
+}
+
+TEST(ProtocolConformance, DifficultyVectorsReplayImmutableNetworkHistories)
+{
+    std::map<std::string, Record> vectors;
+    for (const auto& entry : std::filesystem::directory_iterator{VectorDirectory()}) {
+        const auto filename = entry.path().filename().string();
+        if (!filename.starts_with("difficulty_") || entry.path().extension() != ".ncpv") {
+            continue;
+        }
+        const auto record = ReadRecord(filename);
+        ASSERT_TRUE(record.has_value()) << filename;
+        ASSERT_TRUE(DifficultyVectorSchema(*record)) << filename;
+        EXPECT_EQ(Field(*record, "id"), entry.path().stem().string());
+        vectors.emplace(Field(*record, "id"), *record);
+    }
+    ASSERT_EQ(vectors.size(), 15U);
+
+    const auto number = [](const Record& record, const std::string_view name) {
+        return ParseCanonicalUnsigned<std::uint32_t>(Field(record, name));
+    };
+    const auto compact = [](const Record& record, const std::string_view name) {
+        return ParseCanonicalCompact(Field(record, name));
+    };
+    const auto& testnet = nova::consensus::TestnetNetworkParams();
+    ASSERT_FALSE(testnet.difficulty.no_retargeting);
+    const auto testnet_now = std::make_shared<nova::chain::FixedValidationTimeSource>(
+        testnet.genesis_block.header.time + 6'000'000U);
+    auto testnet_initialized = nova::chain::NetworkChainInitializer::Create(
+        nova::consensus::NetworkId::kTestnet, testnet_now);
+    ASSERT_TRUE(testnet_initialized.has_value());
+    auto& testnet_chain = *testnet_initialized->chain;
+    auto& testnet_utxos = *testnet_initialized->utxos;
+    ASSERT_EQ(testnet_chain.active_tip(), testnet.genesis_hash);
+    ASSERT_EQ(testnet_chain.active_height(), 0U);
+
+    const auto testnet_pow_bits = testnet.pow.pow_limit_compact;
+    const auto prefix_record = vectors.find("difficulty_testnet_retarget_302399");
+    ASSERT_NE(prefix_record, vectors.end());
+    const auto prefix_blocks = number(prefix_record->second, "prefix_blocks");
+    const auto prefix_spacing = number(prefix_record->second, "prefix_spacing_seconds");
+    ASSERT_TRUE(prefix_blocks.has_value());
+    ASSERT_TRUE(prefix_spacing.has_value());
+    EXPECT_EQ(*prefix_blocks, testnet.difficulty.retarget_interval - 2U);
+    EXPECT_EQ(testnet.difficulty.target_spacing_seconds, 600U);
+    EXPECT_EQ(testnet.difficulty.target_timespan_seconds, 1'209'600U);
+    EXPECT_EQ(*prefix_spacing, 150U);
+
+    for (const auto& [name, record] : vectors) {
+        SCOPED_TRACE(name);
+        if (Field(record, "network") == "TESTNET") {
+            EXPECT_EQ(ParseCanonicalUnsigned<std::uint32_t>(Field(record, "genesis_time")),
+                      testnet.genesis_block.header.time);
+            EXPECT_EQ(ParseCanonicalCompact(Field(record, "pow_limit_bits")), testnet_pow_bits);
+            EXPECT_EQ(number(record, "retarget_interval"), testnet.difficulty.retarget_interval);
+            EXPECT_EQ(number(record, "target_spacing_seconds"),
+                      testnet.difficulty.target_spacing_seconds);
+            EXPECT_EQ(number(record, "target_timespan_seconds"),
+                      testnet.difficulty.target_timespan_seconds);
+            const auto elapsed =
+                ParseCanonicalUnsigned<std::uint32_t>(Field(record, "expected_elapsed_seconds"));
+            ASSERT_TRUE(elapsed.has_value());
+            const auto scenario = Field(record, "scenario");
+            if (scenario == "testnet_retarget_upper_pow_limit_cap") {
+                EXPECT_EQ(*elapsed, 4'838'401U);
+                EXPECT_EQ(number(record, "clamped_elapsed_seconds"), 4'838'400U);
+                EXPECT_EQ(Field(record, "scale_product"),
+                          "247297131590726674254656723558732000761068757110962901669871253667342866"
+                          "541497548800");
+                EXPECT_EQ(Field(record, "scale_quotient"),
+                          "204445379952651020382487370666941138195328006870835732200621076113874724"
+                          "323328");
+                EXPECT_GT(Field(record, "scale_quotient"),
+                          "115792089237316195423570985008687907853269984665640564039457584007913129"
+                          "639935");
+                EXPECT_EQ(Field(record, "scale_remainder"), "0");
+                EXPECT_EQ(Field(record, "represented_target"),
+                          "70ffff0000000000000000000000000000000000000000000000000000000000");
+                EXPECT_EQ(Field(record, "retarget_bits"), "2070ffff");
+                EXPECT_EQ(Field(record, "truncation_loss"),
+                          "153334034964488265286865528000205853646496005153126799150465807085406043"
+                          "242496");
+            } else if (scenario == "testnet_retarget_upper_clamp") {
+                EXPECT_TRUE(*elapsed == 4'838'400U || *elapsed == 4'838'401U);
+                EXPECT_EQ(number(record, "clamped_elapsed_seconds"), 4'838'400U);
+                EXPECT_EQ(Field(record, "scale_product"),
+                          "618242578526245253300663090464409271593972274231564872055690820430678133"
+                          "12489062400");
+                EXPECT_EQ(Field(record, "scale_quotient"),
+                          "511113242829237147239304803624676977177556443643820165389956035408960096"
+                          "82944");
+                EXPECT_EQ(Field(record, "scale_remainder"), "0");
+                EXPECT_EQ(Field(record, "represented_target"),
+                          "70fffc0000000000000000000000000000000000000000000000000000000000");
+                EXPECT_EQ(Field(record, "retarget_bits"), "2070fffc");
+                EXPECT_EQ(Field(record, "truncation_loss"), "0");
+                EXPECT_EQ(number(record, "first_interval_time").value() + *elapsed,
+                          number(record, "parent_time").value());
+            } else if (*elapsed == 302'401U) {
+                EXPECT_EQ(Field(record, "clamped_elapsed_seconds"), "302401");
+                EXPECT_EQ(Field(record, "scale_product"),
+                          "154561218357654053036711408442634167828513461514368990633000035094779576"
+                          "27524677632");
+                EXPECT_EQ(Field(record, "scale_quotient"),
+                          "127778785017901829560773320471754437688916552177884416859292357055869358"
+                          "69316");
+                EXPECT_EQ(Field(record, "scale_remainder"), "44032");
+                EXPECT_EQ(Field(record, "represented_target"),
+                          "1c40050000000000000000000000000000000000000000000000000000000000");
+                EXPECT_EQ(Field(record, "retarget_bits"), "201c4005");
+                EXPECT_EQ(Field(record, "truncation_loss"),
+                          "6020581173531711987348023345677300029420039104528861003845217590652804");
+            } else {
+                EXPECT_TRUE(*elapsed == 302'399U || *elapsed == 302'400U);
+                EXPECT_EQ(Field(record, "clamped_elapsed_seconds"), "302400");
+                EXPECT_EQ(Field(record, "scale_product"),
+                          "154560707244204171409160452224207500475667973194351813543669533542089291"
+                          "58843596800");
+                EXPECT_EQ(Field(record, "scale_quotient"),
+                          "127778362470406887739054606666838211372080004294272332625388172571171702"
+                          "70208");
+                EXPECT_EQ(Field(record, "scale_remainder"), "0");
+                EXPECT_EQ(Field(record, "represented_target"),
+                          "1c3fff0000000000000000000000000000000000000000000000000000000000");
+                EXPECT_EQ(Field(record, "retarget_bits"), "201c3fff");
+                EXPECT_EQ(Field(record, "truncation_loss"),
+                          "5176309760092922840576066896707769089338331729127789916371893167849472");
+            }
+        }
+    }
+
+    std::vector<nova::primitives::Block> accepted_testnet_blocks{testnet.genesis_block};
+    auto prefix_parent = testnet.genesis_hash;
+    auto prefix_time = testnet.genesis_block.header.time;
+    for (std::uint32_t height = 1U; height <= *prefix_blocks; ++height) {
+        prefix_time += *prefix_spacing;
+        auto block = MakeDifficultyBlock(prefix_parent, height, prefix_time, testnet_pow_bits,
+                                         testnet, true);
+        ASSERT_TRUE(block.has_value()) << "TESTNET prefix height " << height;
+        const auto hash = nova::primitives::ComputeBlockHash(block->header);
+        ASSERT_TRUE(hash.has_value());
+        const auto result = testnet_chain.AcceptBlock(*block);
+        ASSERT_EQ(result.error, nova::chain::ChainError::kNone)
+            << "TESTNET prefix height " << height;
+        EXPECT_EQ(result.block_hash, hash);
+        accepted_testnet_blocks.push_back(*block);
+        prefix_parent = *hash;
+    }
+    ASSERT_EQ(testnet_chain.active_height(), *prefix_blocks);
+
+    std::map<std::uint32_t, nova::primitives::Block> boundary_parents;
+    for (const auto delta : {299U, 300U, 301U}) {
+        const auto time = prefix_time + delta;
+        auto block = MakeDifficultyBlock(prefix_parent, *prefix_blocks + 1U, time, testnet_pow_bits,
+                                         testnet, true);
+        ASSERT_TRUE(block.has_value());
+        const auto hash = nova::primitives::ComputeBlockHash(block->header);
+        ASSERT_TRUE(hash.has_value());
+        const auto result = testnet_chain.AcceptBlock(*block);
+        ASSERT_EQ(result.error, nova::chain::ChainError::kNone) << "parent delta " << delta;
+        const auto parent_index = testnet_chain.GetBlockIndex(*hash);
+        ASSERT_TRUE(parent_index.has_value());
+        EXPECT_EQ(parent_index->height, *prefix_blocks + 1U);
+        accepted_testnet_blocks.push_back(*block);
+        boundary_parents.emplace(delta, std::move(*block));
+    }
+
+    const auto upper_cap_parent_record =
+        vectors.find("difficulty_testnet_retarget_upper_pow_limit_cap");
+    ASSERT_NE(upper_cap_parent_record, vectors.end());
+    const auto upper_cap_parent_delta =
+        number(upper_cap_parent_record->second, "parent_delta_seconds");
+    const auto upper_cap_parent_time = number(upper_cap_parent_record->second, "parent_time");
+    ASSERT_TRUE(upper_cap_parent_delta.has_value());
+    ASSERT_TRUE(upper_cap_parent_time.has_value());
+    EXPECT_EQ(prefix_time + *upper_cap_parent_delta, *upper_cap_parent_time);
+    auto upper_cap_parent =
+        MakeDifficultyBlock(prefix_parent, *prefix_blocks + 1U, *upper_cap_parent_time,
+                            testnet_pow_bits, testnet, true);
+    ASSERT_TRUE(upper_cap_parent.has_value());
+    const auto upper_cap_parent_hash = nova::primitives::ComputeBlockHash(upper_cap_parent->header);
+    ASSERT_TRUE(upper_cap_parent_hash.has_value());
+    const auto upper_cap_parent_result = testnet_chain.AcceptBlock(*upper_cap_parent);
+    ASSERT_EQ(upper_cap_parent_result.error, nova::chain::ChainError::kNone);
+    const auto upper_cap_parent_index = testnet_chain.GetBlockIndex(*upper_cap_parent_hash);
+    ASSERT_TRUE(upper_cap_parent_index.has_value());
+    EXPECT_EQ(upper_cap_parent_index->height, *prefix_blocks + 1U);
+    EXPECT_EQ(upper_cap_parent_index->expected_bits, testnet_pow_bits);
+    accepted_testnet_blocks.push_back(*upper_cap_parent);
+    boundary_parents.emplace(*upper_cap_parent_delta, *upper_cap_parent);
+
+    std::map<std::uint32_t, nova::crypto::Hash256> retarget_children;
+
+    const auto assert_rejection_is_atomic =
+        [](nova::chain::ChainState& chain, nova::chain::UTXOSet& utxos,
+           const nova::consensus::NetworkParams& network,
+           const std::vector<nova::primitives::Block>& accepted_blocks,
+           const nova::primitives::Block& rejected, const std::string_view label) {
+            SCOPED_TRACE(label);
+            const auto tip = chain.active_tip();
+            const auto height = chain.active_height();
+            const auto known_count = chain.known_block_count();
+            const auto utxo_size = utxos.size();
+            const auto active_before = chain.GetActiveBlockIndexes();
+            ASSERT_TRUE(active_before.has_value());
+            std::vector<nova::chain::BlockIndex> indexes_before;
+            indexes_before.reserve(accepted_blocks.size());
+            std::vector<std::optional<nova::chain::Coin>> coins_before;
+            coins_before.reserve(accepted_blocks.size());
+            for (const auto& block : accepted_blocks) {
+                const auto block_hash = nova::primitives::ComputeBlockHash(block.header);
+                ASSERT_TRUE(block_hash.has_value());
+                const auto index = chain.GetBlockIndex(*block_hash);
+                ASSERT_TRUE(index.has_value());
+                indexes_before.push_back(*index);
+                for (const auto& transaction : block.transactions) {
+                    const auto txid = transaction.TxId(network.block_limits.transaction_limits);
+                    ASSERT_TRUE(txid.has_value());
+                    coins_before.push_back(utxos.GetCoin(nova::chain::UTXOKey{*txid, 0U}));
+                }
+            }
+            const auto rejected_hash = nova::primitives::ComputeBlockHash(rejected.header);
+            ASSERT_TRUE(rejected_hash.has_value());
+
+            const auto result = chain.AcceptBlock(rejected);
+            EXPECT_EQ(result.error, nova::chain::ChainError::kBlockValidationFailure);
+            EXPECT_EQ(result.validation_error, nova::chain::BlockValidationError::kUnexpectedBits);
+            EXPECT_EQ(chain.active_tip(), tip);
+            EXPECT_EQ(chain.active_height(), height);
+            EXPECT_EQ(chain.known_block_count(), known_count);
+            EXPECT_EQ(utxos.size(), utxo_size);
+            EXPECT_FALSE(chain.GetBlockIndex(*rejected_hash).has_value());
+            EXPECT_FALSE(utxos.HaveCoin(
+                nova::chain::UTXOKey{rejected.transactions.front()
+                                         .TxId(network.block_limits.transaction_limits)
+                                         .value_or(nova::crypto::Hash256{}),
+                                     0U}));
+            const auto active_after = chain.GetActiveBlockIndexes();
+            ASSERT_TRUE(active_after.has_value());
+            ASSERT_EQ(active_after->size(), active_before->size());
+            for (std::size_t index = 0U; index < active_before->size(); ++index) {
+                EXPECT_EQ(active_after->at(index).hash, active_before->at(index).hash);
+                EXPECT_EQ(active_after->at(index).height, active_before->at(index).height);
+                EXPECT_EQ(active_after->at(index).expected_bits,
+                          active_before->at(index).expected_bits);
+                EXPECT_EQ(active_after->at(index).chain_work, active_before->at(index).chain_work);
+                EXPECT_EQ(active_after->at(index).status, active_before->at(index).status);
+            }
+            for (const auto& previous : indexes_before) {
+                const auto current = chain.GetBlockIndex(previous.hash);
+                ASSERT_TRUE(current.has_value());
+                EXPECT_EQ(current->previous_hash, previous.previous_hash);
+                EXPECT_EQ(current->height, previous.height);
+                EXPECT_EQ(current->time, previous.time);
+                EXPECT_EQ(current->expected_bits, previous.expected_bits);
+                EXPECT_EQ(current->target, previous.target);
+                EXPECT_EQ(current->per_block_work, previous.per_block_work);
+                EXPECT_EQ(current->chain_work, previous.chain_work);
+                EXPECT_EQ(current->status, previous.status);
+                EXPECT_EQ(current->validation_time, previous.validation_time);
+                ASSERT_EQ(current->block.has_value(), previous.block.has_value());
+                if (previous.block.has_value()) {
+                    EXPECT_EQ(current->block->header.version, previous.block->header.version);
+                    EXPECT_EQ(current->block->header.previous_block_id,
+                              previous.block->header.previous_block_id);
+                    EXPECT_EQ(current->block->header.merkle_root,
+                              previous.block->header.merkle_root);
+                    EXPECT_EQ(current->block->header.time, previous.block->header.time);
+                    EXPECT_EQ(current->block->header.bits, previous.block->header.bits);
+                    EXPECT_EQ(current->block->header.nonce, previous.block->header.nonce);
+                    ASSERT_EQ(current->block->transactions.size(),
+                              previous.block->transactions.size());
+                    for (std::size_t transaction = 0U;
+                         transaction < current->block->transactions.size(); ++transaction) {
+                        EXPECT_EQ(current->block->transactions.at(transaction)
+                                      .TxId(network.block_limits.transaction_limits),
+                                  previous.block->transactions.at(transaction)
+                                      .TxId(network.block_limits.transaction_limits));
+                    }
+                }
+            }
+            std::size_t coin_index = 0U;
+            for (const auto& block : accepted_blocks) {
+                for (const auto& transaction : block.transactions) {
+                    const auto txid = transaction.TxId(network.block_limits.transaction_limits);
+                    EXPECT_TRUE(txid.has_value());
+                    if (txid.has_value()) {
+                        EXPECT_TRUE(SameCoin(coins_before.at(coin_index),
+                                             utxos.GetCoin(nova::chain::UTXOKey{*txid, 0U})));
+                    }
+                    ++coin_index;
+                }
+            }
+        };
+
+    const auto make_testnet_candidate = [&](const Record& record, const bool mine) {
+        const auto parent_delta = number(record, "parent_delta_seconds");
+        const auto height = number(record, "candidate_height");
+        const auto time = number(record, "candidate_time");
+        const auto bits = compact(record, "candidate_bits");
+        if (!parent_delta || !height || !time || !bits) {
+            return std::optional<nova::primitives::Block>{};
+        }
+        std::optional<nova::crypto::Hash256> parent_hash;
+        if (*height == testnet.difficulty.retarget_interval + 1U) {
+            const auto found = retarget_children.find(*parent_delta);
+            if (found != retarget_children.end()) {
+                parent_hash = found->second;
+            }
+        } else {
+            const auto parent = boundary_parents.find(*parent_delta);
+            if (parent != boundary_parents.end()) {
+                parent_hash = nova::primitives::ComputeBlockHash(parent->second.header);
+            }
+        }
+        if (!parent_hash) {
+            return std::optional<nova::primitives::Block>{};
+        }
+        return MakeDifficultyBlock(*parent_hash, *height, *time, *bits, testnet, mine);
+    };
+    const auto assert_testnet_record_parent = [&](const Record& record,
+                                                  const nova::primitives::Block& candidate) {
+        const auto parent = testnet_chain.GetBlockIndex(candidate.header.previous_block_id);
+        ASSERT_TRUE(parent.has_value());
+        EXPECT_EQ(number(record, "parent_height"), parent->height);
+        EXPECT_EQ(number(record, "parent_time"), parent->time);
+        EXPECT_EQ(compact(record, "parent_bits"), parent->expected_bits);
+    };
+
+    for (const auto delta : {299U, 300U, 301U}) {
+        const auto suffix = prefix_time - testnet.genesis_block.header.time + delta;
+        const auto name = "difficulty_testnet_retarget_" + std::to_string(suffix);
+        const auto found = vectors.find(name);
+        ASSERT_NE(found, vectors.end()) << name;
+        const auto& record = found->second;
+        const auto expected_bits = compact(record, "expected_bits");
+        const auto candidate_bits = compact(record, "candidate_bits");
+        const auto recorded_parent_bits = compact(record, "parent_bits");
+        const auto retarget_bits = compact(record, "retarget_bits");
+        ASSERT_TRUE(expected_bits.has_value());
+        ASSERT_TRUE(candidate_bits.has_value());
+        ASSERT_TRUE(recorded_parent_bits.has_value());
+        ASSERT_TRUE(retarget_bits.has_value());
+        EXPECT_EQ(number(record, "parent_time"), prefix_time + delta);
+        EXPECT_EQ(number(record, "candidate_time"), prefix_time + delta + 1U);
+        EXPECT_EQ(number(record, "candidate_delay_seconds"), 1U);
+        EXPECT_EQ(number(record, "parent_height"), *prefix_blocks + 1U);
+        EXPECT_EQ(number(record, "candidate_height"), testnet.difficulty.retarget_interval);
+        EXPECT_EQ(*recorded_parent_bits, testnet_pow_bits);
+        EXPECT_EQ(ParseCanonicalUnsigned<std::uint32_t>(Field(record, "expected_elapsed_seconds")),
+                  number(record, "parent_time").value() - testnet.genesis_block.header.time);
+        EXPECT_EQ(
+            ParseCanonicalUnsigned<std::uint32_t>(Field(record, "clamped_elapsed_seconds")),
+            std::max(testnet.difficulty.target_timespan_seconds / 4U,
+                     number(record, "parent_time").value() - testnet.genesis_block.header.time));
+        EXPECT_EQ(Field(record, "expected_result"), "accept");
+        EXPECT_EQ(*candidate_bits, *expected_bits);
+        EXPECT_EQ(*retarget_bits, *expected_bits);
+        auto candidate = make_testnet_candidate(record, true);
+        ASSERT_TRUE(candidate.has_value()) << name;
+        assert_testnet_record_parent(record, *candidate);
+        const auto candidate_hash = nova::primitives::ComputeBlockHash(candidate->header);
+        ASSERT_TRUE(candidate_hash.has_value());
+        const auto accepted = testnet_chain.AcceptBlock(*candidate);
+        ASSERT_EQ(accepted.error, nova::chain::ChainError::kNone) << name;
+        EXPECT_EQ(accepted.block_hash, candidate_hash);
+        const auto index = testnet_chain.GetBlockIndex(*candidate_hash);
+        ASSERT_TRUE(index.has_value());
+        EXPECT_EQ(index->expected_bits, *expected_bits);
+        accepted_testnet_blocks.push_back(*candidate);
+        retarget_children.emplace(delta, *candidate_hash);
+    }
+
+    const auto wrong_retarget = vectors.find("difficulty_testnet_retarget_302400_wrong_bits");
+    ASSERT_NE(wrong_retarget, vectors.end());
+    const auto valid_retarget = vectors.find("difficulty_testnet_retarget_302400");
+    ASSERT_NE(valid_retarget, vectors.end());
+    EXPECT_EQ(Field(wrong_retarget->second, "expected_result"), "unexpected_bits");
+    EXPECT_EQ(compact(wrong_retarget->second, "expected_bits"),
+              compact(valid_retarget->second, "expected_bits"));
+    EXPECT_NE(compact(wrong_retarget->second, "candidate_bits"),
+              compact(wrong_retarget->second, "expected_bits"));
+    auto wrong_retarget_block = make_testnet_candidate(wrong_retarget->second, false);
+    ASSERT_TRUE(wrong_retarget_block.has_value());
+    assert_testnet_record_parent(wrong_retarget->second, *wrong_retarget_block);
+    assert_rejection_is_atomic(testnet_chain, testnet_utxos, testnet, accepted_testnet_blocks,
+                               *wrong_retarget_block,
+                               "retarget uses documented integer-derived bits");
+
+    const auto& upper_cap_record = upper_cap_parent_record->second;
+    const auto upper_cap_candidate = make_testnet_candidate(upper_cap_record, true);
+    ASSERT_TRUE(upper_cap_candidate.has_value());
+    assert_testnet_record_parent(upper_cap_record, *upper_cap_candidate);
+    EXPECT_EQ(compact(upper_cap_record, "candidate_bits"), testnet_pow_bits);
+    EXPECT_EQ(compact(upper_cap_record, "expected_bits"), testnet_pow_bits);
+    EXPECT_EQ(number(upper_cap_record, "expected_elapsed_seconds"), 4'838'401U);
+    EXPECT_EQ(number(upper_cap_record, "clamped_elapsed_seconds"), 4'838'400U);
+    const auto upper_cap_candidate_hash =
+        nova::primitives::ComputeBlockHash(upper_cap_candidate->header);
+    ASSERT_TRUE(upper_cap_candidate_hash.has_value());
+    const auto upper_cap_candidate_result = testnet_chain.AcceptBlock(*upper_cap_candidate);
+    ASSERT_EQ(upper_cap_candidate_result.error, nova::chain::ChainError::kNone);
+    EXPECT_EQ(upper_cap_candidate_result.block_hash, upper_cap_candidate_hash);
+    const auto upper_cap_candidate_index = testnet_chain.GetBlockIndex(*upper_cap_candidate_hash);
+    ASSERT_TRUE(upper_cap_candidate_index.has_value());
+    EXPECT_EQ(upper_cap_candidate_index->expected_bits, testnet_pow_bits);
+    accepted_testnet_blocks.push_back(*upper_cap_candidate);
+    retarget_children.emplace(*upper_cap_parent_delta, *upper_cap_candidate_hash);
+
+    const auto upper_cap_wrong =
+        vectors.find("difficulty_testnet_retarget_upper_pow_limit_cap_wrong_bits");
+    ASSERT_NE(upper_cap_wrong, vectors.end());
+    EXPECT_EQ(Field(upper_cap_wrong->second, "expected_result"), "unexpected_bits");
+    EXPECT_EQ(compact(upper_cap_wrong->second, "expected_bits"), testnet_pow_bits);
+    EXPECT_NE(compact(upper_cap_wrong->second, "candidate_bits"), testnet_pow_bits);
+    const auto upper_cap_wrong_candidate = make_testnet_candidate(upper_cap_wrong->second, false);
+    ASSERT_TRUE(upper_cap_wrong_candidate.has_value());
+    assert_testnet_record_parent(upper_cap_wrong->second, *upper_cap_wrong_candidate);
+    assert_rejection_is_atomic(testnet_chain, testnet_utxos, testnet, accepted_testnet_blocks,
+                               *upper_cap_wrong_candidate,
+                               "upper retarget saturates at the immutable TESTNET powLimit");
+
+    for (const auto delay : {1200U, 1201U}) {
+        for (const auto suffix : {"", "_wrong_bits"}) {
+            const auto name = "difficulty_testnet_delay_" + std::to_string(delay) + suffix;
+            const auto found = vectors.find(name);
+            ASSERT_NE(found, vectors.end()) << name;
+            const auto& record = found->second;
+            const bool accepted_case = Field(record, "expected_result") == "accept";
+            const auto expected_bits = compact(record, "expected_bits");
+            const auto candidate_bits = compact(record, "candidate_bits");
+            const auto parent_bits = compact(record, "parent_bits");
+            const auto accepted_name = "difficulty_testnet_delay_" + std::to_string(delay);
+            const auto accepted_record = vectors.find(accepted_name);
+            ASSERT_NE(accepted_record, vectors.end());
+            ASSERT_TRUE(expected_bits.has_value());
+            ASSERT_TRUE(candidate_bits.has_value());
+            ASSERT_TRUE(parent_bits.has_value());
+            EXPECT_EQ(number(record, "candidate_delay_seconds"), delay);
+            EXPECT_EQ(number(record, "parent_time"), testnet.genesis_block.header.time + 302'401U);
+            EXPECT_EQ(compact(record, "expected_bits"),
+                      compact(accepted_record->second, "expected_bits"));
+            EXPECT_EQ(compact(record, "parent_bits"),
+                      compact(accepted_record->second, "parent_bits"));
+            EXPECT_EQ(*candidate_bits == *expected_bits, accepted_case);
+            if (delay == 1200U) {
+                EXPECT_EQ(*expected_bits, *parent_bits);
+            } else {
+                EXPECT_EQ(*expected_bits, testnet_pow_bits);
+            }
+            auto candidate = make_testnet_candidate(record, accepted_case);
+            ASSERT_TRUE(candidate.has_value()) << name;
+            assert_testnet_record_parent(record, *candidate);
+            if (!accepted_case) {
+                assert_rejection_is_atomic(testnet_chain, testnet_utxos, testnet,
+                                           accepted_testnet_blocks, *candidate, name);
+                continue;
+            }
+            const auto hash = nova::primitives::ComputeBlockHash(candidate->header);
+            ASSERT_TRUE(hash.has_value());
+            const auto result = testnet_chain.AcceptBlock(*candidate);
+            ASSERT_EQ(result.error, nova::chain::ChainError::kNone) << name;
+            EXPECT_EQ(result.block_hash, hash);
+            const auto index = testnet_chain.GetBlockIndex(*hash);
+            ASSERT_TRUE(index.has_value());
+            EXPECT_EQ(index->expected_bits, *expected_bits);
+            accepted_testnet_blocks.push_back(*candidate);
+        }
+    }
+
+    const auto upper_exact = vectors.find("difficulty_testnet_retarget_upper_clamp_exact");
+    const auto upper_above = vectors.find("difficulty_testnet_retarget_upper_clamp_above");
+    const auto upper_above_wrong =
+        vectors.find("difficulty_testnet_retarget_upper_clamp_above_wrong_bits");
+    ASSERT_NE(upper_exact, vectors.end());
+    ASSERT_NE(upper_above, vectors.end());
+    ASSERT_NE(upper_above_wrong, vectors.end());
+    const auto upper_base = retarget_children.find(300U);
+    ASSERT_NE(upper_base, retarget_children.end());
+    const auto upper_base_index = testnet_chain.GetBlockIndex(upper_base->second);
+    ASSERT_TRUE(upper_base_index.has_value());
+    const auto upper_initial_bits = compact(upper_exact->second, "parent_bits");
+    const auto upper_delay_height = number(upper_exact->second, "history_delay_height");
+    const auto upper_delay_seconds = number(upper_exact->second, "history_delay_seconds");
+    const auto upper_post_delay_blocks = number(upper_exact->second, "history_post_delay_blocks");
+    const auto upper_post_delay_spacing =
+        number(upper_exact->second, "history_post_delay_spacing_seconds");
+    const auto upper_first_height = number(upper_exact->second, "first_interval_height");
+    const auto upper_first_time = number(upper_exact->second, "first_interval_time");
+    ASSERT_TRUE(upper_initial_bits.has_value());
+    ASSERT_TRUE(upper_delay_height.has_value());
+    ASSERT_TRUE(upper_delay_seconds.has_value());
+    ASSERT_TRUE(upper_post_delay_blocks.has_value());
+    ASSERT_TRUE(upper_post_delay_spacing.has_value());
+    ASSERT_TRUE(upper_first_height.has_value());
+    ASSERT_TRUE(upper_first_time.has_value());
+    EXPECT_EQ(*upper_first_height, testnet.difficulty.retarget_interval);
+    EXPECT_EQ(upper_base_index->height, *upper_first_height);
+    EXPECT_EQ(upper_base_index->time, *upper_first_time);
+    EXPECT_EQ(upper_base_index->expected_bits, *upper_initial_bits);
+    EXPECT_EQ(*upper_delay_height, *upper_first_height + 1U);
+    EXPECT_EQ(*upper_post_delay_blocks, 2'013U);
+    EXPECT_EQ(*upper_post_delay_spacing, 1'200U);
+    EXPECT_EQ(compact(upper_exact->second, "parent_bits"), *upper_initial_bits);
+
+    auto upper_history_parent_hash = upper_base->second;
+    auto upper_history_parent_time = *upper_first_time;
+    upper_history_parent_time += *upper_delay_seconds;
+    auto delayed_minimum_block =
+        MakeDifficultyBlock(upper_history_parent_hash, *upper_delay_height,
+                            upper_history_parent_time, testnet_pow_bits, testnet, true);
+    ASSERT_TRUE(delayed_minimum_block.has_value());
+    auto delayed_minimum_result = testnet_chain.AcceptBlock(*delayed_minimum_block);
+    ASSERT_EQ(delayed_minimum_result.error, nova::chain::ChainError::kNone);
+    auto delayed_minimum_hash = nova::primitives::ComputeBlockHash(delayed_minimum_block->header);
+    ASSERT_TRUE(delayed_minimum_hash.has_value());
+    auto delayed_minimum_index = testnet_chain.GetBlockIndex(*delayed_minimum_hash);
+    ASSERT_TRUE(delayed_minimum_index.has_value());
+    EXPECT_EQ(delayed_minimum_index->expected_bits, testnet_pow_bits);
+    accepted_testnet_blocks.push_back(*delayed_minimum_block);
+    upper_history_parent_hash = *delayed_minimum_hash;
+    auto upper_history_height = *upper_delay_height;
+
+    for (std::uint32_t index = 0U; index < *upper_post_delay_blocks; ++index) {
+        ++upper_history_height;
+        upper_history_parent_time += *upper_post_delay_spacing;
+        auto block =
+            MakeDifficultyBlock(upper_history_parent_hash, upper_history_height,
+                                upper_history_parent_time, *upper_initial_bits, testnet, true);
+        ASSERT_TRUE(block.has_value()) << "upper-clamp history height " << upper_history_height;
+        const auto hash = nova::primitives::ComputeBlockHash(block->header);
+        ASSERT_TRUE(hash.has_value());
+        const auto accepted = testnet_chain.AcceptBlock(*block);
+        ASSERT_EQ(accepted.error, nova::chain::ChainError::kNone)
+            << "upper-clamp history height " << upper_history_height;
+        const auto index_entry = testnet_chain.GetBlockIndex(*hash);
+        ASSERT_TRUE(index_entry.has_value());
+        EXPECT_EQ(index_entry->expected_bits, *upper_initial_bits);
+        accepted_testnet_blocks.push_back(*block);
+        upper_history_parent_hash = *hash;
+    }
+    ASSERT_EQ(upper_history_height, 4'030U);
+
+    const auto upper_fork_parent_hash = upper_history_parent_hash;
+    const auto upper_fork_parent_time = upper_history_parent_time;
+    std::map<std::string, nova::crypto::Hash256> upper_clamp_parent_hashes;
+    for (const auto suffix : {"exact", "above"}) {
+        const auto name = std::string{"difficulty_testnet_retarget_upper_clamp_"} + suffix;
+        const auto found = vectors.find(name);
+        ASSERT_NE(found, vectors.end()) << name;
+        const auto& record = found->second;
+        const auto final_parent_delta = number(record, "history_final_parent_delta_seconds");
+        const auto parent_height = number(record, "parent_height");
+        const auto candidate_height = number(record, "candidate_height");
+        const auto candidate_time = number(record, "candidate_time");
+        const auto candidate_bits = compact(record, "candidate_bits");
+        const auto expected_bits = compact(record, "expected_bits");
+        ASSERT_TRUE(final_parent_delta.has_value());
+        ASSERT_TRUE(parent_height.has_value());
+        ASSERT_TRUE(candidate_height.has_value());
+        ASSERT_TRUE(candidate_time.has_value());
+        ASSERT_TRUE(candidate_bits.has_value());
+        ASSERT_TRUE(expected_bits.has_value());
+        EXPECT_EQ(*parent_height, 4'031U);
+        EXPECT_EQ(*candidate_height, 4'032U);
+        EXPECT_EQ(number(record, "candidate_delay_seconds"), 1U);
+        EXPECT_EQ(number(record, "expected_elapsed_seconds"),
+                  number(record, "parent_time").value() - *upper_first_time);
+        EXPECT_EQ(number(record, "clamped_elapsed_seconds"), 4'838'400U);
+        EXPECT_EQ(*candidate_bits, *expected_bits);
+        EXPECT_EQ(*expected_bits, 0x2070FFFCU);
+
+        const auto upper_parent_time = upper_fork_parent_time + *final_parent_delta;
+        EXPECT_EQ(number(record, "parent_time"), upper_parent_time);
+        auto parent = MakeDifficultyBlock(upper_fork_parent_hash, *parent_height, upper_parent_time,
+                                          *upper_initial_bits, testnet, true);
+        ASSERT_TRUE(parent.has_value()) << name;
+        const auto parent_hash = nova::primitives::ComputeBlockHash(parent->header);
+        ASSERT_TRUE(parent_hash.has_value());
+        const auto parent_result = testnet_chain.AcceptBlock(*parent);
+        ASSERT_EQ(parent_result.error, nova::chain::ChainError::kNone) << name;
+        const auto parent_index = testnet_chain.GetBlockIndex(*parent_hash);
+        ASSERT_TRUE(parent_index.has_value());
+        EXPECT_EQ(parent_index->expected_bits, *upper_initial_bits);
+        accepted_testnet_blocks.push_back(*parent);
+        upper_clamp_parent_hashes.emplace(suffix, *parent_hash);
+
+        auto candidate = MakeDifficultyBlock(*parent_hash, *candidate_height, *candidate_time,
+                                             *candidate_bits, testnet, true);
+        ASSERT_TRUE(candidate.has_value()) << name;
+        assert_testnet_record_parent(record, *candidate);
+        const auto candidate_hash = nova::primitives::ComputeBlockHash(candidate->header);
+        ASSERT_TRUE(candidate_hash.has_value());
+        const auto result = testnet_chain.AcceptBlock(*candidate);
+        ASSERT_EQ(result.error, nova::chain::ChainError::kNone) << name;
+        EXPECT_EQ(result.block_hash, candidate_hash);
+        const auto index_entry = testnet_chain.GetBlockIndex(*candidate_hash);
+        ASSERT_TRUE(index_entry.has_value());
+        EXPECT_EQ(index_entry->expected_bits, *expected_bits);
+        accepted_testnet_blocks.push_back(*candidate);
+    }
+
+    const auto& upper_wrong_record = upper_above_wrong->second;
+    EXPECT_EQ(Field(upper_wrong_record, "expected_result"), "unexpected_bits");
+    EXPECT_EQ(compact(upper_wrong_record, "expected_bits"), 0x2070FFFCU);
+    EXPECT_EQ(compact(upper_wrong_record, "candidate_bits"), testnet_pow_bits);
+    const auto upper_wrong_parent = upper_clamp_parent_hashes.find("above");
+    ASSERT_NE(upper_wrong_parent, upper_clamp_parent_hashes.end());
+    const auto upper_wrong_height = number(upper_wrong_record, "candidate_height");
+    const auto upper_wrong_time = number(upper_wrong_record, "candidate_time");
+    const auto upper_wrong_bits = compact(upper_wrong_record, "candidate_bits");
+    ASSERT_TRUE(upper_wrong_height.has_value());
+    ASSERT_TRUE(upper_wrong_time.has_value());
+    ASSERT_TRUE(upper_wrong_bits.has_value());
+    auto upper_wrong_candidate =
+        MakeDifficultyBlock(upper_wrong_parent->second, *upper_wrong_height, *upper_wrong_time,
+                            *upper_wrong_bits, testnet, false);
+    ASSERT_TRUE(upper_wrong_candidate.has_value());
+    assert_testnet_record_parent(upper_wrong_record, *upper_wrong_candidate);
+    assert_rejection_is_atomic(testnet_chain, testnet_utxos, testnet, accepted_testnet_blocks,
+                               *upper_wrong_candidate,
+                               "upper-clamped bits reject the pow-limit candidate");
+
+    const auto& regtest = nova::consensus::RegtestNetworkParams();
+    ASSERT_TRUE(regtest.difficulty.no_retargeting);
+    const auto regtest_now = std::make_shared<nova::chain::FixedValidationTimeSource>(
+        regtest.genesis_block.header.time + 10'000U);
+    auto regtest_initialized = nova::chain::NetworkChainInitializer::Create(
+        nova::consensus::NetworkId::kRegtest, regtest_now);
+    ASSERT_TRUE(regtest_initialized.has_value());
+    auto& regtest_chain = *regtest_initialized->chain;
+    auto& regtest_utxos = *regtest_initialized->utxos;
+    const auto regtest_valid = vectors.find("difficulty_regtest_no_retarget");
+    const auto regtest_wrong = vectors.find("difficulty_regtest_no_retarget_wrong_bits");
+    ASSERT_NE(regtest_valid, vectors.end());
+    ASSERT_NE(regtest_wrong, vectors.end());
+    EXPECT_EQ(ParseCanonicalUnsigned<std::uint32_t>(Field(regtest_valid->second, "genesis_time")),
+              regtest.genesis_block.header.time);
+    EXPECT_EQ(ParseCanonicalCompact(Field(regtest_valid->second, "pow_limit_bits")),
+              regtest.pow.pow_limit_compact);
+    EXPECT_EQ(number(regtest_valid->second, "retarget_interval"),
+              regtest.difficulty.retarget_interval);
+    EXPECT_EQ(number(regtest_valid->second, "target_spacing_seconds"),
+              regtest.difficulty.target_spacing_seconds);
+    EXPECT_EQ(number(regtest_valid->second, "target_timespan_seconds"),
+              regtest.difficulty.target_timespan_seconds);
+    EXPECT_EQ(Field(regtest_valid->second, "expected_result"), "accept");
+    const auto regtest_height = number(regtest_valid->second, "candidate_height");
+    const auto regtest_time = number(regtest_valid->second, "candidate_time");
+    const auto regtest_bits = compact(regtest_valid->second, "candidate_bits");
+    ASSERT_TRUE(regtest_height.has_value());
+    ASSERT_TRUE(regtest_time.has_value());
+    ASSERT_TRUE(regtest_bits.has_value());
+    EXPECT_EQ(number(regtest_valid->second, "parent_height"), 0U);
+    EXPECT_EQ(number(regtest_valid->second, "candidate_height"), 1U);
+    EXPECT_EQ(number(regtest_valid->second, "parent_time"), regtest.genesis_block.header.time);
+    EXPECT_EQ(number(regtest_valid->second, "candidate_delay_seconds"),
+              *regtest_time - regtest.genesis_block.header.time);
+    EXPECT_EQ(compact(regtest_valid->second, "parent_bits"), regtest.genesis_block.header.bits);
+    EXPECT_EQ(compact(regtest_valid->second, "expected_bits"), *regtest_bits);
+    auto regtest_block = MakeDifficultyBlock(regtest.genesis_hash, *regtest_height, *regtest_time,
+                                             *regtest_bits, regtest, true);
+    ASSERT_TRUE(regtest_block.has_value());
+    EXPECT_EQ(regtest_block->header.previous_block_id, regtest.genesis_hash);
+    const auto regtest_hash = nova::primitives::ComputeBlockHash(regtest_block->header);
+    ASSERT_TRUE(regtest_hash.has_value());
+    EXPECT_EQ(regtest_chain.AcceptBlock(*regtest_block).error, nova::chain::ChainError::kNone);
+    const auto regtest_index = regtest_chain.GetBlockIndex(*regtest_hash);
+    ASSERT_TRUE(regtest_index.has_value());
+    EXPECT_EQ(regtest_index->expected_bits, *regtest_bits);
+    std::vector<nova::primitives::Block> accepted_regtest_blocks{regtest.genesis_block,
+                                                                 *regtest_block};
+    const auto wrong_bits = compact(regtest_wrong->second, "candidate_bits");
+    ASSERT_TRUE(wrong_bits.has_value());
+    EXPECT_EQ(Field(regtest_wrong->second, "expected_result"), "unexpected_bits");
+    EXPECT_EQ(compact(regtest_wrong->second, "expected_bits"),
+              compact(regtest_valid->second, "expected_bits"));
+    EXPECT_EQ(compact(regtest_wrong->second, "parent_bits"),
+              compact(regtest_valid->second, "parent_bits"));
+    EXPECT_NE(wrong_bits, compact(regtest_wrong->second, "expected_bits"));
+    auto regtest_wrong_block = MakeDifficultyBlock(
+        regtest.genesis_hash, number(regtest_wrong->second, "candidate_height").value(),
+        number(regtest_wrong->second, "candidate_time").value(), *wrong_bits, regtest, false);
+    ASSERT_TRUE(regtest_wrong_block.has_value());
+    EXPECT_EQ(regtest_wrong_block->header.previous_block_id, regtest.genesis_hash);
+    assert_rejection_is_atomic(regtest_chain, regtest_utxos, regtest, accepted_regtest_blocks,
+                               *regtest_wrong_block,
+                               "REGTEST no-retarget inheritance rejects altered bits");
+}
+
+TEST(ProtocolConformance, DifficultyVectorSchemaFailsClosed)
+{
+    const auto valid = ReadRecord("difficulty_testnet_retarget_302400.ncpv");
+    ASSERT_TRUE(valid.has_value());
+    ASSERT_TRUE(DifficultyVectorSchema(*valid));
+    auto malformed = *valid;
+    malformed["unknown"] = "1";
+    EXPECT_FALSE(DifficultyVectorSchema(malformed));
+    for (const auto& [name, value] : *valid) {
+        static_cast<void>(value);
+        malformed = *valid;
+        malformed.erase(name);
+        EXPECT_FALSE(DifficultyVectorSchema(malformed)) << name;
+    }
+    for (const auto& [name, value] :
+         {std::pair{"expected_result", "unknown"}, std::pair{"network", "MAINNET"},
+          std::pair{"candidate_bits", "201C3fff"}, std::pair{"candidate_delay_seconds", "01200"},
+          std::pair{"scale_remainder", "-1"}, std::pair{"kind", "difficulty_adjustment_extra"}}) {
+        malformed = *valid;
+        malformed[name] = value;
+        EXPECT_FALSE(DifficultyVectorSchema(malformed)) << name;
+    }
+    malformed = *valid;
+    malformed["expected_result"] = "unexpected_bits";
+    malformed["candidate_bits"] = "201c3ffe";
+    EXPECT_TRUE(DifficultyVectorSchema(malformed));
 }
 
 TEST(ProtocolConformance, PureVectorSchemaAndExpectedResultsFailClosed)

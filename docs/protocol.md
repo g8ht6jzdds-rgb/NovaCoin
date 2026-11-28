@@ -365,14 +365,26 @@ canonical. `MANIFEST.sha256` binds all `.ncpv` files. Unknown kinds or malformed
 grammar MUST fail closed. Existing corpus covers hashing, transaction
 serialization, SIGHASH_ALL, Merkle, compact target, subsidy, block
 serialization, TESTNET genesis, and scoped P2PKH signature authorization.
-Address and difficulty-example vectors and exhaustive signature coverage remain
-explicitly insufficient, not inferred.
+Address vectors and exhaustive signature coverage remain explicitly
+insufficient, not inferred. Fifteen test-only integer difficulty examples are
+present for immutable TESTNET/REGTEST profiles. Their coverage is partial: the
+TESTNET records bind lower-clamp-adjacent retargets and the two-spacing
+minimum-difficulty threshold after a complete validated synthetic history,
+upper-clamp elapsed times of exactly four timespans and one second above, and a
+powLimit cap; REGTEST records bind its no-retargeting outcome. The upper-clamp
+history includes one minimum-difficulty recovery segment needed to reach a
+lower starting target under immutable TESTNET, but it does not establish
+recovery triads or distinguish every recovery path. One powLimit-cap record
+has a 257-bit quotient and expects the specified powLimit result; the exact
+256-bit representability boundary and other scaling-failure classifications
+remain insufficiently evidenced, and the corpus does not close Gate 2.
 
 ## 30. Implementation conformance
 
 `nova.protocol_conformance` verifies manifest/grammar and C++ hashing, txid,
 signature digest, scoped signature authorization with unchanged controlled UTXOs,
-Merkle, compact target, subsidy, TESTNET block, and genesis vectors.
+full-history TESTNET/REGTEST difficulty examples through the existing chain-state
+API, Merkle, compact target, subsidy, TESTNET block, and genesis vectors.
 `docs/protocol-conformance-report.md` classifies every feature as
 `IMPLEMENTED AND TESTED`, `IMPLEMENTED BUT INSUFFICIENTLY TESTED`, `SPECIFIED
 BUT NOT IMPLEMENTED`, `IMPLEMENTED BUT NOT SPECIFIED`, or `INCONSISTENT`.
