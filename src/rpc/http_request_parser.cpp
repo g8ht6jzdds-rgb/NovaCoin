@@ -3,21 +3,29 @@
 #include <cctype>
 #include <limits>
 #include <optional>
-#include <string>
 
 namespace nova::rpc::detail
 {
 namespace
 {
 
-[[nodiscard]] std::string ToLower(const std::string_view input)
+[[nodiscard]] bool EqualsAsciiCaseInsensitive(const std::string_view value,
+                                              const std::string_view lowercase) noexcept
 {
-    std::string result;
-    result.reserve(input.size());
-    for (const auto character : input) {
-        result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
+    if (value.size() != lowercase.size()) {
+        return false;
     }
-    return result;
+    for (std::size_t i = 0U; i < value.size(); ++i) {
+        auto character = static_cast<unsigned char>(value[i]);
+        if (character >= static_cast<unsigned char>('A') &&
+            character <= static_cast<unsigned char>('Z')) {
+            character = static_cast<unsigned char>(character + ('a' - 'A'));
+        }
+        if (character != static_cast<unsigned char>(lowercase[i])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] std::string_view Trim(const std::string_view value) noexcept
@@ -95,9 +103,9 @@ HttpParseState ParseHttpRequest(const std::string_view input, const std::size_t 
         if (colon == std::string_view::npos || colon == 0U) {
             return HttpParseState::kInvalid;
         }
-        const auto name = ToLower(line.substr(0U, colon));
+        const auto name = line.substr(0U, colon);
         const auto value = Trim(line.substr(colon + 1U));
-        if (name == "content-length") {
+        if (EqualsAsciiCaseInsensitive(name, "content-length")) {
             if (content_length.has_value()) {
                 return HttpParseState::kInvalid;
             }
@@ -105,12 +113,12 @@ HttpParseState ParseHttpRequest(const std::string_view input, const std::size_t 
             if (!content_length.has_value() || *content_length > max_body_bytes) {
                 return HttpParseState::kInvalid;
             }
-        } else if (name == "authorization") {
+        } else if (EqualsAsciiCaseInsensitive(name, "authorization")) {
             if (authorization.has_value() || value.size() > max_header_bytes) {
                 return HttpParseState::kInvalid;
             }
             authorization = value;
-        } else if (name == "transfer-encoding") {
+        } else if (EqualsAsciiCaseInsensitive(name, "transfer-encoding")) {
             return HttpParseState::kInvalid;
         }
         if (line_end == std::string_view::npos) {

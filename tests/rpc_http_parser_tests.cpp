@@ -20,6 +20,17 @@ constexpr std::size_t kBodyLimit = 16U;
     return "POST /rpc HTTP/1.1\r\n" + std::string{headers} + "\r\n\r\n" + std::string{body};
 }
 
+TEST(RpcHttpParser, MatchesHeaderNamesWithoutCaseSensitivity)
+{
+    const std::string input =
+        Request("aUtHoRiZaTiOn: Basic dXNlcjpwYXNz\r\ncOnTeNt-LeNgTh: 1", "x");
+    ParsedHttpRequest parsed{};
+
+    EXPECT_EQ(ParseHttpRequest(input, kHeaderLimit, kBodyLimit, parsed), HttpParseState::kReady);
+    EXPECT_EQ(parsed.authorization, "Basic dXNlcjpwYXNz");
+    EXPECT_EQ(parsed.body, "x");
+}
+
 TEST(RpcHttpParser, AcceptsExactBodyBoundaryAndBindsParsedViews)
 {
     const std::string input =
@@ -69,8 +80,9 @@ TEST(RpcHttpParser, RejectsMalformedFramingAndOverflowWithoutPublishingPartialRe
     const std::string cases[] = {
         Request("", "body"),
         Request("Content-Length: 1\r\nContent-Length: 1", "x"),
-        Request("Authorization: Basic a\r\nAuthorization: Basic b\r\nContent-Length: 1", "x"),
-        Request("Transfer-Encoding: chunked", "0\r\n\r\n"),
+        Request("Content-Length: 1\r\ncontent-length: 1", "x"),
+        Request("Authorization: Basic a\r\nauthorization: Basic b\r\nContent-Length: 1", "x"),
+        Request("tRaNsFeR-EnCoDiNg: chunked", "0\r\n\r\n"),
         Request("Content-Length: +1", "x"),
         Request("Content-Length: 17", ""),
         too_large_length,
