@@ -1,6 +1,7 @@
 #include "build/version.hpp"
 #include "explorer/explorer.hpp"
 #include "explorer/http.hpp"
+#include "explorer/http_response_parser.hpp"
 #include "explorer/http_server.hpp"
 
 #include <algorithm>
@@ -142,7 +143,8 @@ int main(const int argc, char* argv[])
     }
 
     const auto source = nova::explorer::AuthenticatedRpcSnapshotSource::Create(
-        {"127.0.0.1", *rpc_port, "explorer", *rpc_password, 32U * 1024U * 1024U, &parameters});
+        {"127.0.0.1", *rpc_port, "explorer", *rpc_password,
+         nova::explorer::detail::kExplorerRpcSnapshotMaxResponseBytes, &parameters});
     if (source == nullptr) {
         std::cerr << "explorer RPC source initialization failed\n";
         return 1;

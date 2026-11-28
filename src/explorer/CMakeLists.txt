@@ -1,4 +1,5 @@
-add_library(nova_explorer STATIC explorer.cpp http.cpp http_server.cpp rpc_snapshot_source.cpp)
+add_library(nova_explorer STATIC explorer.cpp http.cpp http_server.cpp http_response_parser.cpp
+    rpc_snapshot_source.cpp)
 nova_apply_project_options(nova_explorer)
 target_include_directories(nova_explorer PUBLIC "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(nova_explorer PUBLIC nova_chain nova_consensus nova_primitives nova_wallet)

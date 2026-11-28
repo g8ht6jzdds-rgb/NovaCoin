@@ -1,2 +1,6 @@
 test/data/protocol/*.ncpv text eol=lf
 test/data/protocol/MANIFEST.sha256 text eol=lf
+fuzz/corpus/explorer_http_response/* -text -diff
+fuzz/corpus/explorer_http_response.sha256 text eol=lf
+fuzz/corpus/explorer_snapshot_json/* -text -diff
+fuzz/corpus/explorer_snapshot_json.sha256 text eol=lf

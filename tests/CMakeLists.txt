@@ -30,6 +30,8 @@ add_executable(nova_unit_tests
     network_identity_tests.cpp
     bootstrap_tests.cpp
     explorer_tests.cpp
+    explorer_http_response_parser_tests.cpp
+    explorer_snapshot_json_parser_tests.cpp
     faucet_tests.cpp
     property_tests.cpp)
 nova_apply_project_options(nova_unit_tests)
