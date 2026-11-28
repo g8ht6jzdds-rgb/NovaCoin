@@ -176,7 +176,7 @@ std::unique_ptr<chain::ChainState> SyntheticState(const SyntheticFixture& fixtur
 std::optional<primitives::Transaction> Spend(const SyntheticFixture& fixture,
                                              const chain::UTXOKey& previous_key,
                                              const primitives::TxOutput& previous_output,
-                                             const primitives::Amount output);
+                                             primitives::Amount output);
 
 std::optional<primitives::Transaction> Spend(const SyntheticFixture& fixture,
                                              const primitives::Amount output = 99 * consensus::COIN)
