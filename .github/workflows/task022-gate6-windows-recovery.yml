@@ -1,4 +1,4 @@
-name: TASK022 Gate 6 Windows depth-100 recovery
+name: TASK022 Gate 6 Windows recovery matrix
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   windows-depth-100-recovery:
-    name: Windows depth-100 recovery matrix
+    name: Windows recovery matrix
     runs-on: windows-2022
     timeout-minutes: 360
     env:
@@ -112,7 +112,7 @@ jobs:
           echo int nova_gate6_toolchain_probe; > "$compilerProbe"
           cl /Bv /nologo /c "$compilerProbe" /Fo"$compilerProbeObject" >> "$evidencePath" 2>&1
           if errorlevel 1 exit /b 1
-          cmake --preset vcpkg-release -DNOVA_ENABLE_CLANG_TIDY=OFF
+          cmake --preset vcpkg-release -DNOVA_ENABLE_CLANG_TIDY=OFF > build/gate6-windows-configure.log 2>&1
           exit /b %errorlevel%
           "@ | Set-Content -LiteralPath $configureCmd -Encoding ascii
           & cmd.exe /d /c "`"$configureCmd`""
@@ -123,6 +123,15 @@ jobs:
           Get-Content -LiteralPath 'build/vcpkg-release/CMakeCache.txt' |
             Select-String -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=|^CMAKE_CXX_COMPILER_VERSION:INTERNAL=|^VCPKG_TARGET_TRIPLET:STRING=' |
             ForEach-Object { Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value $_.Line }
+          $pythonCacheLine = Get-Content -LiteralPath 'build/vcpkg-release/CMakeCache.txt' |
+            Select-String -Pattern '^_Python3_EXECUTABLE:INTERNAL=' | Select-Object -First 1
+          if (-not $pythonCacheLine) { throw 'CMake-selected Python interpreter is missing from CMakeCache.' }
+          $ctestPython = $pythonCacheLine.Line.Split('=', 2)[1]
+          if (-not (Test-Path -LiteralPath $ctestPython)) { throw "CMake-selected Python interpreter is missing: $ctestPython" }
+          $ctestPythonVersion = (& $ctestPython --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'CMake-selected Python version query failed.' }
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "ctest_python_executable=$ctestPython"
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "ctest_python_version=$ctestPythonVersion"
           $cacheHash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'build/vcpkg-release/CMakeCache.txt').Hash.ToLowerInvariant()
           Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "cmake_cache_sha256=$cacheHash"
 
@@ -136,7 +145,7 @@ jobs:
           @echo off
           call "$vsDevCmd" -no_logo -arch=x64 -host_arch=x64
           if errorlevel 1 exit /b 1
-          cmake --build --preset vcpkg-release --target novacoind nova_generation_crash_worker nova_utxo_replay_inspector --parallel 2
+          cmake --build --preset vcpkg-release --target novacoind nova_generation_crash_worker nova_utxo_replay_inspector --parallel 2 > build/gate6-windows-build.log 2>&1
           exit /b %errorlevel%
           "@ | Set-Content -LiteralPath $buildCmd -Encoding ascii
           & cmd.exe /d /c "`"$buildCmd`""
@@ -158,14 +167,20 @@ jobs:
             throw "Gate 6 depth-100 tests require at least 5 GiB free on C: after build; observed $([math]::Round($volume.FreeSpace / 1GB, 2)) GiB."
           }
 
-      - name: Run both Windows depth-100 recovery tests
+      - name: Run all 12 registered Windows recovery tests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $env:PATH = "$(Resolve-Path -LiteralPath 'build/vcpkg-release/vcpkg_installed/x64-windows/bin');$env:PATH"
-          $regex = '^nova\.(generation_reorg_depth_100|durable_reorg_depth_100)$'
+          $regex = '^nova\.(generation_crash|generation_reorg_depth_(1|10|100)|generation_replay_interruptions|durable_rpc_configuration|durable_node_integration|durable_reorg_depth_(1|10|100)|durable_shutdown_integration|durable_root_denial)$'
+          $selection = ctest --test-dir build/vcpkg-release --tests-regex $regex --show-only
+          if ($LASTEXITCODE -ne 0) { throw 'CTest failed while enumerating the Windows recovery matrix.' }
+          if (($selection -join "`n") -notmatch 'Total Tests: 12') {
+            throw "CTest recovery selection must contain exactly 12 tests: $($selection -join '; ')"
+          }
+          Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value 'selected_windows_recovery_tests=12'
           ctest --test-dir build/vcpkg-release --tests-regex $regex --output-on-failure --verbose --parallel 1 --output-log build/gate6-windows-ctest.log
-          if ($LASTEXITCODE -ne 0) { throw "Windows depth-100 recovery matrix failed with exit code $LASTEXITCODE." }
+          if ($LASTEXITCODE -ne 0) { throw "Windows recovery matrix failed with exit code $LASTEXITCODE." }
           $volume = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
           Add-Content -LiteralPath 'build/gate6-windows-evidence.txt' -Value "free_bytes_after_recovery_tests=$([int64]$volume.FreeSpace)"
 
@@ -173,10 +188,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: gate6-windows-recovery-${{ github.sha }}
+          name: gate6-windows-recovery-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             build/gate6-windows-evidence.txt
             build/gate6-windows-executable-sha256.txt
+            build/gate6-windows-configure.log
+            build/gate6-windows-build.log
             build/gate6-windows-ctest.log
             build/vcpkg-release/CMakeCache.txt
             build/vcpkg-release/Testing/Temporary/LastTest.log
