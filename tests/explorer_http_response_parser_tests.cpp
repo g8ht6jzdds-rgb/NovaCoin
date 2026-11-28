@@ -29,6 +29,7 @@ TEST(ExplorerHttpResponseParser, RejectsMalformedAndIncompleteFrames)
         "HTTP/1.1 201 Created\r\nContent-Length: 4\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Length: 4\r\n\r\ndata",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\nContent-Length: 4\r\ncOnTeNt-LeNgTh: 4\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\nContent-Length: +4\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\nContent-Length: 184467440737095516160\r\n\r\n",

@@ -31,12 +31,16 @@ namespace
 [[nodiscard]] std::optional<std::size_t> ContentLength(const std::string_view headers) noexcept
 {
     constexpr std::string_view kName{"content-length:"};
+    constexpr std::string_view kTransferEncodingName{"transfer-encoding:"};
     std::optional<std::size_t> result;
     std::size_t position{};
     while (position < headers.size()) {
         const auto line_end = headers.find("\r\n", position);
         const auto end = line_end == std::string_view::npos ? headers.size() : line_end;
         const auto line = headers.substr(position, end - position);
+        if (StartsWithAsciiCaseInsensitive(line, kTransferEncodingName)) {
+            return std::nullopt;
+        }
         if (StartsWithAsciiCaseInsensitive(line, kName)) {
             if (result.has_value()) {
                 return std::nullopt;
