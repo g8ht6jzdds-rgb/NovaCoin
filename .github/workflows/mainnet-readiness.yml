@@ -11,16 +11,18 @@ permissions:
 jobs:
   deterministic-regtest:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install validation dependencies
-        run: sudo apt-get update && sudo apt-get install --yes ninja-build clang-18 libgtest-dev libsecp256k1-dev libssl-dev
-      - name: Compare offline REGTEST corpus across O0, O2 and O3
+        run: sudo apt-get update && sudo apt-get install --yes ninja-build clang-18 gcc-13 g++-13 libgtest-dev libsecp256k1-dev libssl-dev
+      - name: Compare offline REGTEST corpus across Clang/GCC and O0, O2 and O3
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p readiness-results
+          clang-18 --version | sed -n '1p' > readiness-results/compiler-versions.txt
+          g++-13 --version | sed -n '1p' >> readiness-results/compiler-versions.txt
           for config in debug release o3; do
             case "$config" in
               debug) type=Debug; flags=-O0 ;;
@@ -42,6 +44,30 @@ jobs:
           done
           diff -u readiness-results/debug.txt readiness-results/release.txt
           diff -u readiness-results/debug.txt readiness-results/o3.txt
+          for config in debug release o3; do
+            case "$config" in
+              debug) type=Debug; flags=-O0 ;;
+              release) type=Release; flags=-O2 ;;
+              o3) type=Release; flags=-O3 ;;
+            esac
+            cmake -S . -B "build/gcc-$config" -G Ninja \
+              -DCMAKE_BUILD_TYPE="$type" -DCMAKE_C_FLAGS="$flags" \
+              -DCMAKE_CXX_FLAGS="$flags" \
+              -DCMAKE_CXX_FLAGS_RELEASE="$flags -DNDEBUG" \
+              -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13
+            cmake --build "build/gcc-$config" --parallel 2 --target nova_readiness_vectors novacoind
+            "build/gcc-$config/tests/nova_readiness_vectors" > "readiness-results/gcc-$config.txt"
+            "build/gcc-$config/tests/nova_readiness_vectors" > "readiness-results/gcc-$config-repeat.txt"
+            if ! cmp -s "readiness-results/gcc-$config.txt" "readiness-results/gcc-$config-repeat.txt"; then
+              diff -u "readiness-results/gcc-$config.txt" "readiness-results/gcc-$config-repeat.txt" || true
+              echo "ERROR: repeated GCC 13 $config readiness corpus output differs" >&2
+              exit 1
+            fi
+            ctest --test-dir "build/gcc-$config" --output-on-failure -R 'nova.(mainnet_lock|readiness_policy|readiness_vectors)$'
+          done
+          for config in debug release o3; do
+            diff -u "readiness-results/debug.txt" "readiness-results/gcc-$config.txt"
+          done
           python3 -B scripts/check_mainnet_readiness.py > readiness-results/gates.json
           if python3 -B scripts/check_mainnet_readiness.py --activation-check; then
             echo 'ERROR: activation must remain forbidden' >&2
