@@ -18,9 +18,12 @@ jobs:
     timeout-minutes: 360
     env:
       VCPKG_DISABLE_METRICS: "1"
+      EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Verify runner capacity and bind source/tool identities
         shell: pwsh
@@ -37,6 +40,9 @@ jobs:
           $sourceTree = (git rev-parse 'HEAD^{tree}').Trim()
           if ($sourceCommit -notmatch '^[0-9a-f]{40}$' -or $sourceTree -notmatch '^[0-9a-f]{40}$') {
             throw 'Could not bind full source commit/tree identities.'
+          }
+          if ($sourceCommit -ne $env:EXPECTED_SOURCE_SHA) {
+            throw "Exact source binding failed: expected $env:EXPECTED_SOURCE_SHA, checked out $sourceCommit."
           }
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
           if (-not (Test-Path -LiteralPath $vswhere)) { throw 'vswhere.exe is unavailable on the selected runner.' }
@@ -95,11 +101,16 @@ jobs:
           $vsDevCmd = Join-Path $env:VS_INSTALL 'Common7/Tools/VsDevCmd.bat'
           $configureCmd = Join-Path $env:RUNNER_TEMP 'novacoin-gate6-configure.cmd'
           $evidencePath = (Resolve-Path -LiteralPath 'build/gate6-windows-evidence.txt').Path
+          $compilerProbe = Join-Path $env:RUNNER_TEMP 'gate6-toolchain-probe.cpp'
+          $compilerProbeObject = Join-Path $env:RUNNER_TEMP 'gate6-toolchain-probe.obj'
           @"
           @echo off
           call "$vsDevCmd" -no_logo -arch=x64 -host_arch=x64
           if errorlevel 1 exit /b 1
-          cl /Bv >> "$evidencePath" 2>&1
+          where cl >nul
+          if errorlevel 1 exit /b 1
+          echo int nova_gate6_toolchain_probe; > "$compilerProbe"
+          cl /Bv /nologo /c "$compilerProbe" /Fo"$compilerProbeObject" >> "$evidencePath" 2>&1
           if errorlevel 1 exit /b 1
           cmake --preset vcpkg-release -DNOVA_ENABLE_CLANG_TIDY=OFF
           exit /b %errorlevel%
