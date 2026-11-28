@@ -65,7 +65,7 @@ outside a unit-test-only Gate 2 claim.
 | NCV0-020 | C12 merkle vectors | TRIAD-NAMED |
 | NCV0-021 | C11 coinbase-reward vectors | TRIAD-NAMED |
 | NCV0-022 | C14/C15 crypto and signature-hash vectors | PARTIAL script/crypto subcase trace |
-| NCV0-023 | C19 `ChainStateDifficulty.*` | PARTIAL adapter-isolation evidence |
+| NCV0-023 | C19 `ChainStateDifficulty.NoRetargetingInheritsParentExpectedBits`, `SyncProgress.NoRetargetingInheritsValidatedAndPendingParentBits`, missing/self-linked TESTNET ancestry cases | PARTIAL: no-retarget inheritance and unavailable-context paths are source-bound and tested; full difficulty-history/recovery triads remain incomplete |
 | NCV0-024 | C19 `NetworkParams.*`; `NetworkParams.RejectsZeroAndInconsistentDifficultyTimingParameters` | TRIAD-NAMED timing preconditions |
 | NCV0-025 | C20 MTP/future-time vectors | TRIAD-NAMED |
 | NCV0-026 | `ChainStateSecurity.RejectsFarFutureHeadersWithoutChangingTheActiveTip` | PARTIAL local-time overflow trace |
@@ -139,10 +139,11 @@ positive, negative and boundary bindings and explicit missing evidence.
 The original candidate references above are historical, not this follow-up's
 tested-head identity. No existing corpus hash or production behavior changes.
 
-Retarget exceptional-case proof, recovery adapter equivalence, unconditional
-failure atomicity, every-caller sentinel safety and Synchronizer no-retarget
-alignment remain open. The latter is a known conformance gap, not waived by
-ordinary REGTEST outcomes. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
+Retarget exceptional-case proof, exhaustive recovery-history coverage,
+unconditional failure atomicity and every-caller sentinel safety remain open.
+The former Synchronizer no-retarget alignment gap is resolved for the tested
+validated/pending-parent paths; that evidence does not establish full difficulty
+triads or freeze acceptance. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
 Historical failures and unavailable checks are not converted to passes.
 
 ## Current clarification evidence bindings
@@ -158,8 +159,9 @@ are added; PR44 pure vectors remain separate until merged and validated.
 The checker rejects stale references, modified bound bytes and malformed records.
 It does not establish assertion adequacy, decoder allocation ordering, complete
 triads, independent review or freeze acceptance. CFD07 scaling-failure
-classification, CFD09 ancestry, CFD12 atomicity, CFD13 caller safety and CFD14
-Synchronizer alignment remain open. Gate 1 **FAIL / NOT FROZEN**, Gate 2
+classification, CFD09 exhaustive ancestry/recovery coverage, CFD12 atomicity
+and CFD13 caller safety remain open. CFD14's former no-retarget alignment gap
+is closed for tested paths only. Gate 1 **FAIL / NOT FROZEN**, Gate 2
 incomplete, MAINNET locked.
 
 ## Scoped public signature-fixture additions
@@ -187,6 +189,8 @@ failure-model evidence remain incomplete.
 
 Approved integer difficulty calculations still require reviewed complete
 ancestry/header fixtures before full adapter replay. Scaling-failure, ancestry,
-Synchronizer inheritance and atomicity contradictions remain open. No copied
-arithmetic helper or unreviewed profile substitutes for that evidence. Gate 1
+Full recovery-path discrimination and atomicity gaps remain open. The former
+Synchronizer no-retarget inheritance contradiction is resolved for tested
+paths. No copied arithmetic helper or unreviewed profile substitutes for
+remaining evidence. Gate 1
 remains FAIL / NOT FROZEN; Gate 2 remains incomplete; MAINNET remains locked.

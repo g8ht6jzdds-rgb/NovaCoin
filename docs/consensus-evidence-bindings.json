@@ -9,7 +9,7 @@
         "path": "docs/protocol.md",
         "line": 26,
         "token": "Count, length, overflow and remaining-byte",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -75,7 +75,7 @@
         "path": "docs/protocol.md",
         "line": 87,
         "token": "After structural validation, a transaction is final",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -130,7 +130,7 @@
         "path": "docs/protocol.md",
         "line": 81,
         "token": "A null outpoint is exactly",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -191,7 +191,7 @@
         "path": "docs/protocol.md",
         "line": 129,
         "token": "the minimally encoded direct-push current height",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -246,7 +246,7 @@
         "path": "docs/protocol.md",
         "line": 44,
         "token": "A signature MUST be 8..72 bytes of DER",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -326,7 +326,7 @@
         "path": "docs/protocol.md",
         "line": 177,
         "token": "Return `(e<<24)|mantissa`.",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -384,9 +384,9 @@
       "section": "17",
       "protocol": {
         "path": "docs/protocol.md",
-        "line": 239,
+        "line": 253,
         "token": "The integer sum `sum(k=0..63",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -444,9 +444,9 @@
       "section": "16",
       "protocol": {
         "path": "docs/protocol.md",
-        "line": 222,
+        "line": 236,
         "token": "Before addition, `validation_time",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -499,9 +499,9 @@
       "section": "22",
       "protocol": {
         "path": "docs/protocol.md",
-        "line": 298,
+        "line": 312,
         "token": "MAY be buffered within existing bounds",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "1ef7024ca8646dfa16dab642399a6294a5d704878f90e3a994258d50277975f2"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
