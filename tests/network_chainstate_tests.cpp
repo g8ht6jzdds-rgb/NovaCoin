@@ -115,6 +115,15 @@ TEST(NetworkInitialization, InjectedAllocationFailurePublishesNothingAndDoesNotA
 
 // Synthetic key 1 and synthetic genesis: never the frozen creator key/commitment.
 struct SyntheticFixture final {
+    SyntheticFixture(chain::ChainStateParams parameters_value, chain::ChainAnchor anchor_value,
+                     primitives::Transaction genesis_value, chain::UTXOKey key_value,
+                     crypto::PrivateKey signing_key_value, crypto::PublicKey public_key_value)
+        : parameters(std::move(parameters_value)), anchor(anchor_value),
+          genesis(std::move(genesis_value)), key(key_value),
+          signing_key(std::move(signing_key_value)), public_key(public_key_value)
+    {
+    }
+
     chain::ChainStateParams parameters;
     chain::ChainAnchor anchor;
     primitives::Transaction genesis;
@@ -153,7 +162,7 @@ std::optional<SyntheticFixture> Synthetic()
     return SyntheticFixture{
         {parameters, {600U, 1U, 600U, true, true}, 11U, Clock()},
         {*id, {}, 0U, 1'000U, *target.target, *work, chain::ChainWork::FromPerBlockWork(*work)},
-        genesis,
+        std::move(genesis),
         {*id, 0U},
         std::move(*key),
         *pub};

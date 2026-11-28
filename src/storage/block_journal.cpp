@@ -33,7 +33,16 @@ constexpr std::uint8_t kPrepareRecord = 1U;
 constexpr std::uint8_t kCommitRecord = 2U;
 std::atomic<JournalFailurePoint> g_failure_point{JournalFailurePoint::kNone};
 
-using File = std::unique_ptr<std::FILE, decltype(&std::fclose)>;
+struct FileCloser final {
+    void operator()(std::FILE* stream) const noexcept
+    {
+        if (stream != nullptr) {
+            static_cast<void>(std::fclose(stream));
+        }
+    }
+};
+
+using File = std::unique_ptr<std::FILE, FileCloser>;
 
 [[nodiscard]] File OpenFile(const std::filesystem::path& path, const bool exclusive)
 {
@@ -45,7 +54,7 @@ using File = std::unique_ptr<std::FILE, decltype(&std::fclose)>;
 #else
     auto* stream = std::fopen(path.c_str(), exclusive ? "wbx" : "r+b");
 #endif
-    return File{stream, &std::fclose};
+    return File{stream};
 }
 
 [[nodiscard]] bool SyncFile(std::FILE* stream)
