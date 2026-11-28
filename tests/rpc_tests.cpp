@@ -10,6 +10,7 @@
 #include "consensus/pow.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -407,19 +408,21 @@ TEST(RpcIntegration, ValidatesUtxoPeerAndFaucetOptionalParameters)
         {"POST", kAuth,
          R"({"jsonrpc":"2.0","id":10,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":4294967295}})"});
     EXPECT_NE(max_output_index.body.find("-32002"), std::string::npos);
-    for (const std::string_view request : std::array{
-             R"({"jsonrpc":"2.0","id":2,"method":"getutxo","params":{"txid":"00","vout":0}})",
-             R"({"jsonrpc":"2.0","id":11,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":"zero"}})",
-             R"({"jsonrpc":"2.0","id":3,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":-1}})",
-             R"({"jsonrpc":"2.0","id":4,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":4294967296}})"}) {
+    constexpr std::array<std::string_view, 4U> kInvalidUtxoRequests{
+        R"({"jsonrpc":"2.0","id":2,"method":"getutxo","params":{"txid":"00","vout":0}})",
+        R"({"jsonrpc":"2.0","id":11,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":"zero"}})",
+        R"({"jsonrpc":"2.0","id":3,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":-1}})",
+        R"({"jsonrpc":"2.0","id":4,"method":"getutxo","params":{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":4294967296}})"};
+    for (const std::string_view request : kInvalidUtxoRequests) {
         const auto rejected = regtest->HandleHttpPost({"POST", kAuth, request});
         EXPECT_NE(rejected.body.find("-32602"), std::string::npos) << request;
     }
 
-    for (const std::string_view request : std::array{
-             R"({"jsonrpc":"2.0","id":5,"method":"connectpeer","params":{"host":"127.0.0.1"}})",
-             R"({"jsonrpc":"2.0","id":6,"method":"connectpeer","params":{"host":"127.0.0.1","port":0}})",
-             R"({"jsonrpc":"2.0","id":12,"method":"connectpeer","params":{"host":"127.0.0.1","port":65536}})"}) {
+    constexpr std::array<std::string_view, 3U> kInvalidPeerRequests{
+        R"({"jsonrpc":"2.0","id":5,"method":"connectpeer","params":{"host":"127.0.0.1"}})",
+        R"({"jsonrpc":"2.0","id":6,"method":"connectpeer","params":{"host":"127.0.0.1","port":0}})",
+        R"({"jsonrpc":"2.0","id":12,"method":"connectpeer","params":{"host":"127.0.0.1","port":65536}})"};
+    for (const std::string_view request : kInvalidPeerRequests) {
         const auto rejected = regtest->HandleHttpPost({"POST", kAuth, request});
         EXPECT_NE(rejected.body.find("-32004"), std::string::npos) << request;
     }
@@ -427,10 +430,11 @@ TEST(RpcIntegration, ValidatesUtxoPeerAndFaucetOptionalParameters)
     auto testnet = CreateService("127.0.0.1", false, true, true);
     ASSERT_NE(testnet, nullptr);
     constexpr std::string_view kFaucet{"Basic ZmF1Y2V0OmZhdWNldA=="};
-    for (const std::string_view request : std::array{
-             R"({"jsonrpc":"2.0","id":7,"method":"faucetpay","params":{}})",
-             R"({"jsonrpc":"2.0","id":8,"method":"faucetpay","params":{"address":1,"amount":1}})",
-             R"({"jsonrpc":"2.0","id":9,"method":"faucetpay","params":{"address":"invalid","amount":"one"}})"}) {
+    constexpr std::array<std::string_view, 3U> kInvalidFaucetRequests{
+        R"({"jsonrpc":"2.0","id":7,"method":"faucetpay","params":{}})",
+        R"({"jsonrpc":"2.0","id":8,"method":"faucetpay","params":{"address":1,"amount":1}})",
+        R"({"jsonrpc":"2.0","id":9,"method":"faucetpay","params":{"address":"invalid","amount":"one"}})"};
+    for (const std::string_view request : kInvalidFaucetRequests) {
         const auto rejected = testnet->HandleHttpPost({"POST", kFaucet, request});
         EXPECT_NE(rejected.body.find("-32602"), std::string::npos) << request;
     }

@@ -689,9 +689,9 @@ HttpResponse RpcService::HandleHttpPost(const HttpRequest& request) noexcept
                 return {200U, ErrorResponse(id, kInvalidParams, "txid and vout required")};
             }
             const auto output_index = output.value_or(0);
+            constexpr auto kMaxOutputIndex = std::numeric_limits<std::uint32_t>::max();
             if (output_index < 0 ||
-                static_cast<std::uint64_t>(output_index) >
-                    std::numeric_limits<std::uint32_t>::max()) {
+                static_cast<std::uint64_t>(output_index) > kMaxOutputIndex) {
                 return {200U, ErrorResponse(id, kInvalidParams, "txid and vout required")};
             }
             const auto read = dependencies_.utxos.ReadCoin(
