@@ -1,15 +1,32 @@
 #include "explorer/http_response_parser.hpp"
 
-#include <cctype>
 #include <limits>
 #include <optional>
-#include <string>
 #include <string_view>
 
 namespace nova::explorer::detail
 {
 namespace
 {
+
+[[nodiscard]] bool StartsWithAsciiCaseInsensitive(const std::string_view value,
+                                                  const std::string_view prefix) noexcept
+{
+    if (value.size() < prefix.size()) {
+        return false;
+    }
+    for (std::size_t i = 0U; i < prefix.size(); ++i) {
+        auto character = static_cast<unsigned char>(value[i]);
+        if (character >= static_cast<unsigned char>('A') &&
+            character <= static_cast<unsigned char>('Z')) {
+            character = static_cast<unsigned char>(character + ('a' - 'A'));
+        }
+        if (character != static_cast<unsigned char>(prefix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
 
 [[nodiscard]] std::optional<std::size_t> ContentLength(const std::string_view headers) noexcept
 {
@@ -20,16 +37,11 @@ namespace
         const auto line_end = headers.find("\r\n", position);
         const auto end = line_end == std::string_view::npos ? headers.size() : line_end;
         const auto line = headers.substr(position, end - position);
-        std::string lower;
-        lower.reserve(line.size());
-        for (const auto character : line) {
-            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
-        }
-        if (lower.starts_with(kName)) {
+        if (StartsWithAsciiCaseInsensitive(line, kName)) {
             if (result.has_value()) {
                 return std::nullopt;
             }
-            const auto value = std::string_view{lower}.substr(kName.size());
+            const auto value = line.substr(kName.size());
             std::size_t first{};
             while (first < value.size() && value[first] == ' ') {
                 ++first;
@@ -80,23 +92,14 @@ ParseRpcSnapshotHttpResponse(const std::string_view response,
 std::optional<std::string_view> ExtractRpcSnapshotHex(const std::string_view body,
                                                       const std::size_t max_body_bytes) noexcept
 {
-    constexpr std::string_view kPrefix{"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{"};
-    constexpr std::string_view kEncoding{"\"encoding\":\"nova-snapshot-v1\""};
-    constexpr std::string_view kData{"\"data\":\""};
-    if (body.size() > max_body_bytes || !body.starts_with(kPrefix) ||
-        body.find(kEncoding) == std::string_view::npos) {
+    constexpr std::string_view kPrefix{
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"encoding\":\"nova-snapshot-v1\",\"data\":\""};
+    constexpr std::string_view kSuffix{"\"}}"};
+    if (body.size() > max_body_bytes || body.size() < kPrefix.size() + kSuffix.size() ||
+        !body.starts_with(kPrefix) || !body.ends_with(kSuffix)) {
         return std::nullopt;
     }
-    const auto start = body.find(kData);
-    if (start == std::string_view::npos) {
-        return std::nullopt;
-    }
-    const auto data_start = start + kData.size();
-    const auto data_end = body.find('\"', data_start);
-    if (data_end == std::string_view::npos || body.substr(data_end) != "\"}}") {
-        return std::nullopt;
-    }
-    return body.substr(data_start, data_end - data_start);
+    return body.substr(kPrefix.size(), body.size() - kPrefix.size() - kSuffix.size());
 }
 
 } // namespace nova::explorer::detail

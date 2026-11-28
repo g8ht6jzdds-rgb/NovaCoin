@@ -15,7 +15,7 @@ constexpr std::size_t kSmallLimit = 64U;
 
 TEST(ExplorerHttpResponseParser, AcceptsBoundedResponseAndReturnsBodyView)
 {
-    constexpr std::string_view input{"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndata"};
+    constexpr std::string_view input{"HTTP/1.1 200 OK\r\ncOnTeNt-LeNgTh: 4\r\n\r\ndata"};
     const auto body = ParseRpcSnapshotHttpResponse(input, kSmallLimit);
     ASSERT_TRUE(body.has_value());
     EXPECT_EQ(*body, "data");
@@ -29,6 +29,7 @@ TEST(ExplorerHttpResponseParser, RejectsMalformedAndIncompleteFrames)
         "HTTP/1.1 201 Created\r\nContent-Length: 4\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Length: 4\r\n\r\ndata",
+        "HTTP/1.1 200 OK\r\nContent-Length: 4\r\ncOnTeNt-LeNgTh: 4\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\nContent-Length: +4\r\n\r\ndata",
         "HTTP/1.1 200 OK\r\nContent-Length: 184467440737095516160\r\n\r\n",
         "HTTP/1.1 200 OK\r\nContent-Length: 65\r\n\r\n",

@@ -31,6 +31,9 @@ TEST(ExplorerSnapshotJsonParser, RejectsMalformedOrUnsupportedEnvelope)
         body.substr(1U),
         "{\"jsonrpc\":\"1.0\",\"id\":1,\"result\":{" + std::string{kFields},
         std::string{kPrefix} + "\"encoding\":\"other\",\"data\":\"0102\"}}",
+        std::string{kPrefix} + "not-json,\"encoding\":\"nova-snapshot-v1\",\"data\":\"0102\"}}",
+        std::string{kPrefix} +
+            "\"unexpected\":true,\"encoding\":\"nova-snapshot-v1\",\"data\":\"0102\"}}",
         std::string{kPrefix} + "\"encoding\":\"nova-snapshot-v1\"}}",
         std::string{kPrefix} + "\"encoding\":\"nova-snapshot-v1\",\"data\":0102}}",
         std::string{kPrefix} + "\"encoding\":\"nova-snapshot-v1\",\"data\":\"0102\"} extra",
