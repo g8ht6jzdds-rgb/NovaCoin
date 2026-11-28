@@ -5,6 +5,10 @@ namespace nova::node
 
 NetworkSelection SelectNetwork(const consensus::NetworkId network) noexcept
 {
+    if (network != consensus::NetworkId::kRegtest && network != consensus::NetworkId::kTestnet &&
+        network != consensus::NetworkId::kMainnet) {
+        return {NetworkSelectionError::kInvalidParameters, nullptr};
+    }
     if (network == consensus::NetworkId::kMainnet && MAINNET_LOCKED) {
         return {NetworkSelectionError::kMainnetLocked, nullptr};
     }

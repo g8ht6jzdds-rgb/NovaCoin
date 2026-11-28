@@ -28,6 +28,7 @@ class IntroducerObserver:
         self.port = self.listener.getsockname()[1]
         self.stop = threading.Event()
         self.error = None
+        self.failure_context = None
         self.events = []
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
@@ -59,10 +60,33 @@ class IntroducerObserver:
                         return
                     sockets[1 - index].sendall(chunk)
                     buffers[index] += chunk
-                    require(len(buffers[index]) <= 1024 * 1024 + 24, 'observer buffer bound')
+                    if len(buffers[index]) > 1024 * 1024 + 24:
+                        header = buffers[index][:24]
+                        declared = struct.unpack('<I', header[16:20])[0] if len(header) >= 20 else None
+                        self.failure_context = {
+                            'kind': 'buffer_bound',
+                            'direction': 'a_to_b' if index == 0 else 'b_to_a',
+                            'header_hex': header.hex(),
+                            'command_hex': header[4:16].hex(),
+                            'declared_payload_bytes': declared,
+                            'buffered_bytes': len(buffers[index]),
+                            'frame_cap': 1024 * 1024,
+                        }
+                        raise RuntimeError('observer buffer bound: ' + repr(self.failure_context))
                     while len(buffers[index]) >= 24:
                         size = struct.unpack('<I', buffers[index][16:20])[0]
-                        require(size <= 1024 * 1024, 'observer frame bound')
+                        if size > 1024 * 1024:
+                            header = buffers[index][:24]
+                            self.failure_context = {
+                                'kind': 'frame_bound',
+                                'direction': 'a_to_b' if index == 0 else 'b_to_a',
+                                'header_hex': header.hex(),
+                                'command_hex': header[4:16].hex(),
+                                'declared_payload_bytes': size,
+                                'buffered_bytes': len(buffers[index]),
+                                'frame_cap': 1024 * 1024,
+                            }
+                            raise RuntimeError('observer frame bound: ' + repr(self.failure_context))
                         if len(buffers[index]) < size + 24:
                             break
                         raw = buffers[index][:size + 24]
@@ -85,8 +109,11 @@ class IntroducerObserver:
         self.stop.set()
         self.thread.join(2)
         self.listener.close()
-        require(not self.thread.is_alive() and self.error is None, f'observer: {self.error}')
-        return self.events
+        if self.thread.is_alive():
+            return self.events, 'observer thread still running'
+        if self.error is not None:
+            return self.events, f'observer: {self.error}'
+        return self.events, None
 
 
 def frame(command, payload=b''):
@@ -213,7 +240,20 @@ def triangle(harness, evidence, enabled):
         require(harness.rpc(br, 'getpeerinfo')['count'] == 2, 'unexpected introducer topology')
         harness.events.append({'topology': 'triangle' if enabled else 'line', 'initial': initial})
     finally:
-        wire = observer.finish()
+        primary_error = sys.exc_info()[0] is not None
+        try:
+            wire, observer_error = observer.finish()
+        except Exception as error:
+            wire = observer.events
+            observer_error = f'observer finish raised {type(error).__name__}: {error}'
+        if observer_error is not None:
+            harness.events.append({
+                'introducer_observer_failure': observer_error,
+                'observer_context': observer.failure_context,
+                'observer_events': observer.events,
+            })
+            if not primary_error:
+                raise RuntimeError(observer_error)
     if enabled:
         require(any(event['direction'] == 'a_to_b' and event['command'] == 'getaddr' for event in wire), 'missing getaddr observation')
         c_address = struct.pack('<Q', 0) + b'\0' * 10 + b'\xff\xff' + bytes([127, 0, 0, 1]) + struct.pack('>H', cp)
