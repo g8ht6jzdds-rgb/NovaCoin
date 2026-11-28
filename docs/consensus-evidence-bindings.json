@@ -9,7 +9,7 @@
         "path": "docs/protocol.md",
         "line": 26,
         "token": "Count, length, overflow and remaining-byte",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -32,9 +32,9 @@
           "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 993,
+            "line": 1686,
             "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "negative": {
@@ -42,9 +42,9 @@
           "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 993,
+            "line": 1686,
             "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "boundary": {
@@ -52,9 +52,9 @@
           "assertion": "ProtocolConformance.OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 993,
+            "line": 1686,
             "token": "TEST(ProtocolConformance, OwnerBoundedParsingRejectsTrailingAndTruncatedTransactions)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         }
       },
@@ -75,7 +75,7 @@
         "path": "docs/protocol.md",
         "line": 87,
         "token": "After structural validation, a transaction is final",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -130,7 +130,7 @@
         "path": "docs/protocol.md",
         "line": 81,
         "token": "A null outpoint is exactly",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -153,9 +153,9 @@
           "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 968,
+            "line": 1661,
             "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "negative": {
@@ -163,9 +163,9 @@
           "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 968,
+            "line": 1661,
             "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "boundary": {
@@ -173,9 +173,9 @@
           "assertion": "ProtocolConformance.OwnerOutpointPredicatesAndExistenceAreSeparate",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 968,
+            "line": 1661,
             "token": "TEST(ProtocolConformance, OwnerOutpointPredicatesAndExistenceAreSeparate)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         }
       },
@@ -191,7 +191,7 @@
         "path": "docs/protocol.md",
         "line": 129,
         "token": "the minimally encoded direct-push current height",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -246,7 +246,7 @@
         "path": "docs/protocol.md",
         "line": 44,
         "token": "A signature MUST be 8..72 bytes of DER",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -263,9 +263,9 @@
           "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1008,
+            "line": 1701,
             "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "negative": {
@@ -273,9 +273,9 @@
           "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1008,
+            "line": 1701,
             "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "boundary": {
@@ -283,9 +283,9 @@
           "assertion": "ProtocolConformance.OwnerDerScalarAndLowSBoundaries",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1008,
+            "line": 1701,
             "token": "TEST(ProtocolConformance, OwnerDerScalarAndLowSBoundaries)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         }
       },
@@ -326,7 +326,7 @@
         "path": "docs/protocol.md",
         "line": 177,
         "token": "Return `(e<<24)|mantissa`.",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -343,9 +343,9 @@
           "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1083,
+            "line": 1776,
             "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "negative": {
@@ -353,9 +353,9 @@
           "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1083,
+            "line": 1776,
             "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "boundary": {
@@ -363,9 +363,9 @@
           "assertion": "ProtocolConformance.OwnerCompactEncodingTruncatesWithoutRoundingUp",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1083,
+            "line": 1776,
             "token": "TEST(ProtocolConformance, OwnerCompactEncodingTruncatesWithoutRoundingUp)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         }
       },
@@ -386,7 +386,7 @@
         "path": "docs/protocol.md",
         "line": 239,
         "token": "The integer sum `sum(k=0..63",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -403,9 +403,9 @@
           "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1055,
+            "line": 1748,
             "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "negative": {
@@ -413,9 +413,9 @@
           "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1055,
+            "line": 1748,
             "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         },
         "boundary": {
@@ -423,9 +423,9 @@
           "assertion": "ProtocolConformance.OwnerExactFullSchedulesAndFinalEra",
           "binding": {
             "path": "tests/protocol_conformance_tests.cpp",
-            "line": 1055,
+            "line": 1748,
             "token": "TEST(ProtocolConformance, OwnerExactFullSchedulesAndFinalEra)",
-            "sha256": "ad048847c4d50af617d5886a94c159854035e7ba33c88d01d2f1fe40947dd894"
+            "sha256": "4accdf26f3e06c7b013ee286c00a278a623845822db36de49a468f1c2a84f58a"
           }
         }
       },
@@ -446,7 +446,7 @@
         "path": "docs/protocol.md",
         "line": 222,
         "token": "Before addition, `validation_time",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
@@ -501,7 +501,7 @@
         "path": "docs/protocol.md",
         "line": 298,
         "token": "MAY be buffered within existing bounds",
-        "sha256": "3e79cc2e866ac7d66b5da5fce680736c89af5649e21a96bf47728eff89e9c177"
+        "sha256": "19889c616ee45b75a38aab0e72fbf56f517d15776c4b300a80b1ee7b29711c5e"
       },
       "classification": "MAPPED_BUT_TRIAD_INCOMPLETE",
       "sources": [
