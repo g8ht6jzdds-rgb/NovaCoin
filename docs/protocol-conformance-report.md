@@ -72,11 +72,13 @@ positive, negative and boundary bindings and explicit missing evidence.
 The original candidate references above are historical, not this follow-up's
 tested-head identity. No existing corpus hash or production behavior changes.
 
-Retarget exceptional-case proof, recovery adapter equivalence, unconditional
-failure atomicity, every-caller sentinel safety and Synchronizer no-retarget
-alignment remain open. The latter is a known conformance gap, not waived by
-ordinary REGTEST outcomes. Gate 1 remains FAIL / NOT FROZEN, Gate 2 incomplete.
-Historical failures and unavailable checks are not converted to passes.
+Retarget exceptional-case proof, exhaustive recovery-history coverage,
+unconditional failure atomicity and every-caller sentinel safety remain open.
+The earlier Synchronizer no-retarget alignment gap is resolved for the tested
+validated/pending-parent paths; it is not waived by ordinary REGTEST outcomes
+and does not establish complete difficulty coverage. Gate 1 remains FAIL / NOT
+FROZEN, Gate 2 incomplete. Historical failures and unavailable checks are not
+converted to passes.
 
 ## Current clarification evidence bindings
 
@@ -91,8 +93,9 @@ are added; PR44 pure vectors remain separate until merged and validated.
 The checker rejects stale references, modified bound bytes and malformed records.
 It does not establish assertion adequacy, decoder allocation ordering, complete
 triads, independent review or freeze acceptance. CFD07 scaling-failure
-classification, CFD09 ancestry, CFD12 atomicity, CFD13 caller safety and CFD14
-Synchronizer alignment remain open. Gate 1 **FAIL / NOT FROZEN**, Gate 2
+classification, CFD09 exhaustive ancestry/recovery coverage, CFD12 atomicity
+and CFD13 caller safety remain open. CFD14's former no-retarget alignment gap
+is closed for tested paths only. Gate 1 **FAIL / NOT FROZEN**, Gate 2
 incomplete, MAINNET locked.
 
 ## Scoped signature triad follow-up
@@ -112,8 +115,9 @@ family labels above remain scoped historical evidence, not complete current
 Gate 2 certificates. This follow-up adds no normative rule or production change.
 
 Maximum-valid DER71/push72, complete key/DER/multi-input cases, full difficulty
-histories, recovery discrimination, scaling failure classification, ancestry
-handling, Synchronizer alignment, sentinel callers and unconditional atomicity
-remain incomplete. Gate 1 is FAIL / NOT FROZEN; Gate 2 incomplete; MAINNET locked.
+histories, recovery discrimination, scaling failure classification, exhaustive
+ancestry handling, sentinel callers and unconditional atomicity remain
+incomplete. The former Synchronizer no-retarget alignment gap is resolved for
+tested paths only. Gate 1 is FAIL / NOT FROZEN; Gate 2 incomplete; MAINNET locked.
 Actual exact-head checks, failures and unavailable-tool/platform limitations
 belong in the accompanying external evidence packet, not presumed passes here.

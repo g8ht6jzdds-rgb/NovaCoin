@@ -205,13 +205,27 @@ retarget boundary, a non-powLimit ancestor, or a powLimit ancestor that was NOT
 delayed strictly more than twice spacing relative to its own predecessor.
 Reuse the retained ancestor's expected bits. Recovery is defined over complete
 validated ancestry. Missing ancestry is unavailable context, not an alternate
-valid target or permanent invalidity of the block. ChainState/Synchronizer
-missing-predecessor equivalence remains unverified. Current immutable-profile
+valid target or permanent invalidity of the block. Current immutable-profile
 vectors do not discriminate every recovery path; no new profile is introduced.
 
-The no-retarget inheritance rule remains normative. Synchronizer's powLimit
-shortcut is a known conformance gap requiring a separate alignment proposal;
-coincidence on frozen REGTEST history is not a general equivalence proof.
+Implementation evidence note (non-normative): on the current candidate,
+`ChainState::ExpectedBits` and `Synchronizer::ExpectedBits` both inherit the
+parent's bits when no retargeting applies. `SyncProgress.NoRetargetingInheritsValidatedAndPendingParentBits`
+accepts inherited bits for harder in-memory anchors and rejects a mismatched
+target; these anchors do not change immutable network parameters or genesis.
+For missing TESTNET ancestry, both adapters return unavailable context rather
+than substituting a target. `ChainState::AcceptBlock` reports invalid context;
+`Synchronizer::AcceptHeaders` reports chain-state unavailable. The named
+`ChainStateDifficulty.MissingTestnetRecoveryAncestryIsUnavailableContext`,
+`ChainStateDifficulty.SelfLinkedTestnetDifficultyAncestryIsUnavailableContext`,
+`SyncProgress.MissingTestnetRecoveryContextRollsBackPendingBatch`, and
+`SyncProgress.SelfLinkedTestnetDifficultyAncestryIsUnavailableContext` tests
+cover those cases and rejection-state behavior. This evidence corrects prior
+claims that the no-retarget paths were misaligned or that the tested missing-
+ancestry paths differed. It does not establish exhaustive adapter equivalence
+or complete difficulty coverage: immutable-profile vectors still do not
+discriminate every recovery path, and full difficulty histories remain
+insufficiently tested.
 
 ## 16. Timestamp rules
 

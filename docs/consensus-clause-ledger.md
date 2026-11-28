@@ -50,7 +50,7 @@ evidence rather than a fabricated automated pass.
 | NCV0-020 | Current 13: merkle root MUST equal ordered transaction commitment | MAPPED_BUT_TRIAD_INCOMPLETE | `src/primitives/block.cpp` | `BlockMerkle.*`, `BlockStructure.*` |
 | NCV0-021 | Current 10: coinbase total MUST not exceed subsidy plus fees | MAPPED_BUT_TRIAD_INCOMPLETE | `src/consensus/monetary.cpp` | `MonetaryCoinbaseReward.*` |
 | NCV0-022 | Current 3/8: signature/key checks MUST be strict and supported P2PKH only | MAPPED_BUT_TRIAD_INCOMPLETE | `src/crypto/keys.cpp`, `src/chain/validation.cpp` | `CryptoParsing.*`, `SignatureHash.*` |
-| NCV0-023 | Current 15: expected bits MUST be derived; adapters MUST NOT provide them | IMPLEMENTATION_DEPENDENT | `src/chain/chainstate.cpp` | `ChainStateDifficulty.*` |
+| NCV0-023 | Current 15: expected bits MUST be derived; adapters MUST NOT provide them | MAPPED_BUT_TRIAD_INCOMPLETE | `src/chain/chainstate.cpp`, `src/node/sync.cpp` | `ChainStateDifficulty.NoRetargetingInheritsParentExpectedBits`; `SyncProgress.NoRetargetingInheritsValidatedAndPendingParentBits`; missing/self-linked TESTNET ancestry tests; full difficulty-history triads remain incomplete |
 | NCV0-024 | Current 15: parameter validation MUST reject invalid retarget inputs | IMPLEMENTATION_DEPENDENT | `src/consensus/network_params.cpp` | `MonetaryParameters.*`, `NetworkParams.*` |
 | NCV0-025 | Current 16: time MUST exceed MTP and MUST obey future bound | MAPPED_BUT_TRIAD_INCOMPLETE | `src/chain/chainstate.cpp` | `ChainStateSecurity.*`, `MainnetConsensusBoundary.*` |
 | NCV0-026 | Current 16: rejected header MUST NOT alter local time/state | MAPPED_BUT_TRIAD_INCOMPLETE | `src/chain/chainstate.cpp` | `ChainStateSecurity.RejectsFarFutureHeadersWithoutChangingTheActiveTip` |
