@@ -9,7 +9,10 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace
@@ -171,14 +174,30 @@ std::unique_ptr<chain::ChainState> SyntheticState(const SyntheticFixture& fixtur
 }
 
 std::optional<primitives::Transaction> Spend(const SyntheticFixture& fixture,
+                                             const chain::UTXOKey& previous_key,
+                                             const primitives::TxOutput& previous_output,
+                                             primitives::Amount output);
+
+std::optional<primitives::Transaction> Spend(const SyntheticFixture& fixture,
                                              const primitives::Amount output = 99 * consensus::COIN)
 {
-    primitives::Transaction tx{1,
-                               {{{fixture.key.transaction_id, 0U}, {}, 0xffff'ffffU}},
-                               {{output, fixture.genesis.outputs.front().script_pubkey}},
-                               0U};
+    return Spend(fixture, fixture.key, fixture.genesis.outputs.front(), output);
+}
+
+std::optional<primitives::Transaction> Spend(const SyntheticFixture& fixture,
+                                             const chain::UTXOKey& previous_key,
+                                             const primitives::TxOutput& previous_output,
+                                             const primitives::Amount output)
+{
+    if (output <= 0)
+        return std::nullopt;
+    primitives::Transaction tx{
+        1,
+        {{{previous_key.transaction_id, previous_key.output_index}, {}, 0xffff'ffffU}},
+        {{output, previous_output.script_pubkey}},
+        0U};
     const auto digest = chain::ComputeSignatureHash(
-        tx, 0U, fixture.genesis.outputs.front().script_pubkey,
+        tx, 0U, previous_output.script_pubkey,
         fixture.parameters.block_validation.block_limits.transaction_limits, 1U);
     const auto signature = digest.has_value() ? fixture.signing_key.Sign(*digest) : std::nullopt;
     if (!signature.has_value())
@@ -194,7 +213,8 @@ std::optional<primitives::Transaction> Spend(const SyntheticFixture& fixture,
 
 std::optional<primitives::Block>
 Child(const SyntheticFixture& fixture, const crypto::Hash256& parent, std::uint32_t height,
-      std::uint32_t time, const std::optional<primitives::Transaction>& spend = std::nullopt)
+      std::uint32_t time, const std::optional<primitives::Transaction>& spend = std::nullopt,
+      std::vector<std::uint8_t> coinbase_script = {0x51U})
 {
     const auto subsidy =
         consensus::GetBlockSubsidy(height, fixture.parameters.block_validation.chain_parameters);
@@ -205,7 +225,7 @@ Child(const SyntheticFixture& fixture, const crypto::Hash256& parent, std::uint3
         {{{{}, 0xffff'ffffU},
           {1U, static_cast<std::uint8_t>(height), static_cast<std::uint8_t>(time & 255U)},
           0U}},
-        {{*subsidy, {0x51U}}},
+        {{*subsidy, std::move(coinbase_script)}},
         0U};
     primitives::Block block{{1, parent, {}, time, 0x207fffffU, 0U}, {coinbase}};
     if (spend.has_value())
@@ -220,6 +240,122 @@ Child(const SyntheticFixture& fixture, const crypto::Hash256& parent, std::uint3
         return std::nullopt;
     block.header = mined->header;
     return block;
+}
+
+struct ProjectedCoin final {
+    primitives::Amount value{};
+    std::vector<std::uint8_t> script_pubkey;
+    std::uint32_t height{};
+    bool is_coinbase{};
+
+    friend bool operator==(const ProjectedCoin&, const ProjectedCoin&) = default;
+};
+
+struct ReorganizationSnapshot final {
+    crypto::Hash256 tip;
+    std::uint32_t height{};
+    chain::ChainWork work;
+    std::map<chain::UTXOKey, ProjectedCoin> coins;
+
+    friend bool operator==(const ReorganizationSnapshot&, const ReorganizationSnapshot&) = default;
+};
+
+std::optional<ReorganizationSnapshot> ProjectActiveState(const SyntheticFixture& fixture,
+                                                         const chain::ChainState& state,
+                                                         const chain::UTXOSet& utxos)
+{
+    const auto active = state.GetActiveBlockIndexes();
+    if (!active.has_value() || active->empty())
+        return std::nullopt;
+
+    std::map<chain::UTXOKey, ProjectedCoin> expected;
+    const auto limits = fixture.parameters.block_validation.block_limits.transaction_limits;
+    const auto genesis_id = fixture.genesis.TxId(limits);
+    if (!genesis_id.has_value())
+        return std::nullopt;
+    for (std::size_t output_index = 0U; output_index < fixture.genesis.outputs.size();
+         ++output_index) {
+        if (output_index > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+            return std::nullopt;
+        const auto& output = fixture.genesis.outputs[output_index];
+        if (!expected
+                 .emplace(chain::UTXOKey{*genesis_id, static_cast<std::uint32_t>(output_index)},
+                          ProjectedCoin{output.value, output.script_pubkey, 0U, true})
+                 .second) {
+            return std::nullopt;
+        }
+    }
+
+    auto previous_hash = fixture.anchor.hash;
+    auto expected_height = 0U;
+    auto expected_work = fixture.anchor.chain_work;
+    for (const auto& index : *active) {
+        if (index.height == 0U) {
+            if (index.hash != fixture.anchor.hash || index.height != expected_height)
+                return std::nullopt;
+            continue;
+        }
+        if (index.height != expected_height + 1U || index.previous_hash != previous_hash ||
+            !index.block.has_value() || index.block->header.previous_block_id != previous_hash) {
+            return std::nullopt;
+        }
+        const auto computed_hash = primitives::ComputeBlockHash(index.block->header);
+        const auto target = consensus::TargetFromCompact(index.block->header.bits);
+        const auto block_work =
+            target.target.has_value() ? consensus::CalculateWork(*target.target) : std::nullopt;
+        if (!computed_hash.has_value() || *computed_hash != index.hash || !block_work.has_value() ||
+            !expected_work.Add(*block_work) || expected_work != index.chain_work) {
+            return std::nullopt;
+        }
+
+        for (const auto& transaction : index.block->transactions) {
+            const bool coinbase = primitives::IsCoinbaseTransaction(transaction);
+            if (!coinbase) {
+                for (const auto& input : transaction.inputs) {
+                    if (expected.erase(chain::UTXOKey::FromOutPoint(input.previous_output)) != 1U)
+                        return std::nullopt;
+                }
+            }
+            const auto txid = transaction.TxId(limits);
+            if (!txid.has_value())
+                return std::nullopt;
+            for (std::size_t output_index = 0U; output_index < transaction.outputs.size();
+                 ++output_index) {
+                if (output_index >
+                    static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()))
+                    return std::nullopt;
+                const auto& output = transaction.outputs[output_index];
+                if (!expected
+                         .emplace(chain::UTXOKey{*txid, static_cast<std::uint32_t>(output_index)},
+                                  ProjectedCoin{output.value, output.script_pubkey, index.height,
+                                                coinbase})
+                         .second) {
+                    return std::nullopt;
+                }
+            }
+        }
+        previous_hash = index.hash;
+        expected_height = index.height;
+    }
+
+    if (state.active_tip() != previous_hash || state.active_height() != expected_height ||
+        utxos.size() != expected.size()) {
+        return std::nullopt;
+    }
+    const auto tip = state.GetBlockIndex(state.active_tip());
+    if (!tip.has_value() || tip->chain_work != expected_work)
+        return std::nullopt;
+    for (const auto& [key, expected_coin] : expected) {
+        const auto actual = utxos.GetCoin(key);
+        if (!actual.has_value() || actual->output.value != expected_coin.value ||
+            actual->output.script_pubkey != expected_coin.script_pubkey ||
+            actual->height != expected_coin.height ||
+            actual->is_coinbase != expected_coin.is_coinbase) {
+            return std::nullopt;
+        }
+    }
+    return ReorganizationSnapshot{state.active_tip(), state.active_height(), tip->chain_work,
+                                  std::move(expected)};
 }
 
 TEST(NetworkInitialization, SyntheticSignedSpendRollbackReorgAndRestartReplay)
@@ -344,6 +480,130 @@ TEST(NetworkInitialization, SyntheticSignedSpendRollbackReorgAndRestartReplay)
     EXPECT_FALSE(restarted_utxos.HaveCoin(fixture->key));
     EXPECT_NE(restarted->AcceptBlock(*d).error, chain::ChainError::kNone);
     EXPECT_FALSE(restarted_utxos.HaveCoin(fixture->key));
+}
+
+TEST(MainnetReadiness,
+     ReorganizationsPreserveSignedSpendStateAcrossRepeatedSwitchesAtDepthsOneTenAndHundred)
+{
+    for (const auto depth : {1U, 10U, 100U}) {
+        auto fixture = Synthetic();
+        ASSERT_TRUE(fixture.has_value());
+        ASSERT_EQ(fixture->parameters.block_validation.coinbase_maturity, 0U);
+
+        chain::UTXOSet utxos;
+        auto state = SyntheticState(*fixture, utxos);
+        ASSERT_NE(state, nullptr);
+        ASSERT_TRUE(ProjectActiveState(*fixture, *state, utxos).has_value());
+
+        std::vector<chain::UTXOKey> losing_last_rewards;
+        std::vector<chain::UTXOKey> losing_tip_outputs;
+        chain::UTXOKey winning_tip_output{};
+        chain::Coin winning_tip_coin{};
+        std::vector<chain::ChainWork> losing_works;
+        std::size_t reorganization_count = 0U;
+        for (const auto branch : {0U, 1U, 2U}) {
+            const auto branch_depth = depth + branch;
+            auto parent = fixture->anchor.hash;
+            auto previous_outpoint = fixture->key;
+            auto previous_coin = chain::Coin{fixture->genesis.outputs.front(), 0U, true};
+            for (std::uint32_t height = 1U; height <= branch_depth; ++height) {
+                std::optional<primitives::Transaction> spend;
+                if (height > 1U) {
+                    spend = Spend(*fixture, previous_outpoint, previous_coin.output,
+                                  previous_coin.output.value - 1);
+                    ASSERT_TRUE(spend.has_value())
+                        << "depth=" << depth << " branch=" << branch << " height=" << height;
+                }
+
+                const auto block =
+                    Child(*fixture, parent, height,
+                          1'100U + static_cast<std::uint32_t>(branch) * 10'000U + height, spend,
+                          fixture->genesis.outputs.front().script_pubkey);
+                ASSERT_TRUE(block.has_value())
+                    << "depth=" << depth << " branch=" << branch << " height=" << height;
+                const auto previous_tip = state->active_tip();
+                const auto accepted = state->AcceptBlock(*block);
+                ASSERT_EQ(accepted.error, chain::ChainError::kNone)
+                    << "depth=" << depth << " branch=" << branch << " height=" << height;
+                ASSERT_TRUE(accepted.block_hash.has_value());
+                if (accepted.became_active && block->header.previous_block_id != previous_tip)
+                    ++reorganization_count;
+                parent = *accepted.block_hash;
+
+                const auto& last_transaction = block->transactions.back();
+                const auto txid = last_transaction.TxId(
+                    fixture->parameters.block_validation.block_limits.transaction_limits);
+                ASSERT_TRUE(txid.has_value());
+                previous_outpoint = {*txid, 0U};
+                previous_coin =
+                    chain::Coin{last_transaction.outputs.front(), height, !spend.has_value()};
+                const auto snapshot = ProjectActiveState(*fixture, *state, utxos);
+                ASSERT_TRUE(snapshot.has_value())
+                    << "depth=" << depth << " branch=" << branch << " height=" << height;
+
+                if (branch < 2U && height == branch_depth) {
+                    const auto reward_id = block->transactions.front().TxId(
+                        fixture->parameters.block_validation.block_limits.transaction_limits);
+                    ASSERT_TRUE(reward_id.has_value());
+                    losing_last_rewards.emplace_back(*reward_id, 0U);
+                    losing_tip_outputs.push_back(previous_outpoint);
+                    losing_works.push_back(snapshot->work);
+                }
+                if (branch == 2U && height == branch_depth) {
+                    winning_tip_output = previous_outpoint;
+                    winning_tip_coin = previous_coin;
+                }
+            }
+            EXPECT_EQ(state->active_tip(), parent) << "depth=" << depth << " branch=" << branch;
+            EXPECT_EQ(state->active_height(), branch_depth)
+                << "depth=" << depth << " branch=" << branch;
+        }
+
+        ASSERT_GE(reorganization_count, 2U);
+        ASSERT_EQ(state->active_height(), depth + 2U);
+        ASSERT_EQ(losing_last_rewards.size(), 2U);
+        ASSERT_EQ(losing_tip_outputs.size(), 2U);
+        ASSERT_EQ(losing_works.size(), 2U);
+        for (const auto& outpoint : losing_last_rewards)
+            EXPECT_FALSE(utxos.HaveCoin(outpoint));
+        for (const auto& outpoint : losing_tip_outputs)
+            EXPECT_FALSE(utxos.HaveCoin(outpoint));
+        EXPECT_TRUE(utxos.HaveCoin(winning_tip_output));
+        const auto winner = utxos.GetCoin(winning_tip_output);
+        ASSERT_TRUE(winner.has_value());
+        EXPECT_EQ(winner->output.value, winning_tip_coin.output.value);
+        EXPECT_EQ(winner->output.script_pubkey, winning_tip_coin.output.script_pubkey);
+        EXPECT_EQ(winner->height, winning_tip_coin.height);
+        EXPECT_FALSE(winner->is_coinbase);
+
+        const auto before = ProjectActiveState(*fixture, *state, utxos);
+        ASSERT_TRUE(before.has_value());
+        for (const auto& losing_work : losing_works)
+            EXPECT_TRUE(losing_work < before->work);
+        const auto known_before = state->known_block_count();
+        const auto candidate =
+            Child(*fixture, state->active_tip(), state->active_height() + 1U, 30'000U + depth,
+                  std::nullopt, fixture->genesis.outputs.front().script_pubkey);
+        ASSERT_TRUE(candidate.has_value());
+        auto invalid_overpay = *candidate;
+        invalid_overpay.transactions.front().outputs.front().value += 1;
+        const auto merkle = primitives::ComputeMerkleRoot(
+            invalid_overpay.transactions,
+            fixture->parameters.block_validation.block_limits.transaction_limits);
+        ASSERT_TRUE(merkle.has_value());
+        invalid_overpay.header.merkle_root = *merkle;
+        const auto mined = consensus::MineRegtestBlock(invalid_overpay.header, 4'096U);
+        ASSERT_TRUE(mined.has_value());
+        invalid_overpay.header = mined->header;
+        const auto rejected = state->AcceptBlock(invalid_overpay);
+        EXPECT_EQ(rejected.error, chain::ChainError::kBlockValidationFailure);
+        EXPECT_EQ(rejected.validation_error, chain::BlockValidationError::kInvalidCoinbaseReward);
+        EXPECT_EQ(state->known_block_count(), known_before);
+        EXPECT_EQ(ProjectActiveState(*fixture, *state, utxos), before);
+        for (const auto& outpoint : losing_tip_outputs)
+            EXPECT_FALSE(utxos.HaveCoin(outpoint));
+        EXPECT_TRUE(utxos.HaveCoin(winning_tip_output));
+    }
 }
 
 TEST(NetworkInitialization, AtomicSeedBatchFailureDoesNotLeakPartialOutputs)
