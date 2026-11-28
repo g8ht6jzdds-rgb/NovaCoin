@@ -93,7 +93,7 @@ UTXO-transition, monetary or reorganization coverage. Gates 1/2 remain incomplet
 
 ## Difficulty-adjustment records
 
-`kind=difficulty_adjustment` uses exactly these 32 fields, encoded in the
+`kind=difficulty_adjustment` uses exactly these 32 base fields, encoded in the
 canonical sorted order required above:
 `candidate_bits`, `candidate_delay_seconds`, `candidate_height`,
 `candidate_time`, `clamped_elapsed_seconds`, `expected_bits`,
@@ -111,24 +111,40 @@ The represented target is 64 lowercase hexadecimal digits. Integer values are
 canonical decimal strings. Literal `none` is limited to ancestry and scaling
 fields that do not apply to the REGTEST no-retargeting cases.
 
+The `testnet_retarget_upper_clamp` scenario has exactly seven additional
+canonical fields: `first_interval_height`, `first_interval_time`,
+`history_delay_height`, `history_delay_seconds`,
+`history_final_parent_delta_seconds`, `history_post_delay_blocks`, and
+`history_post_delay_spacing_seconds`. They bind the complete accepted header
+history used to reach the upper-clamp parent. No other scenario may contain
+these fields.
+
 All TESTNET cases use the immutable TESTNET `NetworkParams`; their synthetic
 header ancestry is fully admitted by `ChainState` before candidate evaluation.
 The corpus binds the 2014-block prefix, its deterministic timestamps, the
 retarget parent, and each candidate time. It covers elapsed times 302399,
-302400, and 302401 seconds around the lower clamp; the 1200/1201-second
+302400, and 302401 seconds around the lower clamp; exact 4-timespan and
+4-timespan-plus-one elapsed times at the upper clamp; a retarget whose scaled
+target exceeds the immutable TESTNET powLimit; the 1200/1201-second
 minimum-difficulty threshold after a retarget; and wrong-bits rejections.
 The arithmetic fields expose the integer product, quotient, remainder,
-represented compact target, and truncation loss from the independent integer
-fixture generator. The conformance test replays candidate blocks against the
+represented compact target, and `scale_quotient - represented_target` from the
+independent integer fixture generator. This difference includes powLimit-cap
+loss where the quotient exceeds powLimit, as well as compact-encoding
+truncation. The conformance test replays candidate blocks against the
 existing chain-state API and checks rejection non-mutation.
 
 The REGTEST cases use its immutable no-retargeting parameters. They cover one
 accepted inherited-bits child and one wrong-bits rejection. Because REGTEST's
 parent expected bits equal its pow limit, these cases cannot distinguish
-inheritance from an always-pow-limit implementation. TESTNET minimum-difficulty
-recovery traversal, upper clamping, quotient saturation, and scaling-failure
-classification remain insufficiently evidenced; no test-only network profile
-or recovery claim is introduced.
+inheritance from an always-pow-limit implementation. The upper-clamp histories
+include a delayed minimum-difficulty block and a fully accepted return to the
+earlier retarget target because the immutable TESTNET profile is needed to
+reach the upper-clamp case from a lower target. These histories exercise that
+one path but do not distinguish or exhaustively prove minimum-difficulty
+recovery; recovery remains insufficiently evidenced. Quotient-overflow
+saturation and scaling-failure classification also remain insufficiently
+evidenced. No test-only network profile is introduced.
 
 | File | Case | Expected result |
 | --- | --- | --- |
@@ -140,13 +156,24 @@ or recovery claim is introduced.
 | `difficulty_testnet_delay_1200_wrong_bits.ncpv` | Exact threshold wrong-bits rejection | `unexpected_bits` |
 | `difficulty_testnet_delay_1201.ncpv` | Strictly delayed minimum-difficulty block | `accept` |
 | `difficulty_testnet_delay_1201_wrong_bits.ncpv` | Strict-delay wrong-bits rejection | `unexpected_bits` |
+| `difficulty_testnet_retarget_upper_clamp_exact.ncpv` | Exact 4-timespan upper-clamp boundary | `accept` |
+| `difficulty_testnet_retarget_upper_clamp_above.ncpv` | One second above upper clamp, clamped to 4 timespan | `accept` |
+| `difficulty_testnet_retarget_upper_clamp_above_wrong_bits.ncpv` | Wrong bits one second above upper clamp | `unexpected_bits` |
+| `difficulty_testnet_retarget_upper_pow_limit_cap.ncpv` | Upper-clamped scaled target exceeds TESTNET powLimit | `accept` |
+| `difficulty_testnet_retarget_upper_pow_limit_cap_wrong_bits.ncpv` | Rejects bits above the TESTNET powLimit cap result | `unexpected_bits` |
 | `difficulty_regtest_no_retarget.ncpv` | REGTEST inherited expected bits | `accept` |
 | `difficulty_regtest_no_retarget_wrong_bits.ncpv` | REGTEST wrong-bits rejection | `unexpected_bits` |
 
-These records are a partial calculation corpus, not a difficulty triad for all
-documented rules and not Gate 2 closure. TESTNET recovery remains
+These fifteen records are a partial calculation corpus, not a difficulty triad
+for all documented rules and not Gate 2 closure. The five upper-clamp/cap
+records expose the independently generated product, quotient, cap result,
+compact encoding, and wrong-bits rejection. The powLimit-cap record's exact
+quotient is 257 bits and exceeds the maximum 256-bit value; it asserts the
+expected powLimit result. The exact 256-bit representability boundary and other
+scaling failure causes remain insufficiently evidenced. TESTNET recovery remains
 `IMPLEMENTED BUT INSUFFICIENTLY TESTED` under the accepted observational-limit
-decision; no recovery path is exercised here.
+decision; the upper-clamp history's recovery segment does not prove all recovery
+paths or close that gap.
 
 ## Additional single-fault and amount-context records
 

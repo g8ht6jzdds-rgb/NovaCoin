@@ -197,14 +197,15 @@ These assertions bind protocol §15 / C19 / NCV0-023 only for the explicitly
 listed cases. The vector arithmetic does not close NCV0-024's parameter
 precondition assertions or every C19 rule.
 
-The test-only `difficulty_adjustment` corpus adds ten NCPV1 records replayed by
+The test-only `difficulty_adjustment` corpus adds fifteen NCPV1 records replayed by
 `ProtocolConformance.DifficultyVectorsReplayImmutableNetworkHistories` through
 the existing TESTNET/REGTEST `NetworkChainInitializer` and
 `ChainState::AcceptBlock` path. The TESTNET cases construct and validate a
 complete 2014-block prefix using the immutable TESTNET parameters before
 testing retarget elapsed times 302399/302400/302401, the 1200/1201-second
-minimum-difficulty threshold after an accepted retarget, and wrong-bits
-rejections. Rejections compare the active chain, indexed blocks, all tracked
+minimum-difficulty threshold after an accepted retarget, the upper clamp at
+four timespans and one second above, a powLimit cap, and wrong-bits rejections.
+Rejections compare the active chain, indexed blocks, all tracked
 coinbase UTXOs and state counts before and after. REGTEST tests its actual
 no-retargeting parameters and wrong-bits rejection.
 
@@ -215,8 +216,13 @@ corpus manifest; candidate acceptance is checked against the real chain-state
 API, not a copied difficulty implementation. This does not prove every
 intermediate through a public arithmetic API.
 
-Coverage remains partial: the TESTNET upper clamp, recovery walk, quotient
-saturation and scaling-failure classification are not exercised. The REGTEST
+Coverage remains partial: five TESTNET records exercise the upper clamp and
+powLimit cap. The upper-clamp history includes one accepted minimum-difficulty
+recovery segment as setup; it does not establish recovery-path triads or
+distinguish all traversal cases. The powLimit-cap vector's quotient is 257 bits
+and expects the specified powLimit result; the exact 256-bit representability
+boundary and classification of other scaling failures remain insufficiently
+tested. The REGTEST
 inheritance vector cannot distinguish inherited bits from a constant powLimit,
 because the accepted parent bits equal powLimit. No test-only difficulty
 profile is used. TESTNET recovery remains `IMPLEMENTED BUT INSUFFICIENTLY

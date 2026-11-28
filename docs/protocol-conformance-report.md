@@ -24,7 +24,7 @@ records; the PR's exact head binds their manifest and replay assertions.
 | 12 Block hash | block/network-parameter tests | IMPLEMENTED AND TESTED |
 | 13 Merkle tree | block tests; `merkle.ncpv` | IMPLEMENTED AND TESTED |
 | 14 Proof of work | PoW tests; `target_pow.ncpv` | IMPLEMENTED AND TESTED |
-| 15 Difficulty | PoW/network-parameter tests; 10 `difficulty_adjustment` records replayed through complete immutable TESTNET/REGTEST histories by `ProtocolConformance.DifficultyVectorsReplayImmutableNetworkHistories` | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
+| 15 Difficulty | PoW/network-parameter tests; 15 `difficulty_adjustment` records replayed through complete immutable TESTNET/REGTEST histories by `ProtocolConformance.DifficultyVectorsReplayImmutableNetworkHistories` | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
 | 16 Timestamps | validation boundary tests | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
 | 17 Monetary policy | monetary tests; `subsidy.ncpv` | IMPLEMENTED AND TESTED |
 | 18 Block validation | validation tests | IMPLEMENTED BUT INSUFFICIENTLY TESTED |
@@ -50,10 +50,12 @@ records; the PR's exact head binds their manifest and replay assertions.
   mismatch, digest mismatch, lower/upper push boundaries), but exhaustive
   signature/DER/key and multi-input coverage remains incomplete. Difficulty
   examples now cover TESTNET lower-clamp neighbors, the 1200/1201-second delay
-  threshold after a complete accepted history, and REGTEST no-retargeting.
-  TESTNET minimum-difficulty recovery remains IMPLEMENTED BUT INSUFFICIENTLY
-  TESTED; upper clamping, quotient saturation and scaling-failure classification
-  remain untested. No synthetic difficulty profile is used.
+  threshold after a complete accepted history, the upper clamp and powLimit
+  cap, and REGTEST no-retargeting. TESTNET minimum-difficulty recovery remains
+  IMPLEMENTED BUT INSUFFICIENTLY TESTED; one cap vector exercises a 257-bit
+  quotient and expects powLimit saturation, but the exact 256-bit boundary and
+  other scaling-failure classification remain untested. No synthetic
+  difficulty profile is used.
 - Gate 1 remains **FAIL / NOT FROZEN** pending human/external freeze review;
   Gate 2 is incomplete. Existing CTest-registration and clang-tidy limitations
   remain limitations, not passes.
@@ -123,19 +125,24 @@ belong in the accompanying external evidence packet, not presumed passes here.
 
 ## TASK022 difficulty-vector follow-up
 
-The ten additive `difficulty_adjustment` records in `test/data/protocol/` are
+The fifteen additive `difficulty_adjustment` records in `test/data/protocol/` are
 bound to actual immutable TESTNET/REGTEST parameters and replayed using complete
 validated TESTNET ancestry through `ChainState::AcceptBlock`. Three TESTNET
 retarget records expose elapsed times 302399, 302400 and 302401 seconds; four
 records cover expected-bits acceptance/rejection at the 1200/1201-second delay
-threshold after an accepted retarget; two records cover REGTEST's actual
-no-retargeting profile. The tenth record rejects incorrect retarget bits at the
-exact lower-clamp boundary. The vector format documents integer intermediate
-fields and independent oracle provenance.
+threshold after an accepted retarget; five cover the upper clamp at exactly
+four timespans and one second above, the powLimit cap, and wrong-bits rejection;
+two records cover REGTEST's actual no-retargeting profile. One record rejects
+incorrect retarget bits at the exact lower-clamp boundary. The vector format
+documents integer intermediate fields and independent oracle provenance.
 
 This is scoped partial evidence only. No production source, parameters, genesis
-or network behavior changes. The upper clamp, TESTNET recovery walk, quotient
-saturation and scaling-failure classification remain insufficiently tested;
-REGTEST's powLimit result does not discriminate inheritance from a constant
-powLimit shortcut. Gate 1 remains FAIL / NOT FROZEN, Gate 2 remains incomplete,
-and MAINNET remains locked.
+or network behavior changes. The upper-clamp history includes one recovery
+segment to reach a lower starting target under immutable TESTNET, but recovery
+traversal remains insufficiently evidenced. The cap vector exercises one
+257-bit quotient and expects the powLimit result, but the exact 256-bit
+representability boundary and scaling-failure classification remain
+insufficiently tested; REGTEST's
+powLimit result does not discriminate inheritance from a constant powLimit
+shortcut. Gate 1 remains FAIL / NOT FROZEN, Gate 2 remains incomplete, and
+MAINNET remains locked.
