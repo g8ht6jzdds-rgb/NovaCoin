@@ -2,7 +2,9 @@
 
 #include "consensus/monetary.hpp"
 
+#include "consensus/network_params.hpp"
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -152,6 +154,101 @@ TEST(MonetaryCoinbaseReward, RejectsInflationAndMalformedMonetaryInputs)
     non_coinbase.inputs.front().previous_output.output_index = 0U;
     EXPECT_EQ(CheckCoinbaseReward(non_coinbase, 0LL, 0U, kShortIntervalParams),
               CoinbaseRewardError::kNotCoinbase);
+}
+
+TEST(MonetaryNetworkSchedule, EveryEraAndFinalUnitMatchExactAcceptedNetworkTotals)
+{
+    for (const auto* network :
+         {&nova::consensus::RegtestNetworkParams(), &nova::consensus::TestnetNetworkParams()}) {
+        SCOPED_TRACE(network->monetary.halving_interval);
+        const auto& parameters = network->monetary;
+        const auto interval = parameters.halving_interval;
+        ASSERT_GT(interval, 0U);
+        Amount reference = INITIAL_SUBSIDY;
+        Amount total = 0;
+        for (std::uint32_t era = 0U; era < 64U; ++era) {
+            ASSERT_LE(era + 1U, std::numeric_limits<std::uint32_t>::max() / interval);
+            const auto first = era * interval;
+            const auto last = first + interval - 1U;
+            EXPECT_EQ(GetBlockSubsidy(first, parameters), reference);
+            EXPECT_EQ(GetBlockSubsidy(last, parameters), reference);
+            if (first != 0U)
+                EXPECT_EQ(GetBlockSubsidy(first - 1U, parameters),
+                          era <= 33U ? static_cast<Amount>(INITIAL_SUBSIDY) /
+                                           static_cast<Amount>(std::uint64_t{1U} << (era - 1U))
+                                     : Amount{0});
+            ASSERT_LE(reference, MAX_MONEY / static_cast<Amount>(interval));
+            const auto issuance = reference * static_cast<Amount>(interval);
+            ASSERT_LE(issuance, MAX_MONEY - total);
+            total += issuance;
+            reference /= 2;
+        }
+        EXPECT_EQ(GetBlockSubsidy(32U * interval, parameters), Amount{1});
+        EXPECT_EQ(GetBlockSubsidy(33U * interval, parameters), Amount{0});
+        EXPECT_EQ(GetBlockSubsidy(std::numeric_limits<std::uint32_t>::max(), parameters),
+                  Amount{0});
+        const Amount expected = interval == 150U ? 1'499'999'998'350LL : 2'099'999'997'690'000LL;
+        EXPECT_EQ(total, expected);
+        EXPECT_EQ(CalculateTheoreticalIssuance(parameters), expected);
+        const auto genesis = network->genesis_block.transactions.front().outputs.front().value;
+        ASSERT_GE(genesis, 0);
+        ASSERT_LE(genesis, MAX_MONEY - total);
+        EXPECT_LE(total + genesis, MAX_MONEY);
+    }
+}
+
+TEST(MonetaryOverflowPaths, InvalidIntervalsRejectMultiplicationAdditionAndSupplyExcess)
+{
+    auto parameters = nova::consensus::TestnetNetworkParams().monetary;
+    for (const auto& [interval, expected] :
+         {std::pair{0U, ChainParamsError::kZeroHalvingInterval},
+          std::pair{310'001U, ChainParamsError::kTheoreticalIssuanceExceedsMaxMoney},
+          std::pair{1'000'000'000U, ChainParamsError::kTheoreticalIssuanceOverflow},
+          std::pair{2'000'000'000U, ChainParamsError::kTheoreticalIssuanceOverflow},
+          std::pair{std::numeric_limits<std::uint32_t>::max(),
+                    ChainParamsError::kTheoreticalIssuanceOverflow}}) {
+        // Invalid API parameters only; no network table/profile is modified.
+        parameters.halving_interval = interval;
+        EXPECT_EQ(CheckChainParams(parameters), expected);
+        EXPECT_FALSE(CalculateTheoreticalIssuance(parameters).has_value());
+        EXPECT_FALSE(GetBlockSubsidy(0U, parameters).has_value());
+        EXPECT_EQ(parameters.halving_interval, interval);
+    }
+    parameters.halving_interval = 310'000U;
+    EXPECT_EQ(CheckChainParams(parameters), ChainParamsError::kNone);
+    const auto total = CalculateTheoreticalIssuance(parameters);
+    ASSERT_TRUE(total.has_value());
+    EXPECT_LE(*total, MAX_MONEY);
+}
+
+TEST(MonetaryRewardBoundaries, FeesOutputSumsAndZeroSubsidyRejectBeforeOverflow)
+{
+    const auto& parameters = nova::consensus::TestnetNetworkParams().monetary;
+    const auto at_cap = CoinbaseWithOutputs({{MAX_MONEY, {0x51U}}});
+    const auto largest_fee = MAX_MONEY - INITIAL_SUBSIDY;
+    EXPECT_EQ(CheckCoinbaseReward(at_cap, largest_fee, 0U, parameters), CoinbaseRewardError::kNone);
+    EXPECT_EQ(CheckCoinbaseReward(at_cap, largest_fee + 1, 0U, parameters),
+              CoinbaseRewardError::kRewardLimitExceedsMaxMoney);
+    for (const auto fee : {Amount{-1}, MAX_MONEY + 1, std::numeric_limits<Amount>::min(),
+                           std::numeric_limits<Amount>::max()})
+        EXPECT_EQ(CheckCoinbaseReward(at_cap, fee, 0U, parameters),
+                  CoinbaseRewardError::kInvalidTransactionFees);
+    for (const auto value : {Amount{-1}, MAX_MONEY + 1, std::numeric_limits<Amount>::min(),
+                             std::numeric_limits<Amount>::max()})
+        EXPECT_EQ(CheckCoinbaseReward(CoinbaseWithOutputs({{value, {0x51U}}}), 0, 0U, parameters),
+                  CoinbaseRewardError::kInvalidOutputAmount);
+    EXPECT_EQ(CheckCoinbaseReward(CoinbaseWithOutputs({{MAX_MONEY, {0x51U}}, {1, {0x51U}}}), 0, 0U,
+                                  parameters),
+              CoinbaseRewardError::kCoinbaseOutputTotalExceedsMaxMoney);
+    const auto zero_height = 33U * parameters.halving_interval;
+    EXPECT_EQ(CheckCoinbaseReward(CoinbaseWithOutputs({{0, {0x51U}}}), 0, zero_height, parameters),
+              CoinbaseRewardError::kNone);
+    EXPECT_EQ(CheckCoinbaseReward(CoinbaseWithOutputs({{1, {0x51U}}}), 0, zero_height, parameters),
+              CoinbaseRewardError::kInflation);
+    EXPECT_EQ(CheckCoinbaseReward(CoinbaseWithOutputs({{1, {0x51U}}}), 1, zero_height, parameters),
+              CoinbaseRewardError::kNone);
+    EXPECT_EQ(CheckCoinbaseReward(CoinbaseWithOutputs({{2, {0x51U}}}), 1, zero_height, parameters),
+              CoinbaseRewardError::kInflation);
 }
 
 } // namespace
